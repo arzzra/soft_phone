@@ -704,6 +704,37 @@ func (m *MockRTPSession) GetStatistics() interface{} {
 	}
 }
 
+// RTCP методы для MockRTPSession
+func (m *MockRTPSession) EnableRTCP(enabled bool) error {
+	// Симуляция включения/отключения RTCP
+	return nil
+}
+
+func (m *MockRTPSession) IsRTCPEnabled() bool {
+	// По умолчанию RTCP отключен в mock сессии
+	return false
+}
+
+func (m *MockRTPSession) GetRTCPStatistics() interface{} {
+	return map[string]interface{}{
+		"packets_sent":     50,
+		"packets_received": 45,
+		"octets_sent":      2000,
+		"octets_received":  1800,
+		"packets_lost":     2,
+		"fraction_lost":    4,
+		"jitter":           10,
+	}
+}
+
+func (m *MockRTPSession) SendRTCPReport() error {
+	if !m.active {
+		return fmt.Errorf("RTP сессия не активна")
+	}
+	// Симуляция отправки RTCP отчета
+	return nil
+}
+
 // generateTestAudio генерирует тестовые аудио данные
 func generateTestAudio(samples int) []byte {
 	data := make([]byte, samples)
@@ -732,6 +763,7 @@ func RunAllExamples() {
 		{"Обработка DTMF", ExampleDTMFHandling},
 		{"Поддержка кодеков", ExampleCodecSupport},
 		{"Множественные RTP сессии", ExampleMultipleRTPSessions},
+		{"RTCP поддержка", ExampleRTCPUsage},
 	}
 
 	for _, example := range examples {

@@ -11,8 +11,13 @@ import (
 	"github.com/pion/rtp"
 )
 
+// Проверка на соответствие интерфейсу во время компиляции
+var _ MediaSessionInterface = (*MediaSession)(nil)
+
 // rtpPkg заменяет импорт ../rtp для использования локальных типов
 type PayloadType = uint8
+
+// Session определяет интерфейс для RTP сессии с опциональной поддержкой RTCP
 type Session interface {
 	Start() error
 	Stop() error
@@ -21,6 +26,12 @@ type Session interface {
 	GetState() int
 	GetSSRC() uint32
 	GetStatistics() interface{}
+
+	// RTCP поддержка (опциональная)
+	EnableRTCP(enabled bool) error
+	IsRTCPEnabled() bool
+	GetRTCPStatistics() interface{}
+	SendRTCPReport() error
 }
 
 // Константы payload типов из RFC 3551
@@ -134,6 +145,14 @@ type MediaSession struct {
 	// Статистика
 	stats      MediaStatistics
 	statsMutex sync.RWMutex
+
+	// RTCP поддержка (опциональная)
+	rtcpEnabled    bool
+	rtcpStats      RTCPStatistics
+	rtcpStatsMutex sync.RWMutex
+	rtcpHandler    func(RTCPReport)
+	rtcpInterval   time.Duration
+	lastRTCPSent   time.Time
 }
 
 // MediaSessionConfig конфигурация медиа сессии
@@ -157,6 +176,11 @@ type MediaSessionConfig struct {
 	OnRawPacketReceived func(*rtp.Packet) // Callback для сырых RTP пакетов без декодирования
 	OnDTMFReceived      func(DTMFEvent)
 	OnMediaError        func(error)
+
+	// RTCP настройки (опциональные)
+	RTCPEnabled  bool
+	RTCPInterval time.Duration    // Интервал отправки RTCP отчетов (по умолчанию 5 секунд)
+	OnRTCPReport func(RTCPReport) // Callback для обработки RTCP отчетов
 }
 
 // MediaStatistics статистика медиа сессии
@@ -183,7 +207,9 @@ func DefaultMediaSessionConfig() MediaSessionConfig {
 		JitterBufferSize: 10,                    // 10 пакетов = 200ms буфер
 		JitterDelay:      time.Millisecond * 60, // Начальная задержка 60ms
 		DTMFEnabled:      true,
-		DTMFPayloadType:  101, // RFC 4733 стандарт
+		DTMFPayloadType:  101,             // RFC 4733 стандарт
+		RTCPEnabled:      false,           // RTCP отключен по умолчанию
+		RTCPInterval:     time.Second * 5, // Стандартный интервал RTCP согласно RFC 3550
 	}
 }
 
@@ -196,6 +222,9 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 	// Устанавливаем значения по умолчанию
 	if config.Ptime == 0 {
 		config.Ptime = time.Millisecond * 20
+	}
+	if config.RTCPInterval == 0 {
+		config.RTCPInterval = time.Second * 5 // Стандартный интервал согласно RFC 3550
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -225,6 +254,11 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 		onRawPacketReceived: config.OnRawPacketReceived,
 		onDTMFReceived:      config.OnDTMFReceived,
 		onMediaError:        config.OnMediaError,
+
+		// RTCP настройки
+		rtcpEnabled:  config.RTCPEnabled,
+		rtcpHandler:  config.OnRTCPReport,
+		rtcpInterval: config.RTCPInterval,
 	}
 
 	// Создаем jitter buffer если включен
@@ -326,6 +360,12 @@ func (ms *MediaSession) Start() error {
 	// Запускаем аудио процессор
 	ms.wg.Add(1)
 	go ms.audioProcessorLoop()
+
+	// Запускаем RTCP цикл если включен
+	if ms.IsRTCPEnabled() {
+		ms.wg.Add(1)
+		go ms.rtcpSendLoop()
+	}
 
 	// Запускаем все RTP сессии
 	ms.sessionsMutex.RLock()
@@ -783,6 +823,11 @@ func (ms *MediaSession) addToAudioBuffer(audioData []byte) error {
 func (ms *MediaSession) audioSendLoop() {
 	defer ms.wg.Done()
 
+	// Проверяем что ticker инициализирован
+	if ms.sendTicker == nil {
+		return
+	}
+
 	for {
 		select {
 		case <-ms.stopChan:
@@ -843,6 +888,11 @@ func (ms *MediaSession) sendRTPPacket(packetData []byte) {
 
 	// Обновляем статистику
 	ms.updateSendStats(len(packetData))
+
+	// Обновляем RTCP статистику если включен
+	if ms.IsRTCPEnabled() {
+		ms.updateRTCPStats(1, uint32(len(packetData)))
+	}
 }
 
 // GetBufferedAudioSize возвращает размер данных в буфере отправки
@@ -1031,4 +1081,160 @@ func (ms *MediaSession) updateAudioProcessorStats() {
 	// Здесь можно добавить дополнительные метрики
 	_ = stats // Пока просто игнорируем
 	ms.statsMutex.Unlock()
+}
+
+// RTCP методы для реализации MediaSessionInterface
+
+// EnableRTCP включает/отключает поддержку RTCP
+func (ms *MediaSession) EnableRTCP(enabled bool) error {
+	ms.rtcpStatsMutex.Lock()
+	defer ms.rtcpStatsMutex.Unlock()
+
+	if ms.rtcpEnabled == enabled {
+		return nil // Уже в нужном состоянии
+	}
+
+	ms.rtcpEnabled = enabled
+
+	if enabled {
+		// Инициализируем RTCP статистику
+		ms.rtcpStats = RTCPStatistics{}
+		ms.lastRTCPSent = time.Now()
+
+		// Запускаем RTCP цикл если сессия активна
+		if ms.GetState() == MediaStateActive {
+			ms.wg.Add(1)
+			go ms.rtcpSendLoop()
+		}
+	}
+
+	// Уведомляем все RTP сессии об изменении RTCP состояния
+	ms.sessionsMutex.RLock()
+	for _, rtpSession := range ms.rtpSessions {
+		if err := rtpSession.EnableRTCP(enabled); err != nil {
+			ms.sessionsMutex.RUnlock()
+			return fmt.Errorf("ошибка установки RTCP для RTP сессии: %w", err)
+		}
+	}
+	ms.sessionsMutex.RUnlock()
+
+	return nil
+}
+
+// IsRTCPEnabled проверяет, включен ли RTCP
+func (ms *MediaSession) IsRTCPEnabled() bool {
+	ms.rtcpStatsMutex.RLock()
+	defer ms.rtcpStatsMutex.RUnlock()
+	return ms.rtcpEnabled
+}
+
+// GetRTCPStatistics возвращает RTCP статистику
+func (ms *MediaSession) GetRTCPStatistics() RTCPStatistics {
+	ms.rtcpStatsMutex.RLock()
+	defer ms.rtcpStatsMutex.RUnlock()
+	return ms.rtcpStats
+}
+
+// SendRTCPReport принудительно отправляет RTCP отчет
+func (ms *MediaSession) SendRTCPReport() error {
+	if !ms.IsRTCPEnabled() {
+		return fmt.Errorf("RTCP не включен")
+	}
+
+	// Отправляем RTCP отчеты через все активные RTP сессии
+	ms.sessionsMutex.RLock()
+	defer ms.sessionsMutex.RUnlock()
+
+	var lastError error
+	for sessionID, rtpSession := range ms.rtpSessions {
+		if err := rtpSession.SendRTCPReport(); err != nil {
+			lastError = fmt.Errorf("ошибка отправки RTCP через сессию %s: %w", sessionID, err)
+			continue
+		}
+	}
+
+	if lastError == nil {
+		ms.rtcpStatsMutex.Lock()
+		ms.lastRTCPSent = time.Now()
+		ms.rtcpStatsMutex.Unlock()
+	}
+
+	return lastError
+}
+
+// SetRTCPHandler устанавливает обработчик RTCP отчетов
+func (ms *MediaSession) SetRTCPHandler(handler func(RTCPReport)) {
+	ms.rtcpStatsMutex.Lock()
+	defer ms.rtcpStatsMutex.Unlock()
+	ms.rtcpHandler = handler
+}
+
+// ClearRTCPHandler убирает обработчик RTCP отчетов
+func (ms *MediaSession) ClearRTCPHandler() {
+	ms.rtcpStatsMutex.Lock()
+	defer ms.rtcpStatsMutex.Unlock()
+	ms.rtcpHandler = nil
+}
+
+// HasRTCPHandler проверяет, установлен ли обработчик RTCP отчетов
+func (ms *MediaSession) HasRTCPHandler() bool {
+	ms.rtcpStatsMutex.RLock()
+	defer ms.rtcpStatsMutex.RUnlock()
+	return ms.rtcpHandler != nil
+}
+
+// rtcpSendLoop основной цикл отправки RTCP отчетов
+func (ms *MediaSession) rtcpSendLoop() {
+	defer ms.wg.Done()
+
+	if !ms.IsRTCPEnabled() {
+		return
+	}
+
+	ticker := time.NewTicker(ms.rtcpInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ms.ctx.Done():
+			return
+		case <-ticker.C:
+			if ms.GetState() == MediaStateActive && ms.IsRTCPEnabled() {
+				if err := ms.SendRTCPReport(); err != nil {
+					ms.handleError(fmt.Errorf("ошибка отправки RTCP отчета: %w", err))
+				}
+			}
+		}
+	}
+}
+
+// updateRTCPStats обновляет RTCP статистику
+func (ms *MediaSession) updateRTCPStats(packetsSent, octets uint32) {
+	if !ms.IsRTCPEnabled() {
+		return
+	}
+
+	ms.rtcpStatsMutex.Lock()
+	defer ms.rtcpStatsMutex.Unlock()
+
+	ms.rtcpStats.PacketsSent += packetsSent
+	ms.rtcpStats.OctetsSent += octets
+}
+
+// processRTCPReport обрабатывает входящий RTCP отчет
+func (ms *MediaSession) processRTCPReport(report RTCPReport) {
+	if !ms.IsRTCPEnabled() {
+		return
+	}
+
+	// Обновляем статистику
+	ms.rtcpStatsMutex.Lock()
+	ms.rtcpStats.PacketsReceived++
+	ms.rtcpStats.LastSRReceived = time.Now()
+	ms.rtcpStatsMutex.Unlock()
+
+	// Вызываем обработчик если установлен
+	if ms.HasRTCPHandler() {
+		ms.rtcpHandler(report)
+	}
 }

@@ -29,6 +29,13 @@
 - **Шумоподавление**: Базовые алгоритмы фильтрации
 - **Эхоподавление**: Заглушка для будущей реализации
 
+### ✅ RTCP поддержка (опциональная)
+- **Автоматические отчеты**: Sender Reports (SR) и Receiver Reports (RR) согласно RFC 3550
+- **Статистика качества**: Потери пакетов, jitter, задержки
+- **Настраиваемый интервал**: От 1 до 60 секунд между отчетами
+- **Обработчики событий**: Callback для входящих RTCP отчетов
+- **Динамическое управление**: Включение/отключение во время работы
+
 ## 📋 Основные компоненты
 
 ### MediaSession
@@ -103,6 +110,63 @@ config.OnDTMFReceived = func(event media.DTMFEvent) {
 }
 ```
 
+### RTCP
+Работа с RTCP отчетами и статистикой:
+
+```go
+// Включение RTCP в конфигурации
+config := media.DefaultMediaSessionConfig()
+config.RTCPEnabled = true
+config.RTCPInterval = time.Second * 5  // Отчеты каждые 5 секунд
+
+// Обработчик RTCP отчетов
+config.OnRTCPReport = func(report media.RTCPReport) {
+    fmt.Printf("RTCP отчет: Type=%d, SSRC=%d\n", 
+        report.GetType(), report.GetSSRC())
+    
+    switch report.GetType() {
+    case 200: // Sender Report
+        fmt.Println("Получен Sender Report")
+    case 201: // Receiver Report
+        fmt.Println("Получен Receiver Report")
+    }
+}
+
+session, err := media.NewMediaSession(config)
+
+// Управление RTCP во время работы
+session.EnableRTCP(true)  // Включить RTCP
+session.EnableRTCP(false) // Отключить RTCP
+
+// Проверка состояния RTCP
+if session.IsRTCPEnabled() {
+    fmt.Println("RTCP включен")
+}
+
+// Получение RTCP статистики
+stats := session.GetRTCPStatistics()
+fmt.Printf("RTCP: Отправлено %d пакетов, получено %d\n", 
+    stats.PacketsSent, stats.PacketsReceived)
+fmt.Printf("Потери: %d%%, Jitter: %d\n", 
+    stats.FractionLost, stats.Jitter)
+
+// Принудительная отправка RTCP отчета
+err = session.SendRTCPReport()
+
+// Установка обработчика RTCP
+session.SetRTCPHandler(func(report media.RTCPReport) {
+    // Обработка RTCP отчета
+})
+
+// Проверка наличия обработчика
+if session.HasRTCPHandler() {
+    fmt.Println("Обработчик RTCP установлен")
+}
+
+// Удаление обработчика
+session.ClearRTCPHandler()
+```
+
 ### AudioProcessor
 Обработка аудио данных:
 
@@ -164,6 +228,7 @@ currentPtime := session.GetPtime()
 
 ## 📊 Статистика
 
+### Основная статистика медиа сессии
 ```go
 stats := session.GetStatistics()
 fmt.Printf("Отправлено: %d пакетов (%d байт)\n", 
@@ -173,6 +238,21 @@ fmt.Printf("Получено: %d пакетов (%d байт)\n",
 fmt.Printf("DTMF: %d отправлено, %d получено\n", 
     stats.DTMFEventsSent, stats.DTMFEventsReceived)
 fmt.Printf("Потери: %.2f%%\n", stats.PacketLossRate)
+```
+
+### RTCP статистика (если включена)
+```go
+if session.IsRTCPEnabled() {
+    rtcpStats := session.GetRTCPStatistics()
+    fmt.Printf("RTCP пакетов отправлено: %d\n", rtcpStats.PacketsSent)
+    fmt.Printf("RTCP пакетов получено: %d\n", rtcpStats.PacketsReceived)
+    fmt.Printf("RTCP октетов отправлено: %d\n", rtcpStats.OctetsSent)
+    fmt.Printf("RTCP октетов получено: %d\n", rtcpStats.OctetsReceived)
+    fmt.Printf("Потери пакетов: %d\n", rtcpStats.PacketsLost)
+    fmt.Printf("Доля потерь: %d%%\n", rtcpStats.FractionLost)
+    fmt.Printf("Jitter: %d\n", rtcpStats.Jitter)
+    fmt.Printf("Последний SR: %v\n", rtcpStats.LastSRReceived)
+}
 ```
 
 ## 🔗 Интеграция с RTP слоем
