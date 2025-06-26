@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/arzzra/soft_phone/pkg/media"
+	"github.com/arzzra/soft_phone/pkg/rtp"
 	"github.com/pion/sdp/v3"
 )
 
@@ -160,6 +161,14 @@ func (m *Manager) CreateSessionWithConfig(sessionID string, sessionConfig Sessio
 	session, err := NewMediaSessionWithSDP(finalConfig, m.portManager, m.sdpBuilder)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка создания сессии: %w", err)
+	}
+
+	// ------------------------------------------------------------------
+	// По умолчанию создаём RTP transport и RTP session и привязываем к
+	// медиа-сессии, чтобы пользователю не приходилось делать это вручную.
+	// ------------------------------------------------------------------
+	if err := m.attachDefaultRTPSession(session, finalConfig); err != nil {
+		return nil, fmt.Errorf("ошибка создания RTP сессии: %w", err)
 	}
 
 	// Добавляем в реестр
@@ -537,4 +546,60 @@ func (m *Manager) wrapPortsReleasedCallback(sessionID string, original func(int,
 			m.config.OnPortsReleased(sessionID, rtpPort, rtcpPort)
 		}
 	}
+}
+
+// attachDefaultRTPSession создаёт UDP-транспорт и RTP-сессию и добавляет их
+// к базовой медиа-сессии внутри SessionWithSDP. Использует уже выделенные порты
+// (AllocatePorts) либо запрашивает их при необходимости.
+func (m *Manager) attachDefaultRTPSession(s *SessionWithSDP, cfg SessionWithSDPConfig) error {
+	// Убеждаемся, что порты выделены
+	if !s.portsAllocated {
+		if err := s.AllocatePorts(); err != nil {
+			return fmt.Errorf("не удалось выделить порты: %w", err)
+		}
+	}
+
+	rtpPort, _, err := s.GetAllocatedPorts()
+	if err != nil {
+		return fmt.Errorf("получение выделенных портов: %w", err)
+	}
+
+	// Создаём транспорт
+	transport, err := NewUDPTransport(m.config.LocalIP, rtpPort, 1500)
+	if err != nil {
+		return fmt.Errorf("udp transport: %w", err)
+	}
+
+	// Собираем RTP SessionConfig
+	payload := cfg.MediaSessionConfig.PayloadType
+	if payload == 0 {
+		payload = m.config.BaseMediaSessionConfig.PayloadType
+	}
+
+	rtpCfg := rtp.SessionConfig{
+		PayloadType: rtp.PayloadType(payload),
+		MediaType:   rtp.MediaTypeAudio,
+		ClockRate:   8000,
+		Transport:   transport,
+		LocalSDesc: rtp.SourceDescription{
+			CNAME: fmt.Sprintf("auto@%s", s.GetSessionName()),
+			NAME:  "Softphone Default",
+			TOOL:  "media_with_sdp manager",
+		},
+	}
+
+	rtpSession, err := rtp.NewSession(rtpCfg)
+	if err != nil {
+		transport.Close()
+		return fmt.Errorf("rtp session: %w", err)
+	}
+
+	// Добавляем к медиа-сессии (ID = "primary")
+	if err := s.AddRTPSession("primary", rtpSession); err != nil {
+		rtpSession.Stop()
+		transport.Close()
+		return fmt.Errorf("add RTP session: %w", err)
+	}
+
+	return nil
 }

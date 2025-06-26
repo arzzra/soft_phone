@@ -285,6 +285,10 @@ func startMediaSessions(caller, callee *TestSession) []*RTPSessionWithTransport 
 	// Сначала создаем и добавляем RTP сессии
 	fmt.Println("   🔧 Создание RTP сессий...")
 
+	// Удаляем авто-созданные RTP сессии (primary), чтобы использовать собственные
+	_ = caller.session.RemoveRTPSession("primary")
+	_ = callee.session.RemoveRTPSession("primary")
+
 	// Создаем RTP сессии для каждой медиа сессии (используем проверенные порты)
 	fmt.Printf("   🔧 Создание RTP сессии для caller на порту 16000...\n")
 	callerRTPSession, callerTransport, err := createRealRTPSession(caller.sessionID, 16000)
@@ -364,13 +368,8 @@ func createRealRTPSession(sessionID string, localPort int) (*rtp.Session, *rtp.U
 	}()
 
 	// Создаем UDP транспорт
-	transportConfig := rtp.TransportConfig{
-		LocalAddr:  fmt.Sprintf("127.0.0.1:%d", localPort),
-		BufferSize: 1500,
-	}
-
-	fmt.Printf("   🔧 Создание UDP транспорта для %s на %s...\n", sessionID, transportConfig.LocalAddr)
-	transport, err := rtp.NewUDPTransport(transportConfig)
+	fmt.Printf("   🔧 Создание UDP транспорта для %s на 127.0.0.1:%d...\n", sessionID, localPort)
+	transport, err := media_with_sdp.NewUDPTransport("127.0.0.1", localPort, 1500)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ошибка создания UDP транспорта: %w", err)
 	}
@@ -576,15 +575,9 @@ func terminateSessions(caller, callee *TestSession) {
 	// Сначала удаляем RTP сессии из медиа сессий
 	fmt.Printf("   🔧 Удаление RTP сессий из медиа сессий...\n")
 
-	err := caller.session.RemoveRTPSession("primary")
-	if err != nil {
-		fmt.Printf("   ⚠️  Ошибка удаления RTP сессии из caller: %v\n", err)
-	}
-
-	err = callee.session.RemoveRTPSession("primary")
-	if err != nil {
-		fmt.Printf("   ⚠️  Ошибка удаления RTP сессии из callee: %v\n", err)
-	}
+	fmt.Println("   🔧 Удаление автоматически созданных RTP сессий (primary)...")
+	_ = caller.session.RemoveRTPSession("primary")
+	_ = callee.session.RemoveRTPSession("primary")
 
 	fmt.Printf("   ✅ RTP сессии удалены из медиа сессий\n")
 
