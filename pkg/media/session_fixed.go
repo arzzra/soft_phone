@@ -132,8 +132,9 @@ type MediaSession struct {
 	audioProcessor *AudioProcessor
 
 	// Обработчики событий
-	onAudioReceived     func([]byte, PayloadType, time.Duration)
-	onRawPacketReceived func(*rtp.Packet) // Callback для сырых аудио RTP пакетов
+	onAudioReceived     func([]byte, PayloadType, time.Duration) // Callback для обработанных аудио данных (после аудио процессора)
+	onRawAudioReceived  func([]byte, PayloadType, time.Duration) // Callback для сырых аудио данных (payload без обработки)
+	onRawPacketReceived func(*rtp.Packet)                        // Callback для сырых RTP пакетов (весь пакет)
 	onDTMFReceived      func(DTMFEvent)
 	onMediaError        func(error)
 
@@ -172,8 +173,9 @@ type MediaSessionConfig struct {
 	DTMFPayloadType uint8 // RFC 4733 payload type (обычно 101)
 
 	// Обработчики событий
-	OnAudioReceived     func([]byte, PayloadType, time.Duration)
-	OnRawPacketReceived func(*rtp.Packet) // Callback для сырых RTP пакетов без декодирования
+	OnAudioReceived     func([]byte, PayloadType, time.Duration) // Callback для обработанных аудио данных (после аудио процессора)
+	OnRawAudioReceived  func([]byte, PayloadType, time.Duration) // Callback для сырых аудио данных (payload без обработки)
+	OnRawPacketReceived func(*rtp.Packet)                        // Callback для сырых RTP пакетов (весь пакет без декодирования)
 	OnDTMFReceived      func(DTMFEvent)
 	OnMediaError        func(error)
 
@@ -251,6 +253,7 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 
 		// Обработчики
 		onAudioReceived:     config.OnAudioReceived,
+		onRawAudioReceived:  config.OnRawAudioReceived,
 		onRawPacketReceived: config.OnRawPacketReceived,
 		onDTMFReceived:      config.OnDTMFReceived,
 		onMediaError:        config.OnMediaError,
@@ -936,6 +939,22 @@ func (ms *MediaSession) EnableSilenceSuppression(enabled bool) {
 	// Пока просто сохраняем настройку
 }
 
+// SetRawAudioHandler устанавливает callback для получения сырых аудио данных без обработки
+// Вызывается с payload из RTP пакета до обработки аудио процессором
+func (ms *MediaSession) SetRawAudioHandler(handler func([]byte, PayloadType, time.Duration)) {
+	ms.onRawAudioReceived = handler
+}
+
+// ClearRawAudioHandler убирает callback для сырых аудио данных
+func (ms *MediaSession) ClearRawAudioHandler() {
+	ms.onRawAudioReceived = nil
+}
+
+// HasRawAudioHandler проверяет, установлен ли callback для сырых аудио данных
+func (ms *MediaSession) HasRawAudioHandler() bool {
+	return ms.onRawAudioReceived != nil
+}
+
 // SetRawPacketHandler устанавливает callback для получения сырых аудио RTP пакетов без декодирования
 // DTMF пакеты продолжают обрабатываться отдельно через DTMF callback
 func (ms *MediaSession) SetRawPacketHandler(handler func(*rtp.Packet)) {
@@ -1049,23 +1068,31 @@ func (ms *MediaSession) processDecodedPacket(packet *rtp.Packet) {
 		return
 	}
 
-	// Обрабатываем как обычный аудио пакет
-	if ms.audioProcessor != nil && len(packet.Payload) > 0 {
+	// Проверяем что есть аудио данные
+	if len(packet.Payload) == 0 {
+		return
+	}
+
+	// Сначала вызываем callback для сырых аудио данных если установлен
+	if ms.onRawAudioReceived != nil {
+		ms.onRawAudioReceived(packet.Payload, ms.payloadType, ms.ptime)
+	}
+
+	// Затем обрабатываем через аудио процессор для обработанных данных
+	if ms.audioProcessor != nil && ms.onAudioReceived != nil {
 		processedData, err := ms.audioProcessor.ProcessIncoming(packet.Payload)
 		if err != nil {
 			ms.handleError(err)
 			return
 		}
 
-		// Вызываем callback если установлен
-		if ms.onAudioReceived != nil {
-			ms.onAudioReceived(processedData, ms.payloadType, ms.ptime)
-		}
-
-		// Обновляем статистику
-		ms.updateReceiveStats(len(processedData))
-		ms.updateLastActivity()
+		// Вызываем callback для обработанных данных
+		ms.onAudioReceived(processedData, ms.payloadType, ms.ptime)
 	}
+
+	// Обновляем статистику (используем размер исходных данных)
+	ms.updateReceiveStats(len(packet.Payload))
+	ms.updateLastActivity()
 }
 
 // updateAudioProcessorStats обновляет статистику аудио процессора
