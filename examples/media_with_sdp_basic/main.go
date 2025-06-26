@@ -29,7 +29,7 @@ func main() {
 	config.BaseMediaSessionConfig.Ptime = time.Millisecond * 20
 
 	// Настройка callback функций
-	config.OnSessionCreated = func(sessionID string, session *media_with_sdp.MediaSessionWithSDP) {
+	config.OnSessionCreated = func(sessionID string, session *media_with_sdp.SessionWithSDP) {
 		fmt.Printf("Создана сессия: %s\n", sessionID)
 	}
 	config.OnSessionDestroyed = func(sessionID string) {

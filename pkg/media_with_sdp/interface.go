@@ -151,9 +151,9 @@ type AudioCodec struct {
 // MediaSessionWithSDPManagerInterface определяет интерфейс менеджера медиа сессий с SDP
 type MediaSessionWithSDPManagerInterface interface {
 	// Управление сессиями
-	CreateSession(sessionID string) (*MediaSessionWithSDP, error)
-	CreateSessionWithConfig(sessionID string, config MediaSessionWithSDPConfig) (*MediaSessionWithSDP, error)
-	GetSession(sessionID string) (*MediaSessionWithSDP, bool)
+	CreateSession(sessionID string) (*SessionWithSDP, error)
+	CreateSessionWithConfig(sessionID string, config SessionWithSDPConfig) (*SessionWithSDP, error)
+	GetSession(sessionID string) (*SessionWithSDP, bool)
 	RemoveSession(sessionID string) error
 
 	// Информация о сессиях
@@ -176,8 +176,8 @@ type MediaSessionWithSDPManagerInterface interface {
 	GetSDPBuilder() SDPBuilderInterface
 }
 
-// MediaSessionWithSDPConfig конфигурация для отдельной MediaSessionWithSDP
-type MediaSessionWithSDPConfig struct {
+// SessionWithSDPConfig конфигурация для отдельной SessionWithSDP
+type SessionWithSDPConfig struct {
 	// Базовая конфигурация медиа сессии
 	MediaSessionConfig media.MediaSessionConfig
 

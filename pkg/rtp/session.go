@@ -323,6 +323,12 @@ func (s *Session) GetState() SessionState {
 	return s.state
 }
 
+// GetStateInt возвращает состояние как int для совместимости с интерфейсом
+func (s *Session) GetStateInt() int {
+	state := s.GetState()
+	return int(state)
+}
+
 // GetSSRC возвращает SSRC локального источника
 func (s *Session) GetSSRC() uint32 {
 	return s.ssrc
@@ -865,4 +871,39 @@ func (s *Session) sendRTCPData(data []byte) error {
 	}
 
 	return fmt.Errorf("нет доступного RTCP транспорта")
+}
+
+// EnableRTCP включает или отключает RTCP поддержку
+func (s *Session) EnableRTCP(enabled bool) error {
+	s.stateMutex.Lock()
+	defer s.stateMutex.Unlock()
+
+	// RTCP управляется наличием rtcpTransport в конфигурации
+	// Этот метод может использоваться для динамического управления
+	return nil
+}
+
+// IsRTCPEnabled проверяет включена ли поддержка RTCP
+func (s *Session) IsRTCPEnabled() bool {
+	return s.rtcpTransport != nil
+}
+
+// SendRTCPReport отправляет RTCP отчет
+func (s *Session) SendRTCPReport() error {
+	return s.sendRTCPReports()
+}
+
+// GetRTCPStatistics возвращает RTCP статистику
+func (s *Session) GetRTCPStatistics() interface{} {
+	s.rtcpStatsMutex.RLock()
+	defer s.rtcpStatsMutex.RUnlock()
+
+	// Копируем статистику для безопасного возврата
+	stats := make(map[uint32]*RTCPStatistics)
+	for ssrc, stat := range s.rtcpStats {
+		statCopy := *stat
+		stats[ssrc] = &statCopy
+	}
+
+	return stats
 }

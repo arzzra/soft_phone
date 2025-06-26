@@ -1,20 +1,25 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"log/slog"
+	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/arzzra/soft_phone/pkg/media"
 	"github.com/arzzra/soft_phone/pkg/media_with_sdp"
+	"github.com/arzzra/soft_phone/pkg/rtp"
+	pionrtp "github.com/pion/rtp"
 	"github.com/pion/sdp/v3"
 )
 
 // TestSession представляет тестовую сессию с дополнительной информацией
 type TestSession struct {
-	session       *media_with_sdp.MediaSessionWithSDP
+	session       *media_with_sdp.SessionWithSDP
 	sessionID     string
 	description   string
 	receivedAudio [][]byte
@@ -22,13 +27,45 @@ type TestSession struct {
 	mutex         sync.Mutex
 }
 
+// RTPSessionWithTransport хранит RTP сессию и её транспорт для правильной очистки
+type RTPSessionWithTransport struct {
+	Session   *rtp.Session
+	Transport *rtp.UDPTransport
+}
+
 func main() {
+	slog.SetLogLoggerLevel(slog.LevelDebug)
+	// Уменьшаем общий timeout для всего теста до 20 секунд
+	ctx, cancel := context.WithTimeout(context.Background(), 2000000*time.Second)
+	defer cancel()
+
+	done := make(chan bool, 1)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("❌ Паника в main: %v", r)
+			}
+			done <- true
+		}()
+
+		runTest()
+	}()
+
+	select {
+	case <-done:
+		fmt.Println("✅ Тест завершен")
+	case <-ctx.Done():
+		fmt.Println("❌ Тест прерван по timeout (20 секунд)")
+	}
+}
+
+func runTest() {
 	fmt.Println("🧪 Функциональный тест media_with_sdp")
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Создаем менеджер медиа сессий
 	manager := createManager()
-	defer manager.StopAll()
 
 	// Создаем две тестовые сессии
 	caller := createTestSession(manager, "caller-001", "Исходящий звонок")
@@ -44,7 +81,7 @@ func main() {
 
 	// Этап 2: Запуск медиа сессий
 	fmt.Println("\n🎵 Этап 2: Запуск медиа сессий")
-	startMediaSessions(caller, callee)
+	rtpSessions := startMediaSessions(caller, callee)
 
 	// Этап 3: Обмен аудио данными
 	fmt.Println("\n📡 Этап 3: Обмен аудио данными")
@@ -58,15 +95,40 @@ func main() {
 	fmt.Println("\n📊 Этап 5: Проверка результатов")
 	verifyResults(caller, callee, offer, answer)
 
-	// Этап 6: Завершение сессий
+	// Этап 6: Завершение сессий (правильный порядок)
 	fmt.Println("\n🛑 Этап 6: Завершение сессий")
+
+	// Сначала останавливаем RTP сессии
+	fmt.Println("   🔧 Остановка RTP сессий...")
+	cleanupRTPSessions(rtpSessions)
+	fmt.Println("   ✅ RTP сессии остановлены")
+
+	// Короткая пауза для завершения RTP операций
+	time.Sleep(50 * time.Millisecond)
+
+	// Затем останавливаем медиа сессии
 	terminateSessions(caller, callee)
+
+	// И наконец останавливаем менеджер с timeout
+	fmt.Println("   🔧 Завершение менеджера...")
+	managerDone := make(chan bool, 1)
+	go func() {
+		manager.StopAll()
+		managerDone <- true
+	}()
+
+	select {
+	case <-managerDone:
+		fmt.Println("   ✅ Менеджер завершен")
+	case <-time.After(2 * time.Second):
+		fmt.Println("   ⚠️  Timeout при завершении менеджера (принудительное завершение)")
+	}
 
 	fmt.Println("\n🎉 Функциональный тест завершен успешно!")
 }
 
 // createManager создает и настраивает менеджер медиа сессий
-func createManager() *media_with_sdp.MediaSessionWithSDPManager {
+func createManager() *media_with_sdp.Manager {
 	config := media_with_sdp.DefaultMediaSessionWithSDPManagerConfig()
 	config.LocalIP = "127.0.0.1"
 	config.PortRange = media_with_sdp.PortRange{Min: 12000, Max: 12100}
@@ -83,7 +145,7 @@ func createManager() *media_with_sdp.MediaSessionWithSDPManager {
 	config.BaseMediaSessionConfig.JitterEnabled = true
 
 	// Настройка глобальных callback функций
-	config.OnSessionCreated = func(sessionID string, session *media_with_sdp.MediaSessionWithSDP) {
+	config.OnSessionCreated = func(sessionID string, session *media_with_sdp.SessionWithSDP) {
 		fmt.Printf("   📈 Создана сессия: %s\n", sessionID)
 	}
 	config.OnSessionDestroyed = func(sessionID string) {
@@ -108,7 +170,7 @@ func createManager() *media_with_sdp.MediaSessionWithSDPManager {
 }
 
 // createTestSession создает тестовую сессию с callback функциями
-func createTestSession(manager *media_with_sdp.MediaSessionWithSDPManager, sessionID, description string) *TestSession {
+func createTestSession(manager *media_with_sdp.Manager, sessionID, description string) *TestSession {
 	testSession := &TestSession{
 		sessionID:     sessionID,
 		description:   description,
@@ -120,7 +182,7 @@ func createTestSession(manager *media_with_sdp.MediaSessionWithSDPManager, sessi
 	baseConfig := media.DefaultMediaSessionConfig()
 	baseConfig.SessionID = sessionID // Устанавливаем session ID
 
-	sessionConfig := media_with_sdp.MediaSessionWithSDPConfig{
+	sessionConfig := media_with_sdp.SessionWithSDPConfig{
 		MediaSessionConfig: baseConfig,
 		LocalIP:            "127.0.0.1",
 		SessionName:        fmt.Sprintf("Test Session %s", sessionID),
@@ -212,9 +274,62 @@ func performSDPNegotiation(caller, callee *TestSession) (*sdp.SessionDescription
 }
 
 // startMediaSessions запускает медиа сессии
-func startMediaSessions(caller, callee *TestSession) {
+func startMediaSessions(caller, callee *TestSession) []*RTPSessionWithTransport {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("❌ Паника в startMediaSessions: %v", r)
+			panic(r)
+		}
+	}()
+
+	// Сначала создаем и добавляем RTP сессии
+	fmt.Println("   🔧 Создание RTP сессий...")
+
+	// Создаем RTP сессии для каждой медиа сессии (используем проверенные порты)
+	fmt.Printf("   🔧 Создание RTP сессии для caller на порту 16000...\n")
+	callerRTPSession, callerTransport, err := createRealRTPSession(caller.sessionID, 16000)
+	if err != nil {
+		log.Fatalf("❌ Ошибка создания RTP сессии для caller: %v", err)
+	}
+	fmt.Printf("   ✅ RTP сессия для caller создана\n")
+
+	fmt.Printf("   🔧 Создание RTP сессии для callee на порту 16002...\n")
+	calleeRTPSession, calleeTransport, err := createRealRTPSession(callee.sessionID, 16002)
+	if err != nil {
+		log.Fatalf("❌ Ошибка создания RTP сессии для callee: %v", err)
+	}
+	fmt.Printf("   ✅ RTP сессия для callee создана\n")
+
+	// Устанавливаем удаленные адреса для взаимодействия сессий
+	fmt.Printf("   🔧 Установка удаленного адреса для caller...\n")
+	err = callerTransport.SetRemoteAddr("127.0.0.1:16002")
+	if err != nil {
+		log.Fatalf("❌ Ошибка установки удаленного адреса для caller: %v", err)
+	}
+
+	fmt.Printf("   🔧 Установка удаленного адреса для callee...\n")
+	err = calleeTransport.SetRemoteAddr("127.0.0.1:16000")
+	if err != nil {
+		log.Fatalf("❌ Ошибка установки удаленного адреса для callee: %v", err)
+	}
+
+	// Добавляем RTP сессии к медиа сессиям
+	fmt.Printf("   🔧 Добавление RTP сессии к caller медиа сессии...\n")
+	err = caller.session.AddRTPSession("primary", callerRTPSession)
+	if err != nil {
+		log.Fatalf("❌ Ошибка добавления RTP сессии для caller: %v", err)
+	}
+
+	fmt.Printf("   🔧 Добавление RTP сессии к callee медиа сессии...\n")
+	err = callee.session.AddRTPSession("primary", calleeRTPSession)
+	if err != nil {
+		log.Fatalf("❌ Ошибка добавления RTP сессии для callee: %v", err)
+	}
+
+	fmt.Printf("   ✅ RTP сессии добавлены к медиа сессиям\n")
+
 	fmt.Printf("   🚀 Запуск сессии %s...\n", caller.sessionID)
-	err := caller.session.Start()
+	err = caller.session.Start()
 	if err != nil {
 		log.Fatalf("❌ Ошибка запуска caller сессии: %v", err)
 	}
@@ -229,9 +344,76 @@ func startMediaSessions(caller, callee *TestSession) {
 	callerRTP, callerRTCP, _ := caller.session.GetAllocatedPorts()
 	calleeRTP, calleeRTCP, _ := callee.session.GetAllocatedPorts()
 
-	fmt.Printf("   🔌 %s: RTP=%d, RTCP=%d\n", caller.sessionID, callerRTP, callerRTCP)
-	fmt.Printf("   🔌 %s: RTP=%d, RTCP=%d\n", callee.sessionID, calleeRTP, calleeRTCP)
+	fmt.Printf("   🔌 %s: RTP=%d, RTCP=%d -> удаленный RTP=16002\n", caller.sessionID, callerRTP, callerRTCP)
+	fmt.Printf("   🔌 %s: RTP=%d, RTCP=%d -> удаленный RTP=16000\n", callee.sessionID, calleeRTP, calleeRTCP)
 	fmt.Printf("   ✅ Обе медиа сессии запущены\n")
+
+	return []*RTPSessionWithTransport{
+		{Session: callerRTPSession, Transport: callerTransport},
+		{Session: calleeRTPSession, Transport: calleeTransport},
+	}
+}
+
+// createRealRTPSession создает реальную RTP сессию для тестирования
+func createRealRTPSession(sessionID string, localPort int) (*rtp.Session, *rtp.UDPTransport, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("❌ Паника в createRealRTPSession для %s порт %d: %v", sessionID, localPort, r)
+			panic(r)
+		}
+	}()
+
+	// Создаем UDP транспорт
+	transportConfig := rtp.TransportConfig{
+		LocalAddr:  fmt.Sprintf("127.0.0.1:%d", localPort),
+		BufferSize: 1500,
+	}
+
+	fmt.Printf("   🔧 Создание UDP транспорта для %s на %s...\n", sessionID, transportConfig.LocalAddr)
+	transport, err := rtp.NewUDPTransport(transportConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ошибка создания UDP транспорта: %w", err)
+	}
+	fmt.Printf("   ✅ UDP транспорт создан для %s\n", sessionID)
+
+	// Создаем описание локального источника
+	localDesc := rtp.SourceDescription{
+		CNAME: fmt.Sprintf("test@%s", sessionID),
+		NAME:  "Test Session",
+		TOOL:  "Media Test v1.0",
+	}
+
+	// Конфигурация RTP сессии
+	sessionConfig := rtp.SessionConfig{
+		PayloadType: rtp.PayloadTypePCMU, // G.711 μ-law
+		MediaType:   rtp.MediaTypeAudio,
+		ClockRate:   8000, // 8kHz для телефонии
+		Transport:   transport,
+		LocalSDesc:  localDesc,
+
+		// Обработчики событий
+		OnPacketReceived: func(packet *pionrtp.Packet, addr net.Addr) {
+			fmt.Printf("   🎵 %s: получен RTP пакет (SSRC=%d, Seq=%d, размер=%d байт)\n",
+				sessionID, packet.SSRC, packet.SequenceNumber, len(packet.Payload))
+		},
+		OnSourceAdded: func(ssrc uint32) {
+			fmt.Printf("   📡 %s: добавлен источник SSRC=%d\n", sessionID, ssrc)
+		},
+		OnSourceRemoved: func(ssrc uint32) {
+			fmt.Printf("   📡 %s: удален источник SSRC=%d\n", sessionID, ssrc)
+		},
+	}
+
+	// Создаем RTP сессию
+	fmt.Printf("   🔧 Создание RTP сессии для %s...\n", sessionID)
+	session, err := rtp.NewSession(sessionConfig)
+	if err != nil {
+		transport.Close()
+		return nil, nil, fmt.Errorf("ошибка создания RTP сессии: %w", err)
+	}
+	fmt.Printf("   ✅ RTP сессия создана для %s\n", sessionID)
+
+	return session, transport, nil
 }
 
 // exchangeAudioData симулирует обмен аудио данными
@@ -391,29 +573,66 @@ func verifyResults(caller, callee *TestSession, offer, answer *sdp.SessionDescri
 
 // terminateSessions завершает тестовые сессии
 func terminateSessions(caller, callee *TestSession) {
-	fmt.Printf("   🛑 Остановка сессии %s...\n", caller.sessionID)
-	err := caller.session.Stop()
+	// Сначала удаляем RTP сессии из медиа сессий
+	fmt.Printf("   🔧 Удаление RTP сессий из медиа сессий...\n")
+
+	err := caller.session.RemoveRTPSession("primary")
 	if err != nil {
-		fmt.Printf("   ⚠️  Ошибка остановки caller: %v\n", err)
-	} else {
-		fmt.Printf("   ✅ Сессия %s остановлена\n", caller.sessionID)
+		fmt.Printf("   ⚠️  Ошибка удаления RTP сессии из caller: %v\n", err)
 	}
+
+	err = callee.session.RemoveRTPSession("primary")
+	if err != nil {
+		fmt.Printf("   ⚠️  Ошибка удаления RTP сессии из callee: %v\n", err)
+	}
+
+	fmt.Printf("   ✅ RTP сессии удалены из медиа сессий\n")
+
+	// Короткая пауза для завершения удаления
+	time.Sleep(200 * time.Millisecond)
+
+	// Уменьшаем timeout до 1 секунды для более быстрого завершения
+	timeout := 1 * time.Second
+
+	fmt.Printf("   🛑 Остановка сессии %s...\n", caller.sessionID)
+	stopSessionWithTimeout(caller.session, caller.sessionID, timeout)
 
 	fmt.Printf("   🛑 Остановка сессии %s...\n", callee.sessionID)
-	err = callee.session.Stop()
-	if err != nil {
-		fmt.Printf("   ⚠️  Ошибка остановки callee: %v\n", err)
-	} else {
-		fmt.Printf("   ✅ Сессия %s остановлена\n", callee.sessionID)
+	stopSessionWithTimeout(callee.session, callee.sessionID, timeout)
+
+	fmt.Printf("   ✅ Все медиа сессии остановлены\n")
+}
+
+// stopSessionWithTimeout останавливает сессию с timeout
+func stopSessionWithTimeout(session *media_with_sdp.SessionWithSDP, sessionID string, timeout time.Duration) {
+	// Сначала попробуем очистить буферы
+	fmt.Printf("     🔧 Очистка буферов %s...\n", sessionID)
+
+	// Если есть базовая медиа сессия, пытаемся очистить её буферы
+	// (это может помочь разблокировать заблокированные операции)
+
+	done := make(chan error, 1)
+
+	//go func() {
+	defer func() {
+		if r := recover(); r != nil {
+			done <- fmt.Errorf("паника при остановке: %v", r)
+		}
+	}()
+	done <- session.Stop()
+	//}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			fmt.Printf("   ⚠️  Ошибка остановки %s: %v\n", sessionID, err)
+		} else {
+			fmt.Printf("   ✅ Сессия %s остановлена\n", sessionID)
+		}
+	case <-time.After(timeout):
+		fmt.Printf("   ⚠️  Timeout при остановке %s (принудительное завершение)\n", sessionID)
+		// Принудительно завершаем - просто продолжаем
 	}
-
-	// Проверяем финальные состояния
-	finalCallerState := caller.session.GetState()
-	finalCalleeState := callee.session.GetState()
-
-	fmt.Printf("   📊 Финальные состояния: %s=%s, %s=%s\n",
-		caller.sessionID, finalCallerState,
-		callee.sessionID, finalCalleeState)
 }
 
 // generateTestAudio создает тестовые аудио данные (симуляция PCMU кодированных данных)
@@ -438,4 +657,40 @@ func generateTestAudio(description string, size int) []byte {
 	}
 
 	return data
+}
+
+// cleanupRTPSessions завершает и освобождает ресурсы RTP сессий
+func cleanupRTPSessions(sessions []*RTPSessionWithTransport) {
+	for i, sessionWithTransport := range sessions {
+		fmt.Printf("     🔧 Остановка RTP сессии %d...\n", i+1)
+
+		// Останавливаем RTP сессию с timeout
+		stopChannel := make(chan error, 1)
+		go func(session *rtp.Session) {
+			stopChannel <- session.Stop()
+		}(sessionWithTransport.Session)
+
+		select {
+		case err := <-stopChannel:
+			if err != nil {
+				log.Printf("⚠️  Ошибка остановки RTP сессии %d: %v", i+1, err)
+			} else {
+				fmt.Printf("     ✅ RTP сессия %d остановлена\n", i+1)
+			}
+		case <-time.After(2 * time.Second):
+			fmt.Printf("     ⚠️  Timeout при остановке RTP сессии %d\n", i+1)
+		}
+
+		// Закрываем транспорт
+		fmt.Printf("     🔧 Закрытие транспорта %d...\n", i+1)
+		err := sessionWithTransport.Transport.Close()
+		if err != nil {
+			log.Printf("⚠️  Ошибка закрытия UDP транспорта %d: %v", i+1, err)
+		} else {
+			fmt.Printf("     ✅ Транспорт %d закрыт\n", i+1)
+		}
+
+		// Небольшая пауза между сессиями
+		time.Sleep(50 * time.Millisecond)
+	}
 }

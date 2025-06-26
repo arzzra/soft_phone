@@ -10,14 +10,14 @@ import (
 	"github.com/pion/sdp/v3"
 )
 
-// MediaSessionWithSDPManager управляет множественными медиа сессиями с SDP поддержкой
+// Manager управляет множественными медиа сессиями с SDP поддержкой
 // Обеспечивает изоляцию звонков, управление портами и SDP переговорами
-type MediaSessionWithSDPManager struct {
-	sessions map[string]*MediaSessionWithSDP
+type Manager struct {
+	sessions map[string]*SessionWithSDP
 	mutex    sync.RWMutex
 
 	// Глобальные настройки
-	config          MediaSessionWithSDPManagerConfig
+	config          ManagerConfig
 	maxSessions     int
 	sessionTimeout  time.Duration
 	cleanupInterval time.Duration
@@ -37,8 +37,8 @@ type MediaSessionWithSDPManager struct {
 	cleanupDone chan struct{}
 }
 
-// MediaSessionWithSDPManagerConfig конфигурация менеджера медиа сессий с SDP
-type MediaSessionWithSDPManagerConfig struct {
+// ManagerConfig конфигурация менеджера медиа сессий с SDP
+type ManagerConfig struct {
 	// Основные настройки
 	MaxSessions     int           // Максимальное количество одновременных сессий
 	SessionTimeout  time.Duration // Таймаут неактивных сессий
@@ -55,7 +55,7 @@ type MediaSessionWithSDPManagerConfig struct {
 	BaseMediaSessionConfig media.MediaSessionConfig
 
 	// Глобальные callback функции
-	OnSessionCreated         func(sessionID string, session *MediaSessionWithSDP)
+	OnSessionCreated         func(sessionID string, session *SessionWithSDP)
 	OnSessionDestroyed       func(sessionID string)
 	OnNegotiationStateChange func(sessionID string, state NegotiationState)
 	OnSDPCreated             func(sessionID string, sdp *sdp.SessionDescription)
@@ -65,8 +65,8 @@ type MediaSessionWithSDPManagerConfig struct {
 }
 
 // DefaultMediaSessionWithSDPManagerConfig возвращает конфигурацию менеджера по умолчанию
-func DefaultMediaSessionWithSDPManagerConfig() MediaSessionWithSDPManagerConfig {
-	return MediaSessionWithSDPManagerConfig{
+func DefaultMediaSessionWithSDPManagerConfig() ManagerConfig {
+	return ManagerConfig{
 		MaxSessions:            100,              // Максимум 100 одновременных звонков
 		SessionTimeout:         time.Minute * 30, // 30 минут неактивности
 		CleanupInterval:        time.Minute * 5,  // Очистка каждые 5 минут
@@ -80,7 +80,7 @@ func DefaultMediaSessionWithSDPManagerConfig() MediaSessionWithSDPManagerConfig 
 }
 
 // NewMediaSessionWithSDPManager создает новый менеджер медиа сессий с SDP
-func NewMediaSessionWithSDPManager(config MediaSessionWithSDPManagerConfig) (*MediaSessionWithSDPManager, error) {
+func NewMediaSessionWithSDPManager(config ManagerConfig) (*Manager, error) {
 	if config.MaxSessions == 0 {
 		config = DefaultMediaSessionWithSDPManagerConfig()
 	}
@@ -97,8 +97,8 @@ func NewMediaSessionWithSDPManager(config MediaSessionWithSDPManagerConfig) (*Me
 	// Контекст для управления жизненным циклом
 	ctx, cancel := context.WithCancel(context.Background())
 
-	manager := &MediaSessionWithSDPManager{
-		sessions:        make(map[string]*MediaSessionWithSDP),
+	manager := &Manager{
+		sessions:        make(map[string]*SessionWithSDP),
 		config:          config,
 		maxSessions:     config.MaxSessions,
 		sessionTimeout:  config.SessionTimeout,
@@ -126,12 +126,12 @@ func NewMediaSessionWithSDPManager(config MediaSessionWithSDPManagerConfig) (*Me
 }
 
 // CreateSession создает новую медиа сессию с SDP поддержкой
-func (m *MediaSessionWithSDPManager) CreateSession(sessionID string) (*MediaSessionWithSDP, error) {
-	return m.CreateSessionWithConfig(sessionID, MediaSessionWithSDPConfig{})
+func (m *Manager) CreateSession(sessionID string) (*SessionWithSDP, error) {
+	return m.CreateSessionWithConfig(sessionID, SessionWithSDPConfig{})
 }
 
 // CreateSessionWithConfig создает новую медиа сессию с кастомной конфигурацией
-func (m *MediaSessionWithSDPManager) CreateSessionWithConfig(sessionID string, sessionConfig MediaSessionWithSDPConfig) (*MediaSessionWithSDP, error) {
+func (m *Manager) CreateSessionWithConfig(sessionID string, sessionConfig SessionWithSDPConfig) (*SessionWithSDP, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -156,6 +156,7 @@ func (m *MediaSessionWithSDPManager) CreateSessionWithConfig(sessionID string, s
 	finalConfig.OnPortsReleased = m.wrapPortsReleasedCallback(sessionID, sessionConfig.OnPortsReleased)
 
 	// Создаем новую сессию
+
 	session, err := NewMediaSessionWithSDP(finalConfig, m.portManager, m.sdpBuilder)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка создания сессии: %w", err)
@@ -175,7 +176,7 @@ func (m *MediaSessionWithSDPManager) CreateSessionWithConfig(sessionID string, s
 }
 
 // GetSession получает сессию по ID
-func (m *MediaSessionWithSDPManager) GetSession(sessionID string) (*MediaSessionWithSDP, bool) {
+func (m *Manager) GetSession(sessionID string) (*SessionWithSDP, bool) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
@@ -184,7 +185,7 @@ func (m *MediaSessionWithSDPManager) GetSession(sessionID string) (*MediaSession
 }
 
 // RemoveSession удаляет сессию по ID
-func (m *MediaSessionWithSDPManager) RemoveSession(sessionID string) error {
+func (m *Manager) RemoveSession(sessionID string) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -211,7 +212,7 @@ func (m *MediaSessionWithSDPManager) RemoveSession(sessionID string) error {
 }
 
 // ListActiveSessions возвращает список ID активных сессий
-func (m *MediaSessionWithSDPManager) ListActiveSessions() []string {
+func (m *Manager) ListActiveSessions() []string {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
@@ -226,7 +227,7 @@ func (m *MediaSessionWithSDPManager) ListActiveSessions() []string {
 }
 
 // GetAllSessions возвращает список всех сессий с их состояниями
-func (m *MediaSessionWithSDPManager) GetAllSessions() map[string]media.MediaSessionState {
+func (m *Manager) GetAllSessions() map[string]media.MediaSessionState {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
@@ -239,7 +240,7 @@ func (m *MediaSessionWithSDPManager) GetAllSessions() map[string]media.MediaSess
 }
 
 // GetSessionNegotiationStates возвращает состояния SDP переговоров всех сессий
-func (m *MediaSessionWithSDPManager) GetSessionNegotiationStates() map[string]NegotiationState {
+func (m *Manager) GetSessionNegotiationStates() map[string]NegotiationState {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
@@ -252,7 +253,7 @@ func (m *MediaSessionWithSDPManager) GetSessionNegotiationStates() map[string]Ne
 }
 
 // GetSessionStatistics возвращает статистику всех сессий
-func (m *MediaSessionWithSDPManager) GetSessionStatistics() map[string]media.MediaStatistics {
+func (m *Manager) GetSessionStatistics() map[string]media.MediaStatistics {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
@@ -265,7 +266,7 @@ func (m *MediaSessionWithSDPManager) GetSessionStatistics() map[string]media.Med
 }
 
 // GetManagerStatistics возвращает статистику менеджера
-func (m *MediaSessionWithSDPManager) GetManagerStatistics() ManagerStatistics {
+func (m *Manager) GetManagerStatistics() ManagerStatistics {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
@@ -281,7 +282,7 @@ func (m *MediaSessionWithSDPManager) GetManagerStatistics() ManagerStatistics {
 }
 
 // StopAll останавливает все сессии
-func (m *MediaSessionWithSDPManager) StopAll() error {
+func (m *Manager) StopAll() error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -313,7 +314,7 @@ func (m *MediaSessionWithSDPManager) StopAll() error {
 }
 
 // CleanupInactiveSessions очищает неактивные сессии
-func (m *MediaSessionWithSDPManager) CleanupInactiveSessions() int {
+func (m *Manager) CleanupInactiveSessions() int {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -343,26 +344,26 @@ func (m *MediaSessionWithSDPManager) CleanupInactiveSessions() int {
 }
 
 // Count возвращает общее количество сессий
-func (m *MediaSessionWithSDPManager) Count() int {
+func (m *Manager) Count() int {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	return len(m.sessions)
 }
 
 // ActiveCount возвращает количество активных сессий
-func (m *MediaSessionWithSDPManager) ActiveCount() int {
+func (m *Manager) ActiveCount() int {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	return m.activeSessions
 }
 
 // GetPortManager возвращает интерфейс менеджера портов
-func (m *MediaSessionWithSDPManager) GetPortManager() PortManagerInterface {
+func (m *Manager) GetPortManager() PortManagerInterface {
 	return m.portManager
 }
 
 // GetSDPBuilder возвращает интерфейс SDP builder
-func (m *MediaSessionWithSDPManager) GetSDPBuilder() SDPBuilderInterface {
+func (m *Manager) GetSDPBuilder() SDPBuilderInterface {
 	return m.sdpBuilder
 }
 
@@ -371,8 +372,8 @@ func (m *MediaSessionWithSDPManager) GetSDPBuilder() SDPBuilderInterface {
 // =============================================================================
 
 // mergeConfigs объединяет конфигурацию менеджера с конфигурацией сессии
-func (m *MediaSessionWithSDPManager) mergeConfigs(sessionConfig MediaSessionWithSDPConfig) MediaSessionWithSDPConfig {
-	config := MediaSessionWithSDPConfig{
+func (m *Manager) mergeConfigs(sessionConfig SessionWithSDPConfig) SessionWithSDPConfig {
+	config := SessionWithSDPConfig{
 		MediaSessionConfig: m.config.BaseMediaSessionConfig,
 		LocalIP:            m.config.LocalIP,
 		PortRange:          m.config.PortRange,
@@ -408,13 +409,62 @@ func (m *MediaSessionWithSDPManager) mergeConfigs(sessionConfig MediaSessionWith
 	if sessionConfig.MediaSessionConfig.PayloadType != 0 {
 		config.MediaSessionConfig.PayloadType = sessionConfig.MediaSessionConfig.PayloadType
 	}
-	// ... (другие поля MediaSessionConfig)
+	if sessionConfig.MediaSessionConfig.Ptime != 0 {
+		config.MediaSessionConfig.Ptime = sessionConfig.MediaSessionConfig.Ptime
+	}
+
+	// Jitter buffer настройки
+	if sessionConfig.MediaSessionConfig.JitterEnabled {
+		config.MediaSessionConfig.JitterEnabled = true
+	}
+	if sessionConfig.MediaSessionConfig.JitterBufferSize > 0 {
+		config.MediaSessionConfig.JitterBufferSize = sessionConfig.MediaSessionConfig.JitterBufferSize
+	}
+	if sessionConfig.MediaSessionConfig.JitterDelay > 0 {
+		config.MediaSessionConfig.JitterDelay = sessionConfig.MediaSessionConfig.JitterDelay
+	}
+
+	// DTMF настройки
+	if sessionConfig.MediaSessionConfig.DTMFEnabled {
+		config.MediaSessionConfig.DTMFEnabled = true
+	}
+	if sessionConfig.MediaSessionConfig.DTMFPayloadType != 0 {
+		config.MediaSessionConfig.DTMFPayloadType = sessionConfig.MediaSessionConfig.DTMFPayloadType
+	}
+
+	// RTCP настройки
+	if sessionConfig.MediaSessionConfig.RTCPEnabled {
+		config.MediaSessionConfig.RTCPEnabled = true
+	}
+	if sessionConfig.MediaSessionConfig.RTCPInterval > 0 {
+		config.MediaSessionConfig.RTCPInterval = sessionConfig.MediaSessionConfig.RTCPInterval
+	}
+	if sessionConfig.MediaSessionConfig.OnRTCPReport != nil {
+		config.MediaSessionConfig.OnRTCPReport = sessionConfig.MediaSessionConfig.OnRTCPReport
+	}
+
+	// Обработчики событий
+	if sessionConfig.MediaSessionConfig.OnAudioReceived != nil {
+		config.MediaSessionConfig.OnAudioReceived = sessionConfig.MediaSessionConfig.OnAudioReceived
+	}
+	if sessionConfig.MediaSessionConfig.OnRawAudioReceived != nil {
+		config.MediaSessionConfig.OnRawAudioReceived = sessionConfig.MediaSessionConfig.OnRawAudioReceived
+	}
+	if sessionConfig.MediaSessionConfig.OnRawPacketReceived != nil {
+		config.MediaSessionConfig.OnRawPacketReceived = sessionConfig.MediaSessionConfig.OnRawPacketReceived
+	}
+	if sessionConfig.MediaSessionConfig.OnDTMFReceived != nil {
+		config.MediaSessionConfig.OnDTMFReceived = sessionConfig.MediaSessionConfig.OnDTMFReceived
+	}
+	if sessionConfig.MediaSessionConfig.OnMediaError != nil {
+		config.MediaSessionConfig.OnMediaError = sessionConfig.MediaSessionConfig.OnMediaError
+	}
 
 	return config
 }
 
 // cleanupRoutine фоновая задача очистки неактивных сессий
-func (m *MediaSessionWithSDPManager) cleanupRoutine() {
+func (m *Manager) cleanupRoutine() {
 	defer close(m.cleanupDone)
 
 	ticker := time.NewTicker(m.cleanupInterval)
@@ -434,7 +484,7 @@ func (m *MediaSessionWithSDPManager) cleanupRoutine() {
 
 // Wrapper функции для callback-ов с sessionID
 
-func (m *MediaSessionWithSDPManager) wrapNegotiationStateCallback(sessionID string, original func(NegotiationState)) func(NegotiationState) {
+func (m *Manager) wrapNegotiationStateCallback(sessionID string, original func(NegotiationState)) func(NegotiationState) {
 	return func(state NegotiationState) {
 		if original != nil {
 			original(state)
@@ -445,7 +495,7 @@ func (m *MediaSessionWithSDPManager) wrapNegotiationStateCallback(sessionID stri
 	}
 }
 
-func (m *MediaSessionWithSDPManager) wrapSDPCreatedCallback(sessionID string, original func(*sdp.SessionDescription)) func(*sdp.SessionDescription) {
+func (m *Manager) wrapSDPCreatedCallback(sessionID string, original func(*sdp.SessionDescription)) func(*sdp.SessionDescription) {
 	return func(desc *sdp.SessionDescription) {
 		if original != nil {
 			original(desc)
@@ -456,7 +506,7 @@ func (m *MediaSessionWithSDPManager) wrapSDPCreatedCallback(sessionID string, or
 	}
 }
 
-func (m *MediaSessionWithSDPManager) wrapSDPReceivedCallback(sessionID string, original func(*sdp.SessionDescription)) func(*sdp.SessionDescription) {
+func (m *Manager) wrapSDPReceivedCallback(sessionID string, original func(*sdp.SessionDescription)) func(*sdp.SessionDescription) {
 	return func(desc *sdp.SessionDescription) {
 		if original != nil {
 			original(desc)
@@ -467,7 +517,7 @@ func (m *MediaSessionWithSDPManager) wrapSDPReceivedCallback(sessionID string, o
 	}
 }
 
-func (m *MediaSessionWithSDPManager) wrapPortsAllocatedCallback(sessionID string, original func(int, int)) func(int, int) {
+func (m *Manager) wrapPortsAllocatedCallback(sessionID string, original func(int, int)) func(int, int) {
 	return func(rtpPort, rtcpPort int) {
 		if original != nil {
 			original(rtpPort, rtcpPort)
@@ -478,7 +528,7 @@ func (m *MediaSessionWithSDPManager) wrapPortsAllocatedCallback(sessionID string
 	}
 }
 
-func (m *MediaSessionWithSDPManager) wrapPortsReleasedCallback(sessionID string, original func(int, int)) func(int, int) {
+func (m *Manager) wrapPortsReleasedCallback(sessionID string, original func(int, int)) func(int, int) {
 	return func(rtpPort, rtcpPort int) {
 		if original != nil {
 			original(rtpPort, rtcpPort)

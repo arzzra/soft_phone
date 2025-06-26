@@ -5,6 +5,7 @@ package media
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -23,9 +24,7 @@ type Session interface {
 	Stop() error
 	SendAudio([]byte, time.Duration) error
 	SendPacket(*rtp.Packet) error
-	GetState() int
 	GetSSRC() uint32
-	GetStatistics() interface{}
 
 	// RTCP поддержка (опциональная)
 	EnableRTCP(enabled bool) error
@@ -205,7 +204,7 @@ func DefaultMediaSessionConfig() MediaSessionConfig {
 		Direction:        DirectionSendRecv,
 		Ptime:            time.Millisecond * 20, // Стандарт для телефонии
 		PayloadType:      PayloadTypePCMU,
-		JitterEnabled:    true,
+		JitterEnabled:    false,
 		JitterBufferSize: 10,                    // 10 пакетов = 200ms буфер
 		JitterDelay:      time.Millisecond * 60, // Начальная задержка 60ms
 		DTMFEnabled:      true,
@@ -233,7 +232,7 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 
 	// Вычисляем параметры для RTP потока
 	sampleRate := getSampleRateForPayloadType(config.PayloadType)
-	samplesPerPacket := int(sampleRate * uint32(config.Ptime.Seconds()))
+	samplesPerPacket := int(float64(sampleRate) * config.Ptime.Seconds())
 
 	session := &MediaSession{
 		sessionID:        config.SessionID,
@@ -404,6 +403,11 @@ func (ms *MediaSession) Stop() error {
 	close(ms.stopChan)
 
 	ms.cancel()
+
+	if ms.jitterEnabled && ms.jitterBuffer != nil {
+		ms.jitterBuffer.Stop()
+		ms.jitterBuffer = nil
+	}
 
 	// Очищаем буфер
 	ms.bufferMutex.Lock()
@@ -741,8 +745,8 @@ func getSampleRateForPayloadType(pt PayloadType) uint32 {
 
 // getExpectedPayloadSize возвращает ожидаемый размер payload для текущих настроек
 func (ms *MediaSession) getExpectedPayloadSize() int {
-	sampleRate := getSampleRateForPayloadType(ms.payloadType)
-	samplesPerPacket := int(sampleRate * uint32(ms.ptime.Seconds()))
+	// Используем предварительно рассчитанное значение вместо пересчета
+	samplesPerPacket := ms.samplesPerPacket
 
 	switch ms.payloadType {
 	case PayloadTypePCMU, PayloadTypePCMA:
@@ -831,9 +835,11 @@ func (ms *MediaSession) audioSendLoop() {
 		return
 	}
 
+	slog.Debug("media.audioSendLoop Started")
 	for {
 		select {
 		case <-ms.stopChan:
+			slog.Debug("media.audioSendLoop Stopped")
 			return
 		case <-ms.sendTicker.C:
 			ms.sendBufferedAudio()
@@ -982,15 +988,18 @@ func (ms *MediaSession) jitterBufferLoop() {
 		return
 	}
 
+	slog.Debug("media.jitterBufferLoop Started")
 	for {
 		select {
 		case <-ms.ctx.Done():
+			slog.Debug("media.jitterBufferLoop Stopped")
 			return
 		default:
 			// Получаем пакет из jitter buffer
 			packet, err := ms.jitterBuffer.GetBlocking()
 			if err != nil {
 				if ms.ctx.Err() != nil {
+					slog.Debug("media.jitterBufferLoop Stopped")
 					return // Контекст отменен
 				}
 				ms.handleError(err)
@@ -1017,9 +1026,11 @@ func (ms *MediaSession) audioProcessorLoop() {
 	ticker := time.NewTicker(time.Millisecond * 10) // Обрабатываем каждые 10ms
 	defer ticker.Stop()
 
+	slog.Debug("media.audioProcessorLoop Started")
 	for {
 		select {
 		case <-ms.ctx.Done():
+			slog.Debug("media.audioProcessorLoop Stopped")
 			return
 		case <-ticker.C:
 			// Здесь можно добавить периодическую обработку аудио
@@ -1221,9 +1232,11 @@ func (ms *MediaSession) rtcpSendLoop() {
 	ticker := time.NewTicker(ms.rtcpInterval)
 	defer ticker.Stop()
 
+	slog.Debug("media.rtcpSendLoop Started")
 	for {
 		select {
 		case <-ms.ctx.Done():
+			slog.Debug("media.rtcpSendLoop Stopped")
 			return
 		case <-ticker.C:
 			if ms.GetState() == MediaStateActive && ms.IsRTCPEnabled() {

@@ -161,7 +161,7 @@ func (ap *AudioProcessor) SetPtime(ptime time.Duration) {
 	ap.config.Ptime = ptime
 
 	// Пересчитываем размер буфера
-	samplesPerPacket := int(ap.config.SampleRate * uint32(ptime.Seconds()))
+	samplesPerPacket := int(float64(ap.config.SampleRate) * ptime.Seconds())
 	bufferSize := samplesPerPacket * ap.config.Channels * getBytesPerSample(ap.config.PayloadType)
 
 	ap.inputBuffer = make([]byte, bufferSize)

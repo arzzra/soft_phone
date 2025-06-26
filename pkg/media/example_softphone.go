@@ -169,7 +169,7 @@ func ExampleRawAudioSending() error {
 
 		// Генерируем данные правильного размера
 		sampleRate := getSampleRateForPayloadType(session.GetPayloadType())
-		samplesNeeded := int(sampleRate * uint32(ptime.Seconds()))
+		samplesNeeded := int(float64(sampleRate) * ptime.Seconds())
 		testData := generateTestAudio(samplesNeeded)
 
 		err = session.SendAudio(testData)
@@ -481,7 +481,7 @@ func ExamplePtimeConfiguration() error {
 
 		// Вычисляем ожидаемый размер аудио пакета
 		sampleRate := uint32(8000) // Для PCMU
-		samplesPerPacket := int(sampleRate * uint32(ptime.Seconds()))
+		samplesPerPacket := int(float64(sampleRate) * ptime.Seconds())
 		bytesPerPacket := samplesPerPacket // 1 байт на sample для PCMU
 
 		fmt.Printf("  Ожидаемый размер пакета: %d байт (%d samples)\n",
