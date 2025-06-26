@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arzzra/soft_phone/pkg/media"
 	"github.com/pion/sdp"
 )
 
@@ -141,14 +142,26 @@ func (mm *MediaManager) extractRemoteAddress(desc *sdp.SessionDescription) (net.
 
 // createMediaSession создает медиа сессию на основе информации о сессии
 func (mm *MediaManager) createMediaSession(sessionInfo *MediaSessionInfo) (MediaSessionInterface, error) {
-	// Создаем stub медиа сессию (TODO: заменить на реальную реализацию)
-	return mm.createMediaSessionStub(sessionInfo), nil
+	// Формируем конфигурацию для реальной media.Session
+	cfg := media.DefaultMediaSessionConfig()
+	cfg.SessionID = sessionInfo.SessionID
+	cfg.Direction = media.DirectionSendRecv // По умолчанию bidirectional
+	cfg.Ptime = time.Duration(mm.config.DefaultPtime) * time.Millisecond
+
+	// Попытка создать медиа-сессию
+	ms, err := media.NewMediaSession(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось создать media session: %w", err)
+	}
+
+	return ms, nil
 }
 
-// createRTPSession создает RTP сессию для медиа потока
+// createRTPSession создает RTP сессию для медиа потока.
+// Полная реализация потребует транспортов и согласования сети.
+// Пока возвращаем nil, чтобы менеджер мог работать без привязки к RTP.
 func (mm *MediaManager) createRTPSession(streamInfo MediaStreamInfo, localAddr, remoteAddr net.Addr) (RTPSessionInterface, error) {
-	// Создаем stub RTP сессию (TODO: заменить на реальную реализацию)
-	return mm.createRTPSessionStub(streamInfo, localAddr, remoteAddr), nil
+	return nil, nil
 }
 
 // createAnswerSDP создает SDP ответ
@@ -165,6 +178,13 @@ func (mm *MediaManager) createAnswerSDP(remoteDesc *sdp.SessionDescription, cons
 			UnicastAddress: mm.config.DefaultLocalIP,
 		},
 		SessionName: "Media Manager Session",
+		ConnectionInformation: &sdp.ConnectionInformation{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address: &sdp.Address{
+				IP: net.ParseIP(mm.config.DefaultLocalIP),
+			},
+		},
 		TimeDescriptions: []sdp.TimeDescription{
 			{
 				Timing: sdp.Timing{
@@ -181,6 +201,30 @@ func (mm *MediaManager) createAnswerSDP(remoteDesc *sdp.SessionDescription, cons
 			localMedia := mm.createAudioMediaDescription(remoteMedia, constraints, sessionInfo)
 			localDesc.MediaDescriptions = append(localDesc.MediaDescriptions, localMedia)
 		}
+	}
+
+	// ВРЕМЕННОЕ РЕШЕНИЕ: добавляем connection line принудительно
+	sdpText := localDesc.Marshal()
+
+	// Если нет connection line, добавляем вручную
+	if !strings.Contains(sdpText, "c=IN IP4") {
+		lines := strings.Split(sdpText, "\n")
+		var newLines []string
+
+		for _, line := range lines {
+			newLines = append(newLines, line)
+			// Добавляем connection line после time descriptions (t=)
+			if strings.HasPrefix(line, "t=") {
+				newLines = append(newLines, fmt.Sprintf("c=IN IP4 %s", mm.config.DefaultLocalIP))
+			}
+		}
+
+		// Пересоздаем SDP из исправленного текста
+		fixedDesc := &sdp.SessionDescription{}
+		if err := fixedDesc.Unmarshal(strings.Join(newLines, "\n")); err != nil {
+			return nil, fmt.Errorf("ошибка создания исправленного SDP answer: %w", err)
+		}
+		localDesc = fixedDesc
 	}
 
 	return localDesc, nil
@@ -200,6 +244,13 @@ func (mm *MediaManager) createOfferSDP(constraints SessionConstraints) (*sdp.Ses
 			UnicastAddress: mm.config.DefaultLocalIP,
 		},
 		SessionName: "Media Manager Offer",
+		ConnectionInformation: &sdp.ConnectionInformation{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address: &sdp.Address{
+				IP: net.ParseIP(mm.config.DefaultLocalIP),
+			},
+		},
 		TimeDescriptions: []sdp.TimeDescription{
 			{
 				Timing: sdp.Timing{
@@ -214,6 +265,31 @@ func (mm *MediaManager) createOfferSDP(constraints SessionConstraints) (*sdp.Ses
 	if constraints.AudioEnabled {
 		audioMedia := mm.createAudioMediaDescriptionFromConstraints(constraints)
 		localDesc.MediaDescriptions = append(localDesc.MediaDescriptions, audioMedia)
+	}
+
+	// ВРЕМЕННОЕ РЕШЕНИЕ: добавляем connection line принудительно
+	// Проверим, что connection info добавлена правильно
+	sdpText := localDesc.Marshal()
+
+	// Если нет connection line, добавляем вручную
+	if !strings.Contains(sdpText, "c=IN IP4") {
+		lines := strings.Split(sdpText, "\n")
+		var newLines []string
+
+		for _, line := range lines {
+			newLines = append(newLines, line)
+			// Добавляем connection line после time descriptions (t=)
+			if strings.HasPrefix(line, "t=") {
+				newLines = append(newLines, fmt.Sprintf("c=IN IP4 %s", mm.config.DefaultLocalIP))
+			}
+		}
+
+		// Пересоздаем SDP из исправленного текста
+		fixedDesc := &sdp.SessionDescription{}
+		if err := fixedDesc.Unmarshal(strings.Join(newLines, "\n")); err != nil {
+			return nil, fmt.Errorf("ошибка создания исправленного SDP: %w", err)
+		}
+		localDesc = fixedDesc
 	}
 
 	return localDesc, nil
@@ -236,8 +312,13 @@ func (mm *MediaManager) createAudioMediaDescription(remoteMedia *sdp.MediaDescri
 			Protos:  []string{"RTP", "AVP"},
 			Formats: []string{}, // Будем заполнять ниже
 		},
-		// ConnectionInformation: опускаем для избежания nil pointer
-		// TODO: добавить правильную инициализацию ConnectionInformation
+		ConnectionInformation: &sdp.ConnectionInformation{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address: &sdp.Address{
+				IP: net.ParseIP(mm.config.DefaultLocalIP),
+			},
+		},
 		Attributes: []sdp.Attribute{
 			{Key: mm.directionToString(constraints.AudioDirection)},
 		},
@@ -264,6 +345,13 @@ func (mm *MediaManager) createAudioMediaDescriptionFromConstraints(constraints S
 			Port:    sdp.RangedPort{Value: 0}, // Будет заполнено позже
 			Protos:  []string{"RTP", "AVP"},
 			Formats: []string{},
+		},
+		ConnectionInformation: &sdp.ConnectionInformation{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address: &sdp.Address{
+				IP: net.ParseIP(mm.config.DefaultLocalIP),
+			},
 		},
 		Attributes: []sdp.Attribute{
 			{Key: mm.directionToString(constraints.AudioDirection)},

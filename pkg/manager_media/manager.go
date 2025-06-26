@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
+	rtp "github.com/arzzra/soft_phone/pkg/rtp"
 	"github.com/google/uuid"
 	"github.com/pion/sdp"
 )
@@ -93,13 +95,13 @@ func (mm *MediaManager) CreateSessionFromDescription(desc *sdp.SessionDescriptio
 	// Создаем RTP сессии для каждого медиа потока
 	for _, stream := range mediaStreams {
 		if stream.Type == "audio" {
-			rtpSession := mm.createRTPSessionStub(stream, localAddr, remoteAddr)
+			rtpSession, _ := mm.createRTPSession(stream, localAddr, remoteAddr)
 			sessionInfo.RTPSessions[stream.Type] = rtpSession
 		}
 	}
 
 	// Создаем медиа сессию
-	mediaSession := mm.createMediaSessionStub(sessionInfo)
+	mediaSession, _ := mm.createMediaSession(sessionInfo)
 	sessionInfo.MediaSession = mediaSession
 
 	// Сохраняем сессию
@@ -147,6 +149,22 @@ func (mm *MediaManager) CreateAnswer(sessionID string, constraints SessionConstr
 	// Маршалим SDP
 	localSDP := localDesc.Marshal()
 
+	// ВРЕМЕННОЕ РЕШЕНИЕ: Добавляем connection line если отсутствует
+	if !strings.Contains(localSDP, "c=IN IP4") {
+		lines := strings.Split(localSDP, "\n")
+		var newLines []string
+
+		for _, line := range lines {
+			newLines = append(newLines, line)
+			// Добавляем connection line после time descriptions (t=)
+			if strings.HasPrefix(line, "t=") {
+				newLines = append(newLines, fmt.Sprintf("c=IN IP4 %s", mm.config.DefaultLocalIP))
+			}
+		}
+
+		localSDP = strings.Join(newLines, "\n")
+	}
+
 	// Сохраняем локальное SDP
 	mm.sessionsMutex.Lock()
 	sessionInfo.LocalSDP = []byte(localSDP)
@@ -181,6 +199,22 @@ func (mm *MediaManager) CreateOffer(constraints SessionConstraints) (*MediaSessi
 
 	// Маршалим SDP
 	localSDP := localDesc.Marshal()
+
+	// ВРЕМЕННОЕ РЕШЕНИЕ: Добавляем connection line если отсутствует
+	if !strings.Contains(localSDP, "c=IN IP4") {
+		lines := strings.Split(localSDP, "\n")
+		var newLines []string
+
+		for _, line := range lines {
+			newLines = append(newLines, line)
+			// Добавляем connection line после time descriptions (t=)
+			if strings.HasPrefix(line, "t=") {
+				newLines = append(newLines, fmt.Sprintf("c=IN IP4 %s", mm.config.DefaultLocalIP))
+			}
+		}
+
+		localSDP = strings.Join(newLines, "\n")
+	}
 
 	// Создаем сессию
 	sessionInfo := &MediaSessionInfo{
@@ -255,13 +289,13 @@ func (mm *MediaManager) UpdateSession(sessionID string, newSDP string) error {
 		// Создаем RTP сессии
 		for _, stream := range mediaStreams {
 			if stream.Type == "audio" {
-				rtpSession := mm.createRTPSessionStub(stream, sessionInfo.LocalAddress, remoteAddr)
+				rtpSession, _ := mm.createRTPSession(stream, sessionInfo.LocalAddress, remoteAddr)
 				sessionInfo.RTPSessions[stream.Type] = rtpSession
 			}
 		}
 
 		// Создаем медиа сессию
-		mediaSession := mm.createMediaSessionStub(sessionInfo)
+		mediaSession, _ := mm.createMediaSession(sessionInfo)
 		sessionInfo.MediaSession = mediaSession
 
 		sessionInfo.State = SessionStateActive
@@ -350,7 +384,7 @@ func (mm *MediaManager) GetSessionStatistics(sessionID string) (*SessionStatisti
 	for streamType, rtpSession := range sessionInfo.RTPSessions {
 		if rtpSession != nil {
 			rtpStats := rtpSession.GetStatistics()
-			if rtpStatsTyped, ok := rtpStats.(StubSessionStatistics); ok {
+			if rtpStatsTyped, ok := rtpStats.(rtp.SessionStatistics); ok {
 				// Создаем или обновляем статистику медиа потока
 				if existingStats, exists := stats.MediaStatistics[streamType]; exists {
 					existingStats.PacketsSent += rtpStatsTyped.PacketsSent

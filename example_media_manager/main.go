@@ -114,7 +114,7 @@ func main() {
 	// 5. Демонстрация передачи данных между сессиями
 	fmt.Println("\n🎵 5. Симуляция передачи аудио данных...")
 
-	// Симулируем отправку аудио пакетов
+	// Симулируем передачу аудио данных между сессиями
 	if err := simulateAudioTransmission(mediaManager, updatedCallerSession, updatedCalleeSession); err != nil {
 		log.Printf("⚠️ Предупреждение при передаче данных: %v", err)
 	}
@@ -169,6 +169,26 @@ func simulateAudioTransmission(manager *manager_media.MediaManager, caller, call
 		return fmt.Errorf("медиа сессии не инициализированы")
 	}
 
+	// Устанавливаем peer связь между сессиями для симуляции передачи данных
+	if callerStub, ok := caller.MediaSession.(interface {
+		SetPeer(manager_media.MediaSessionInterface)
+	}); ok {
+		callerStub.SetPeer(callee.MediaSession)
+	}
+	if calleeStub, ok := callee.MediaSession.(interface {
+		SetPeer(manager_media.MediaSessionInterface)
+	}); ok {
+		calleeStub.SetPeer(caller.MediaSession)
+	}
+
+	// Запускаем медиа сессии
+	if err := caller.MediaSession.Start(); err != nil {
+		return fmt.Errorf("ошибка запуска caller сессии: %v", err)
+	}
+	if err := callee.MediaSession.Start(); err != nil {
+		return fmt.Errorf("ошибка запуска callee сессии: %v", err)
+	}
+
 	// Симулируем несколько аудио пакетов
 	for i := 0; i < 5; i++ {
 		// Создаем тестовый аудио пакет (160 байт = 20ms при 8kHz)
@@ -191,6 +211,9 @@ func simulateAudioTransmission(manager *manager_media.MediaManager, caller, call
 		time.Sleep(20 * time.Millisecond)
 	}
 
+	// Дополнительная пауза для обработки асинхронной передачи
+	time.Sleep(100 * time.Millisecond)
+
 	fmt.Printf("✅ Передача %d аудио пакетов завершена\n", 5)
 	return nil
 }
@@ -209,6 +232,18 @@ func displaySessionStats(name string, stats *manager_media.SessionStatistics) {
 			mediaType, mediaStats.PacketsSent, mediaStats.PacketsReceived)
 		fmt.Printf("             байт отправлено=%d, получено=%d\n",
 			mediaStats.BytesSent, mediaStats.BytesReceived)
+
+		if mediaStats.PacketsSent > 0 || mediaStats.PacketsReceived > 0 {
+			fmt.Printf("             📊 Статистика передачи:\n")
+			if mediaStats.PacketsSent > 0 {
+				avgPacketSizeOut := mediaStats.BytesSent / mediaStats.PacketsSent
+				fmt.Printf("                 Средний размер исходящего пакета: %d байт\n", avgPacketSizeOut)
+			}
+			if mediaStats.PacketsReceived > 0 {
+				avgPacketSizeIn := mediaStats.BytesReceived / mediaStats.PacketsReceived
+				fmt.Printf("                 Средний размер входящего пакета: %d байт\n", avgPacketSizeIn)
+			}
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ package manager_media
 import (
 	"net"
 
+	"github.com/arzzra/soft_phone/pkg/media"
 	"github.com/pion/sdp"
 )
 
@@ -223,3 +224,7 @@ type MediaManagerEventHandler interface {
 	OnMediaReceived(sessionID string, data []byte, mediaType string)
 	OnSDPNegotiated(sessionID string, localSDP, remoteSDP string)
 }
+
+// Псевдонимы на реальные интерфейсы из пакета media
+type MediaSessionInterface = media.MediaSessionInterface
+type RTPSessionInterface = media.Session

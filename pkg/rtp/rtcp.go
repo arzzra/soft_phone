@@ -3,8 +3,6 @@ package rtp
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
-	"net"
 	"time"
 )
 
@@ -40,7 +38,7 @@ type RTCPHeader struct {
 
 // SenderReport согласно RFC 3550 Section 6.4.1
 type SenderReport struct {
-	Header           RTCPHeader
+	Hdr              RTCPHeader
 	SSRC             uint32 // SSRC of sender
 	NTPTimestamp     uint64 // NTP timestamp
 	RTPTimestamp     uint32 // RTP timestamp
@@ -51,7 +49,7 @@ type SenderReport struct {
 
 // ReceiverReport согласно RFC 3550 Section 6.4.2
 type ReceiverReport struct {
-	Header           RTCPHeader
+	Hdr              RTCPHeader
 	SSRC             uint32 // SSRC of packet sender
 	ReceptionReports []ReceptionReport
 }
@@ -69,7 +67,7 @@ type ReceptionReport struct {
 
 // SourceDescription согласно RFC 3550 Section 6.5
 type SourceDescriptionPacket struct {
-	Header RTCPHeader
+	Hdr    RTCPHeader
 	Chunks []SDESChunk
 }
 
@@ -88,7 +86,7 @@ type SDESItem struct {
 
 // ByePacket согласно RFC 3550 Section 6.6
 type ByePacket struct {
-	Header  RTCPHeader
+	Hdr     RTCPHeader
 	Sources []uint32 // List of SSRC/CSRC identifiers
 	Reason  string   // Optional reason for leaving
 }
@@ -127,7 +125,7 @@ type RTCPStatistics struct {
 // NewSenderReport создает новый Sender Report
 func NewSenderReport(ssrc uint32, ntpTime uint64, rtpTime uint32, packets, octets uint32) *SenderReport {
 	return &SenderReport{
-		Header: RTCPHeader{
+		Hdr: RTCPHeader{
 			Version:    2,
 			Padding:    false,
 			Count:      0,
@@ -146,13 +144,13 @@ func NewSenderReport(ssrc uint32, ntpTime uint64, rtpTime uint32, packets, octet
 // AddReceptionReport добавляет Reception Report к Sender Report
 func (sr *SenderReport) AddReceptionReport(rr ReceptionReport) {
 	sr.ReceptionReports = append(sr.ReceptionReports, rr)
-	sr.Header.Count = uint8(len(sr.ReceptionReports))
-	sr.Header.Length = 6 + uint16(len(sr.ReceptionReports)*6) // SR + RR blocks
+	sr.Hdr.Count = uint8(len(sr.ReceptionReports))
+	sr.Hdr.Length = 6 + uint16(len(sr.ReceptionReports)*6) // SR + RR blocks
 }
 
 // Header возвращает заголовок RTCP пакета
 func (sr *SenderReport) Header() RTCPHeader {
-	return sr.Header
+	return sr.Hdr
 }
 
 // Marshal кодирует Sender Report в байты
@@ -200,18 +198,18 @@ func (sr *SenderReport) Unmarshal(data []byte) error {
 	}
 
 	// Parse header
-	sr.Header.Version = (data[0] >> 6) & 0x03
-	sr.Header.Padding = (data[0]>>5)&0x01 == 1
-	sr.Header.Count = data[0] & 0x1F
-	sr.Header.PacketType = data[1]
-	sr.Header.Length = binary.BigEndian.Uint16(data[2:4])
+	sr.Hdr.Version = (data[0] >> 6) & 0x03
+	sr.Hdr.Padding = (data[0]>>5)&0x01 == 1
+	sr.Hdr.Count = data[0] & 0x1F
+	sr.Hdr.PacketType = data[1]
+	sr.Hdr.Length = binary.BigEndian.Uint16(data[2:4])
 
-	if sr.Header.Version != 2 {
-		return fmt.Errorf("неподдерживаемая версия RTCP: %d", sr.Header.Version)
+	if sr.Hdr.Version != 2 {
+		return fmt.Errorf("неподдерживаемая версия RTCP: %d", sr.Hdr.Version)
 	}
 
-	if sr.Header.PacketType != RTCPTypeSR {
-		return fmt.Errorf("неверный тип пакета: %d", sr.Header.PacketType)
+	if sr.Hdr.PacketType != RTCPTypeSR {
+		return fmt.Errorf("неверный тип пакета: %d", sr.Hdr.PacketType)
 	}
 
 	// Parse SR fields
@@ -222,10 +220,10 @@ func (sr *SenderReport) Unmarshal(data []byte) error {
 	sr.SenderOctets = binary.BigEndian.Uint32(data[24:28])
 
 	// Parse Reception Reports
-	sr.ReceptionReports = make([]ReceptionReport, sr.Header.Count)
+	sr.ReceptionReports = make([]ReceptionReport, sr.Hdr.Count)
 	offset := 28
 
-	for i := 0; i < int(sr.Header.Count); i++ {
+	for i := 0; i < int(sr.Hdr.Count); i++ {
 		if offset+24 > len(data) {
 			return fmt.Errorf("недостаточно данных для RR блока")
 		}
@@ -253,7 +251,7 @@ func (sr *SenderReport) Unmarshal(data []byte) error {
 // NewReceiverReport создает новый Receiver Report
 func NewReceiverReport(ssrc uint32) *ReceiverReport {
 	return &ReceiverReport{
-		Header: RTCPHeader{
+		Hdr: RTCPHeader{
 			Version:    2,
 			Padding:    false,
 			Count:      0,
@@ -268,13 +266,13 @@ func NewReceiverReport(ssrc uint32) *ReceiverReport {
 // AddReceptionReport добавляет Reception Report к Receiver Report
 func (rr *ReceiverReport) AddReceptionReport(report ReceptionReport) {
 	rr.ReceptionReports = append(rr.ReceptionReports, report)
-	rr.Header.Count = uint8(len(rr.ReceptionReports))
-	rr.Header.Length = 1 + uint16(len(rr.ReceptionReports)*6) // RR header + RR blocks
+	rr.Hdr.Count = uint8(len(rr.ReceptionReports))
+	rr.Hdr.Length = 1 + uint16(len(rr.ReceptionReports)*6) // RR header + RR blocks
 }
 
 // Header возвращает заголовок RTCP пакета
 func (rr *ReceiverReport) Header() RTCPHeader {
-	return rr.Header
+	return rr.Hdr
 }
 
 // Marshal кодирует Receiver Report в байты
@@ -319,28 +317,28 @@ func (rr *ReceiverReport) Unmarshal(data []byte) error {
 	}
 
 	// Parse header
-	rr.Header.Version = (data[0] >> 6) & 0x03
-	rr.Header.Padding = (data[0]>>5)&0x01 == 1
-	rr.Header.Count = data[0] & 0x1F
-	rr.Header.PacketType = data[1]
-	rr.Header.Length = binary.BigEndian.Uint16(data[2:4])
+	rr.Hdr.Version = (data[0] >> 6) & 0x03
+	rr.Hdr.Padding = (data[0]>>5)&0x01 == 1
+	rr.Hdr.Count = data[0] & 0x1F
+	rr.Hdr.PacketType = data[1]
+	rr.Hdr.Length = binary.BigEndian.Uint16(data[2:4])
 
-	if rr.Header.Version != 2 {
-		return fmt.Errorf("неподдерживаемая версия RTCP: %d", rr.Header.Version)
+	if rr.Hdr.Version != 2 {
+		return fmt.Errorf("неподдерживаемая версия RTCP: %d", rr.Hdr.Version)
 	}
 
-	if rr.Header.PacketType != RTCPTypeRR {
-		return fmt.Errorf("неверный тип пакета: %d", rr.Header.PacketType)
+	if rr.Hdr.PacketType != RTCPTypeRR {
+		return fmt.Errorf("неверный тип пакета: %d", rr.Hdr.PacketType)
 	}
 
 	// Parse RR SSRC
 	rr.SSRC = binary.BigEndian.Uint32(data[4:8])
 
 	// Parse Reception Reports
-	rr.ReceptionReports = make([]ReceptionReport, rr.Header.Count)
+	rr.ReceptionReports = make([]ReceptionReport, rr.Hdr.Count)
 	offset := 8
 
-	for i := 0; i < int(rr.Header.Count); i++ {
+	for i := 0; i < int(rr.Hdr.Count); i++ {
 		if offset+24 > len(data) {
 			return fmt.Errorf("недостаточно данных для RR блока")
 		}
@@ -368,7 +366,7 @@ func (rr *ReceiverReport) Unmarshal(data []byte) error {
 // NewSourceDescription создает новый SDES пакет
 func NewSourceDescription() *SourceDescriptionPacket {
 	return &SourceDescriptionPacket{
-		Header: RTCPHeader{
+		Hdr: RTCPHeader{
 			Version:    2,
 			Padding:    false,
 			Count:      0,
@@ -386,15 +384,15 @@ func (sdes *SourceDescriptionPacket) AddChunk(ssrc uint32, items []SDESItem) {
 		Items:  items,
 	}
 	sdes.Chunks = append(sdes.Chunks, chunk)
-	sdes.Header.Count = uint8(len(sdes.Chunks))
+	sdes.Hdr.Count = uint8(len(sdes.Chunks))
 
 	// Пересчитываем длину (упрощенно)
-	sdes.Header.Length = 1 // Будет пересчитано в Marshal
+	sdes.Hdr.Length = 1 // Будет пересчитано в Marshal
 }
 
 // Header возвращает заголовок RTCP пакета
 func (sdes *SourceDescriptionPacket) Header() RTCPHeader {
-	return sdes.Header
+	return sdes.Hdr
 }
 
 // Marshal кодирует SDES пакет в байты
@@ -456,24 +454,24 @@ func (sdes *SourceDescriptionPacket) Unmarshal(data []byte) error {
 	}
 
 	// Parse header
-	sdes.Header.Version = (data[0] >> 6) & 0x03
-	sdes.Header.Padding = (data[0]>>5)&0x01 == 1
-	sdes.Header.Count = data[0] & 0x1F
-	sdes.Header.PacketType = data[1]
-	sdes.Header.Length = binary.BigEndian.Uint16(data[2:4])
+	sdes.Hdr.Version = (data[0] >> 6) & 0x03
+	sdes.Hdr.Padding = (data[0]>>5)&0x01 == 1
+	sdes.Hdr.Count = data[0] & 0x1F
+	sdes.Hdr.PacketType = data[1]
+	sdes.Hdr.Length = binary.BigEndian.Uint16(data[2:4])
 
-	if sdes.Header.Version != 2 {
-		return fmt.Errorf("неподдерживаемая версия RTCP: %d", sdes.Header.Version)
+	if sdes.Hdr.Version != 2 {
+		return fmt.Errorf("неподдерживаемая версия RTCP: %d", sdes.Hdr.Version)
 	}
 
-	if sdes.Header.PacketType != RTCPTypeSDES {
-		return fmt.Errorf("неверный тип пакета: %d", sdes.Header.PacketType)
+	if sdes.Hdr.PacketType != RTCPTypeSDES {
+		return fmt.Errorf("неверный тип пакета: %d", sdes.Hdr.PacketType)
 	}
 
 	sdes.Chunks = make([]SDESChunk, 0)
 	offset := 4
 
-	for i := 0; i < int(sdes.Header.Count); i++ {
+	for i := 0; i < int(sdes.Hdr.Count); i++ {
 		if offset+4 > len(data) {
 			return fmt.Errorf("недостаточно данных для SDES chunk")
 		}
