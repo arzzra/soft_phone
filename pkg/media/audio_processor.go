@@ -6,7 +6,13 @@ import (
 	"time"
 )
 
-// AudioProcessor обрабатывает аудио данные для медиа сессии
+// AudioProcessor обрабатывает аудио данные для медиа сессии.
+// Предоставляет кодирование/декодирование аудио и опциональные обработки:
+//   - AGC (автоматическая регулировка усиления)
+//   - Шумоподавление
+//   - Подавление эха (для входящих пакетов)
+//
+// Поддерживаемые кодеки: G.711 (μ-law/A-law), G.722, GSM.
 type AudioProcessor struct {
 	config AudioProcessorConfig
 	mutex  sync.RWMutex
@@ -21,7 +27,8 @@ type AudioProcessor struct {
 	outputBuffer []byte
 }
 
-// AudioProcessorConfig конфигурация аудио процессора
+// AudioProcessorConfig содержит конфигурацию для создания AudioProcessor.
+// Определяет параметры кодека и включенные алгоритмы обработки.
 type AudioProcessorConfig struct {
 	PayloadType PayloadType   // Тип кодека
 	Ptime       time.Duration // Packet time
@@ -35,7 +42,8 @@ type AudioProcessorConfig struct {
 	AGCTargetLevel float32 // Целевой уровень для AGC (0.0-1.0)
 }
 
-// DefaultAudioProcessorConfig возвращает конфигурацию по умолчанию
+// DefaultAudioProcessorConfig возвращает конфигурацию по умолчанию для аудио процессора.
+// Оптимизировано для телефонных приложений: G.711 μ-law, 8kHz, 20ms ptime, без дополнительной обработки.
 func DefaultAudioProcessorConfig() AudioProcessorConfig {
 	return AudioProcessorConfig{
 		PayloadType:    PayloadTypePCMU,
@@ -49,7 +57,8 @@ func DefaultAudioProcessorConfig() AudioProcessorConfig {
 	}
 }
 
-// NewAudioProcessor создает новый аудио процессор
+// NewAudioProcessor создает новый аудио процессор с указанной конфигурацией.
+// Автоматически заполняет отсутствующие параметры значениями по умолчанию.
 func NewAudioProcessor(config AudioProcessorConfig) *AudioProcessor {
 	// Устанавливаем значения по умолчанию
 	if config.SampleRate == 0 {
@@ -84,8 +93,10 @@ func (ap *AudioProcessor) ProcessOutgoing(audioData []byte) ([]byte, error) {
 	// Проверяем размер данных
 	expectedSize := ap.getExpectedPacketSize()
 	if len(audioData) != expectedSize {
-		return nil, fmt.Errorf("неожиданный размер аудио данных: %d, ожидается: %d",
-			len(audioData), expectedSize)
+		return nil, NewAudioError(ErrorCodeAudioSizeInvalid, "",
+			fmt.Sprintf("неожиданный размер аудио данных: %d, ожидается: %d",
+				len(audioData), expectedSize),
+			ap.config.PayloadType, expectedSize, len(audioData), ap.config.SampleRate, ap.config.Ptime)
 	}
 
 	// Копируем данные в рабочий буфер
@@ -107,7 +118,7 @@ func (ap *AudioProcessor) ProcessOutgoing(audioData []byte) ([]byte, error) {
 	// Кодируем в нужный формат (если требуется)
 	finalData, err := ap.encodeAudio(processedData)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка кодирования аудио: %w", err)
+		return nil, WrapMediaError(ErrorCodeAudioProcessingFailed, "", "ошибка кодирования аудио", err)
 	}
 
 	ap.packetsOut++
@@ -125,7 +136,7 @@ func (ap *AudioProcessor) ProcessIncoming(audioData []byte) ([]byte, error) {
 	// Декодируем из формата payload
 	decodedData, err := ap.decodeAudio(audioData)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка декодирования аудио: %w", err)
+		return nil, WrapMediaError(ErrorCodeAudioProcessingFailed, "", "ошибка декодирования аудио", err)
 	}
 
 	// Копируем данные в рабочий буфер
@@ -274,10 +285,10 @@ func (ap *AudioProcessor) applyNoiseReduction(audioData []byte) []byte {
 	result := make([]byte, len(audioData))
 	copy(result, audioData)
 
-	// Простой high-pass фильтр для удаления низкочастотного шума
+	// Простой фильтр высоких частот для удаления низкочастотного шума
 	if len(audioData) > 2 {
 		for i := 1; i < len(audioData)-1; i++ {
-			// Простая формула high-pass фильтра
+			// Простая формула фильтра высоких частот
 			filtered := int(audioData[i]) - (int(audioData[i-1])+int(audioData[i+1]))/4
 			if filtered < 0 {
 				filtered = 0
@@ -373,12 +384,18 @@ func (ap *AudioProcessor) decodeG722(audioData []byte) ([]byte, error) {
 
 // encodeGSM кодирует в GSM 06.10
 func (ap *AudioProcessor) encodeGSM(audioData []byte) ([]byte, error) {
-	return audioData, fmt.Errorf("GSM кодирование не реализовано")
+	return audioData, &MediaError{
+		Code:    ErrorCodeAudioCodecUnsupported,
+		Message: "GSM кодирование не реализовано",
+	}
 }
 
 // decodeGSM декодирует из GSM 06.10
 func (ap *AudioProcessor) decodeGSM(audioData []byte) ([]byte, error) {
-	return audioData, fmt.Errorf("GSM декодирование не реализовано")
+	return audioData, &MediaError{
+		Code:    ErrorCodeAudioCodecUnsupported,
+		Message: "GSM декодирование не реализовано",
+	}
 }
 
 // getBytesPerSample возвращает количество байт на sample для payload типа

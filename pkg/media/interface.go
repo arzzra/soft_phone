@@ -61,6 +61,8 @@ type MediaSessionInterface interface {
 	GetPtime() time.Duration
 	GetStatistics() MediaStatistics
 	GetPayloadType() PayloadType
+	GetPayloadTypeName() string
+	GetExpectedPayloadSize() int
 	GetBufferedAudioSize() int
 	GetTimeSinceLastSend() time.Duration
 
@@ -76,6 +78,7 @@ type MediaSessionInterface interface {
 	EnableRTCP(enabled bool) error
 	IsRTCPEnabled() bool
 	GetRTCPStatistics() RTCPStatistics
+	GetDetailedRTCPStatistics() map[string]interface{}
 	SendRTCPReport() error
 	SetRTCPHandler(handler func(RTCPReport))
 	ClearRTCPHandler()

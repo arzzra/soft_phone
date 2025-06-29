@@ -79,7 +79,24 @@ func demonstrateRTCPFeatures(ms *MediaSession) {
 	fmt.Printf("  Октетов отправлено: %d\n", stats.OctetsSent)
 	fmt.Printf("  Jitter: %d\n", stats.Jitter)
 
-	// 2. Принудительно отправляем RTCP отчет
+	// 2. Получаем детальную статистику (новая функциональность SessionRTP)
+	detailedStats := ms.GetDetailedRTCPStatistics()
+	if detailedStats != nil {
+		fmt.Printf("\nДетальная RTCP статистика по RTP сессиям:\n")
+		for sessionID, stats := range detailedStats {
+			fmt.Printf("  Сессия '%s':\n", sessionID)
+			if statsMap, ok := stats.(map[uint32]*RTCPStatistics); ok {
+				for ssrc, stat := range statsMap {
+					fmt.Printf("    SSRC %d: пакетов получено %d, потери %d, jitter %d\n",
+						ssrc, stat.PacketsReceived, stat.PacketsLost, stat.Jitter)
+				}
+			}
+		}
+	} else {
+		fmt.Println("\nДетальная статистика недоступна (RTCP не активен)")
+	}
+
+	// 3. Принудительно отправляем RTCP отчет
 	fmt.Println("\nОтправляем принудительный RTCP отчет...")
 	if err := ms.SendRTCPReport(); err != nil {
 		fmt.Printf("Ошибка отправки RTCP отчета: %v\n", err)
@@ -87,7 +104,7 @@ func demonstrateRTCPFeatures(ms *MediaSession) {
 		fmt.Println("RTCP отчет отправлен успешно")
 	}
 
-	// 3. Демонстрируем включение/отключение RTCP
+	// 4. Демонстрируем включение/отключение RTCP
 	fmt.Println("\nОтключаем RTCP...")
 	if err := ms.EnableRTCP(false); err != nil {
 		fmt.Printf("Ошибка отключения RTCP: %v\n", err)

@@ -9,7 +9,8 @@ import (
 	"github.com/pion/rtp"
 )
 
-// JitterBufferConfig конфигурация jitter buffer
+// JitterBufferConfig содержит параметры конфигурации для создания JitterBuffer.
+// Определяет размер буфера, начальную задержку и ограничения.
 type JitterBufferConfig struct {
 	BufferSize   int           // Максимальный размер буфера в пакетах
 	InitialDelay time.Duration // Начальная задержка для компенсации джиттера
@@ -17,7 +18,12 @@ type JitterBufferConfig struct {
 	MaxDelay     time.Duration // Максимальная задержка (0 = без ограничений)
 }
 
-// JitterBuffer реализует адаптивный jitter buffer для аудио
+// JitterBuffer реализует адаптивный jitter buffer для компенсации сетевых задержек.
+// Особенности:
+//   - Сортирует пакеты по RTP timestamp
+//   - Адаптивно изменяет задержку на основе статистики
+//   - Обрабатывает потерянные и поздние пакеты
+//   - Thread-safe для одновременного чтения/записи
 type JitterBuffer struct {
 	config JitterBufferConfig
 
@@ -49,7 +55,8 @@ type JitterBuffer struct {
 	stopped    bool
 }
 
-// JitterPacket пакет в jitter buffer с метаданными
+// JitterPacket представляет RTP пакет в jitter buffer с метаданными о времени.
+// Содержит время получения и ожидаемое время воспроизведения.
 type JitterPacket struct {
 	packet   *rtp.Packet
 	arrival  time.Time
@@ -85,7 +92,8 @@ func (h *packetHeap) Pop() interface{} {
 	return item
 }
 
-// NewJitterBuffer создает новый jitter buffer
+// NewJitterBuffer создает новый адаптивный jitter buffer с указанной конфигурацией.
+// Автоматически запускает внутренний worker для обработки пакетов.
 func NewJitterBuffer(config JitterBufferConfig) (*JitterBuffer, error) {
 	if config.BufferSize <= 0 {
 		config.BufferSize = 10 // По умолчанию 10 пакетов

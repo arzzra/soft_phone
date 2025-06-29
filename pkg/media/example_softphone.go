@@ -52,7 +52,7 @@ func ExampleBasicMediaSession() error {
 		session.GetState(), session.GetDirection())
 
 	// Симулируем отправку аудио данных
-	audioData := generateTestAudio(160) // 20ms аудио для 8kHz
+	audioData := generateTestAudio(StandardPCMSamples20ms) // 20ms аудио для 8kHz
 
 	for i := 0; i < 5; i++ {
 		if err := session.SendAudio(audioData); err != nil {
@@ -66,7 +66,7 @@ func ExampleBasicMediaSession() error {
 	// Отправляем DTMF
 	digits := []DTMFDigit{DTMF1, DTMF2, DTMF3, DTMFStar}
 	for _, digit := range digits {
-		if err := session.SendDTMF(digit, time.Millisecond*100); err != nil {
+		if err := session.SendDTMF(digit, DefaultDTMFDuration); err != nil {
 			fmt.Printf("Ошибка отправки DTMF %s: %v\n", digit, err)
 		} else {
 			fmt.Printf("Отправлен DTMF: %s\n", digit)
@@ -105,7 +105,7 @@ func ExampleRawAudioSending() error {
 
 	// 1. Обычная отправка с обработкой
 	fmt.Println("1. Отправка с обработкой через аудио процессор:")
-	rawPCM := generateTestAudio(160) // 20ms PCM аудио
+	rawPCM := generateTestAudio(StandardPCMSamples20ms) // 20ms PCM аудио
 	err = session.SendAudio(rawPCM)
 	if err != nil {
 		fmt.Printf("   Ошибка: %v\n", err)
@@ -163,9 +163,9 @@ func ExampleRawAudioSending() error {
 
 	for _, ptime := range ptimes {
 		session.SetPtime(ptime)
-		expectedSize := session.getExpectedPayloadSize()
+		expectedSize := session.GetExpectedPayloadSize()
 		fmt.Printf("   Ptime %v: ожидаемый размер payload %d байт для %s\n",
-			ptime, expectedSize, session.getPayloadTypeName())
+			ptime, expectedSize, session.GetPayloadTypeName())
 
 		// Генерируем данные правильного размера
 		sampleRate := getSampleRateForPayloadType(session.GetPayloadType())
@@ -251,7 +251,7 @@ func ExampleRawPacketHandling() error {
 	fmt.Printf("   Raw packet handler установлен: %v\n", session.HasRawPacketHandler())
 
 	// Симулируем получение пакета (обычно приходит от RTP сессии)
-	mockPacket := createMockRTPPacket(PayloadTypePCMU, generateTestAudio(160))
+	mockPacket := createMockRTPPacket(PayloadTypePCMU, generateTestAudio(StandardPCMSamples20ms))
 	session.processIncomingPacket(mockPacket)
 
 	fmt.Printf("   Декодированных пакетов: %d, сырых пакетов: %d\n",
@@ -282,7 +282,7 @@ func ExampleRawPacketHandling() error {
 
 	// Симулируем получение DTMF пакета - он должен обрабатываться отдельно
 	fmt.Println("   (Симуляция получения DTMF пакета - обрабатывается автоматически)")
-	fmt.Printf("🎵 Получен DTMF: 1, длительность 100ms\n")
+	fmt.Printf("🎵 Получен DTMF: 1, длительность %v\n", DefaultDTMFDuration)
 
 	fmt.Printf("   Декодированных пакетов: %d, сырых аудио пакетов: %d\n",
 		decodedPacketsReceived, rawPacketsReceived)
@@ -408,7 +408,7 @@ func ExampleMediaDirections() error {
 		}
 
 		// Тестируем отправку аудио
-		audioData := generateTestAudio(160)
+		audioData := generateTestAudio(StandardPCMSamples20ms)
 		err = session.SendAudio(audioData)
 
 		switch direction {
@@ -427,7 +427,7 @@ func ExampleMediaDirections() error {
 		}
 
 		// Тестируем DTMF
-		err = session.SendDTMF(DTMF1, time.Millisecond*100)
+		err = session.SendDTMF(DTMF1, DefaultDTMFDuration)
 		switch direction {
 		case DirectionSendRecv, DirectionSendOnly:
 			if err != nil {
@@ -452,6 +452,16 @@ func ExampleMediaDirections() error {
 // ExamplePtimeConfiguration демонстрирует настройку packet time
 func ExamplePtimeConfiguration() error {
 	fmt.Println("\n=== Пример: Настройка Packet Time ===")
+
+	// Демонстрируем использование новых констант
+	fmt.Printf("📋 Доступные константы размеров PCM пакетов:\n")
+	fmt.Printf("  10ms: %d samples\n", StandardPCMSamples10ms)
+	fmt.Printf("  20ms: %d samples\n", StandardPCMSamples20ms)
+	fmt.Printf("  30ms: %d samples\n", StandardPCMSamples30ms)
+	fmt.Printf("  40ms: %d samples\n", StandardPCMSamples40ms)
+	fmt.Printf("📞 DTMF константы:\n")
+	fmt.Printf("  Длительность по умолчанию: %v\n", DefaultDTMFDuration)
+	fmt.Printf("  RFC 4733 payload type: %d\n", DTMFPayloadTypeRFC)
 
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "call-ptime-test"
@@ -532,7 +542,7 @@ func ExampleDTMFHandling() error {
 	// Отправляем все цифры
 	fmt.Println("\nОтправка DTMF цифр:")
 	for _, digit := range digits {
-		duration := time.Millisecond * time.Duration(100+rand.Intn(100)) // 100-200ms
+		duration := DefaultDTMFDuration + time.Millisecond*time.Duration(rand.Intn(100)) // 100-200ms
 
 		if err := session.SendDTMF(digit, duration); err != nil {
 			fmt.Printf("Ошибка отправки DTMF %s: %v\n", digit, err)
@@ -586,6 +596,8 @@ func ExampleCodecSupport() error {
 		fmt.Printf("  ✓ Медиа сессия создана\n")
 		fmt.Printf("  Частота дискретизации: %d Hz\n",
 			getSampleRateForPayloadType(codec.payloadType))
+		fmt.Printf("  Название кодека: %s\n", session.GetPayloadTypeName())
+		fmt.Printf("  Ожидаемый размер payload: %d байт\n", session.GetExpectedPayloadSize())
 
 		// Тестируем аудио процессор
 		audioConfig := DefaultAudioProcessorConfig()

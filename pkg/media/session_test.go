@@ -380,7 +380,7 @@ func TestRTPTiming(t *testing.T) {
 			}
 
 			// Вычисляем ожидаемый размер payload
-			expectedSize := session.getExpectedPayloadSize()
+			expectedSize := session.GetExpectedPayloadSize()
 			if expectedSize <= 0 {
 				t.Errorf("Ожидаемый размер payload должен быть положительным, получено %d", expectedSize)
 			}
@@ -390,7 +390,7 @@ func TestRTPTiming(t *testing.T) {
 			// Добавляем mock RTP сессию
 			mockRTP := &MockRTPSession{
 				id:     "test-timing",
-				codec:  session.getPayloadTypeName(),
+				codec:  session.GetPayloadTypeName(),
 				active: false,
 			}
 			session.AddRTPSession("test", mockRTP)
@@ -570,14 +570,14 @@ func TestPayloadTypes(t *testing.T) {
 			}
 
 			// Проверяем имя payload type
-			name := session.getPayloadTypeName()
+			name := session.GetPayloadTypeName()
 			if name != pt.name {
 				t.Errorf("Имя payload type не совпадает: получено %s, ожидалось %s",
 					name, pt.name)
 			}
 
 			// Тестируем вычисление размера payload для 20ms
-			expectedSize := session.getExpectedPayloadSize()
+			expectedSize := session.GetExpectedPayloadSize()
 			if expectedSize <= 0 {
 				t.Errorf("Размер payload должен быть положительным для %s", pt.name)
 			}

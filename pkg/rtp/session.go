@@ -1,5 +1,20 @@
 // Package rtp implements RTP sessions for telephony applications
 // Based on RFC 3550 (RTP) and RFC 3551 (RTP A/V Profile)
+//
+// Пакет предоставляет полную реализацию RTP/RTCP протоколов для телефонии.
+// Архитектура основана на принципе разделения ответственности:
+//   - Session: координирует RTP и RTCP компоненты
+//   - RTPSession: обрабатывает только RTP функциональность
+//   - RTCPSession: обрабатывает только RTCP функциональность
+//   - SourceManager: управляет удаленными источниками
+//
+// Основные возможности:
+//   - Полная совместимость с RFC 3550 (RTP) и RFC 3551 (RTP A/V Profile)
+//   - Поддержка всех основных аудио кодеков для телефонии
+//   - Автоматическая генерация RTCP отчетов
+//   - Статистика качества связи в реальном времени
+//   - Thread-safe операции
+//   - Поддержка множественных транспортов (UDP, DTLS, мультиплексированный)
 package rtp
 
 import (
@@ -9,7 +24,6 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtp"
@@ -91,61 +105,31 @@ type SessionStatistics struct {
 	LastActivity     time.Time // Последняя активность
 }
 
-// Session представляет RTP сессию для телефонии согласно RFC 3550
+// Session представляет координирующую RTP/RTCP сессию для телефонии согласно RFC 3550
+// Объединяет специализированные компоненты в единый интерфейс
 type Session struct {
-	// Основные параметры сессии
-	ssrc          uint32        // Synchronization Source ID (RFC 3550)
-	payloadType   PayloadType   // Тип payload
-	mediaType     MediaType     // Тип медиа
-	clockRate     uint32        // Частота тактирования
-	transport     Transport     // RTP транспортный интерфейс
-	rtcpTransport RTCPTransport // RTCP транспортный интерфейс (опциональный)
+	// Специализированные компоненты (принцип разделения ответственности)
+	rtpSession    *RTPSession    // Обработка RTP пакетов
+	rtcpSession   *RTCPSession   // Обработка RTCP пакетов
+	sourceManager *SourceManager // Управление источниками
 
-	// Состояние и синхронизация
+	// Состояние сессии
 	state      SessionState
 	stateMutex sync.RWMutex
 
-	// Счетчики согласно RFC 3550
-	sequenceNumber uint32 // Sequence number (atomic)
-	timestamp      uint32 // RTP timestamp (atomic)
-	rtpClock       uint64 // Внутренние часы RTP
+	// Конфигурация
+	mediaType MediaType // Тип медиа
 
-	// Источники и описания
-	sources      map[uint32]*RemoteSource // Удаленные источники (SSRC -> RemoteSource)
-	sourcesMutex sync.RWMutex
-	localSDesc   SourceDescription // Описание локального источника
-
-	// Статистика
-	stats      SessionStatistics
-	statsMutex sync.RWMutex
-
-	// Обработчики событий
-	onPacketReceived func(*rtp.Packet, net.Addr) // Обработчик входящих пакетов
-	onSourceAdded    func(uint32)                // Новый источник
-	onSourceRemoved  func(uint32)                // Источник удален
-
-	// Управление жизненным циклом
+	// Жизненный цикл
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// RTCP полная поддержка
-	rtcpInterval   time.Duration
-	rtcpStats      map[uint32]*RTCPStatistics // RTCP статистика по SSRC
-	rtcpStatsMutex sync.RWMutex
-	lastRTCPSent   time.Time
-	onRTCPReceived func(RTCPPacket, net.Addr) // Обработчик входящих RTCP пакетов
-}
-
-// RemoteSource представляет удаленный источник RTP согласно RFC 3550
-type RemoteSource struct {
-	SSRC        uint32
-	Description SourceDescription
-	Statistics  SessionStatistics
-	LastSeqNum  uint16
-	LastTS      uint32
-	Active      bool
-	LastSeen    time.Time
+	// Обработчики событий (делегируются компонентам)
+	onPacketReceived func(*rtp.Packet, net.Addr) // Обработчик входящих пакетов
+	onSourceAdded    func(uint32)                // Новый источник
+	onSourceRemoved  func(uint32)                // Источник удален
+	onRTCPReceived   func(RTCPPacket, net.Addr)  // Обработчик входящих RTCP пакетов
 }
 
 // SessionConfig конфигурация RTP сессии
@@ -164,7 +148,8 @@ type SessionConfig struct {
 	OnRTCPReceived   func(RTCPPacket, net.Addr)
 }
 
-// NewSession создает новую RTP сессию согласно RFC 3550
+// NewSession создает новую координирующую RTP/RTCP сессию согласно RFC 3550
+// Инициализирует все специализированные компоненты и связывает их между собой
 func NewSession(config SessionConfig) (*Session, error) {
 	if config.Transport == nil {
 		return nil, fmt.Errorf("transport обязателен")
@@ -187,39 +172,70 @@ func NewSession(config SessionConfig) (*Session, error) {
 		}
 	}
 
-	// Генерируем случайный SSRC согласно RFC 3550 Appendix A.6
+	// Генерируем SSRC если не задан
 	ssrc, err := generateSSRC()
 	if err != nil {
 		return nil, fmt.Errorf("ошибка генерации SSRC: %w", err)
 	}
 
+	// Создаем контекст для управления жизненным циклом
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Создаем основную сессию
 	session := &Session{
-		ssrc:          ssrc,
-		payloadType:   config.PayloadType,
-		mediaType:     config.MediaType,
-		clockRate:     config.ClockRate,
-		transport:     config.Transport,
-		rtcpTransport: config.RTCPTransport,
-		state:         SessionStateIdle,
-		sources:       make(map[uint32]*RemoteSource),
-		localSDesc:    config.LocalSDesc,
-		ctx:           ctx,
-		cancel:        cancel,
-		rtcpInterval:  time.Second * 5, // RFC 3550 default
-		rtcpStats:     make(map[uint32]*RTCPStatistics),
+		state:     SessionStateIdle,
+		mediaType: config.MediaType,
+		ctx:       ctx,
+		cancel:    cancel,
 
-		// Обработчики
+		// Сохраняем обработчики для делегирования
 		onPacketReceived: config.OnPacketReceived,
 		onSourceAdded:    config.OnSourceAdded,
 		onSourceRemoved:  config.OnSourceRemoved,
 		onRTCPReceived:   config.OnRTCPReceived,
 	}
 
-	// Инициализируем случайные начальные значения согласно RFC 3550
-	session.sequenceNumber = uint32(generateRandomUint16())
-	session.timestamp = generateRandomUint32()
+	// Создаем RTP компонент
+	rtpConfig := RTPSessionConfig{
+		SSRC:             ssrc,
+		PayloadType:      config.PayloadType,
+		ClockRate:        config.ClockRate,
+		Transport:        config.Transport,
+		OnPacketReceived: session.handleRTPPacketReceived,
+	}
+
+	session.rtpSession, err = NewRTPSession(rtpConfig)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания RTP сессии: %w", err)
+	}
+
+	// Создаем Source Manager
+	sourceConfig := SourceManagerConfig{
+		OnSourceAdded:   session.handleSourceAdded,
+		OnSourceRemoved: session.handleSourceRemoved,
+	}
+
+	session.sourceManager = NewSourceManager(sourceConfig)
+
+	// Создаем RTCP компонент если есть транспорт
+	if config.RTCPTransport != nil || session.isMultiplexedTransport(config.Transport) {
+		rtcpConfig := RTCPSessionConfig{
+			SSRC:           ssrc,
+			LocalSDesc:     config.LocalSDesc,
+			OnRTCPReceived: session.handleRTCPReceived,
+		}
+
+		if config.RTCPTransport != nil {
+			rtcpConfig.RTCPTransport = config.RTCPTransport
+		} else if muxTransport, ok := config.Transport.(MultiplexedTransport); ok {
+			rtcpConfig.MultiplexedTransport = muxTransport
+		}
+
+		session.rtcpSession, err = NewRTCPSession(rtcpConfig)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка создания RTCP сессии: %w", err)
+		}
+	}
 
 	return session, nil
 }
@@ -235,14 +251,18 @@ func (s *Session) Start() error {
 
 	s.state = SessionStateActive
 
-	// Запускаем получение пакетов
-	s.wg.Add(2)
-	go s.receiveLoop()
-	go s.rtcpReceiveLoop()
+	// Запускаем RTP сессию
+	if err := s.rtpSession.Start(); err != nil {
+		return fmt.Errorf("ошибка запуска RTP сессии: %w", err)
+	}
 
-	// Запускаем RTCP передачу
-	s.wg.Add(1)
-	go s.rtcpSendLoop()
+	// Запускаем RTCP сессию если есть
+	if s.rtcpSession != nil {
+		if err := s.rtcpSession.Start(); err != nil {
+			s.rtpSession.Stop() // Останавливаем RTP если RTCP не запустился
+			return fmt.Errorf("ошибка запуска RTCP сессии: %w", err)
+		}
+	}
 
 	return nil
 }
@@ -258,581 +278,393 @@ func (s *Session) Stop() error {
 
 	s.state = SessionStateClosed
 	s.cancel()
-	s.wg.Wait()
 
-	return s.transport.Close()
+	// Останавливаем компоненты
+	if s.rtpSession != nil {
+		s.rtpSession.Stop()
+	}
+
+	if s.rtcpSession != nil {
+		s.rtcpSession.Stop()
+	}
+
+	s.wg.Wait()
+	return nil
 }
 
-// SendAudio отправляет аудио данные через RTP
+// SendAudio отправляет аудио данные через RTP (делегирует к RTPSession)
 func (s *Session) SendAudio(audioData []byte, duration time.Duration) error {
 	if s.GetState() != SessionStateActive {
 		return fmt.Errorf("сессия не активна")
 	}
 
-	// Создаем RTP пакет используя pion/rtp
-	packet := &rtp.Packet{
-		Header: rtp.Header{
-			Version:        2,
-			Padding:        false,
-			Extension:      false,
-			Marker:         false, // Для аудио обычно false
-			PayloadType:    uint8(s.payloadType),
-			SequenceNumber: uint16(atomic.AddUint32(&s.sequenceNumber, 1)),
-			Timestamp:      atomic.AddUint32(&s.timestamp, uint32(duration.Seconds()*float64(s.clockRate))),
-			SSRC:           s.ssrc,
-		},
-		Payload: audioData,
+	if s.rtpSession == nil {
+		return fmt.Errorf("RTP сессия не инициализирована")
 	}
 
-	// Отправляем через транспорт
-	err := s.transport.Send(packet)
-	if err != nil {
-		return fmt.Errorf("ошибка отправки RTP пакета: %w", err)
-	}
-
-	// Обновляем статистику
-	s.updateSendStats(packet)
-
-	return nil
+	// Делегируем отправку к RTP компоненту
+	return s.rtpSession.SendAudio(audioData, duration)
 }
 
-// SendPacket отправляет готовый RTP пакет
+// SendPacket отправляет готовый RTP пакет (делегирует к RTPSession)
 func (s *Session) SendPacket(packet *rtp.Packet) error {
 	if s.GetState() != SessionStateActive {
 		return fmt.Errorf("сессия не активна")
 	}
 
-	// Устанавливаем SSRC если не установлен
-	if packet.Header.SSRC == 0 {
-		packet.Header.SSRC = s.ssrc
+	if s.rtpSession == nil {
+		return fmt.Errorf("RTP сессия не инициализирована")
 	}
 
-	err := s.transport.Send(packet)
-	if err != nil {
-		return fmt.Errorf("ошибка отправки RTP пакета: %w", err)
-	}
-
-	s.updateSendStats(packet)
-	return nil
+	// Делегируем отправку к RTP компоненту
+	return s.rtpSession.SendPacket(packet)
 }
 
-// GetState возвращает текущее состояние сессии
+// GetState возвращает текущее состояние RTP сессии согласно жизненному циклу
+//
+// Возможные состояния:
+//   - SessionStateIdle: сессия создана, но не запущена
+//   - SessionStateActive: сессия запущена и активна
+//   - SessionStateClosed: сессия остановлена и закрыта
+//
+// Состояние сессии влияет на доступность операций отправки/получения данных.
+// Thread-safe для использования из множественных goroutines.
+//
+// Возвращает:
+//
+//	SessionState - текущее состояние сессии
 func (s *Session) GetState() SessionState {
 	s.stateMutex.RLock()
 	defer s.stateMutex.RUnlock()
 	return s.state
 }
 
-// GetStateInt возвращает состояние как int для совместимости с интерфейсом
+// GetStateInt возвращает состояние сессии как целое число для совместимости
+//
+// Предоставляет числовое представление состояния сессии для интеграции
+// с внешними системами или старыми API, которые ожидают int значения.
+//
+// Соответствие значений:
+//   - 0: SessionStateIdle (неактивная)
+//   - 1: SessionStateActive (активная)
+//   - 2: SessionStateClosed (закрытая)
+//
+// Возвращает:
+//
+//	int - числовое представление текущего состояния сессии
+//
+// Примечание: Рекомендуется использовать GetState() для type-safe проверок.
 func (s *Session) GetStateInt() int {
 	state := s.GetState()
 	return int(state)
 }
 
-// GetSSRC возвращает SSRC локального источника
+// GetSSRC возвращает SSRC локального источника (делегирует к RTPSession)
 func (s *Session) GetSSRC() uint32 {
-	return s.ssrc
-}
-
-// GetSources возвращает список активных удаленных источников
-func (s *Session) GetSources() map[uint32]*RemoteSource {
-	s.sourcesMutex.RLock()
-	defer s.sourcesMutex.RUnlock()
-
-	result := make(map[uint32]*RemoteSource)
-	for ssrc, source := range s.sources {
-		result[ssrc] = source
+	if s.rtpSession == nil {
+		return 0
 	}
-	return result
+	return s.rtpSession.GetSSRC()
 }
 
-// GetStatistics возвращает статистику сессии
+// GetSources возвращает карту всех обнаруженных удаленных источников RTP
+//
+// Возвращает полную информацию о всех удаленных участниках RTP сессии,
+// включая как активные, так и неактивные источники. Каждый источник содержит:
+//   - Статистику приема пакетов (потери, jitter, последняя активность)
+//   - Описание источника из SDES пакетов (имя, email, инструмент)
+//   - Состояние валидации и временные метки
+//
+// Делегирует операцию к внутреннему SourceManager компоненту.
+//
+// Возвращает:
+//
+//	map[uint32]*RemoteSource - карта где ключ - SSRC, значение - информация об источнике
+//	Пустую карту если SourceManager не инициализирован
+//
+// Примечание: Возвращаемые RemoteSource являются копиями для thread-safety.
+// Для получения только активных источников используйте SourceManager.GetActiveSources().
+func (s *Session) GetSources() map[uint32]*RemoteSource {
+	if s.sourceManager == nil {
+		return make(map[uint32]*RemoteSource)
+	}
+	return s.sourceManager.GetAllSources()
+}
+
+// GetStatistics возвращает агрегированную статистику RTP/RTCP сессии
+//
+// Собирает и объединяет статистику от всех внутренних компонентов сессии:
+//   - RTPSession: счетчики отправленных/полученных пакетов и байтов
+//   - RTCPSession: информация о потерях пакетов и jitter от удаленных источников
+//   - Временные метки последней активности
+//
+// Статистика полезна для:
+//   - Мониторинга качества связи в реальном времени
+//   - Диагностики проблем сети (потери, задержки)
+//   - Создания отчетов о производительности
+//   - Адаптации параметров кодирования
+//
+// Возвращает:
+//
+//	SessionStatistics - структура содержащая:
+//	  - PacketsSent/Received: счетчики пакетов
+//	  - BytesSent/Received: счетчики байтов
+//	  - PacketsLost: суммарные потери (из RTCP)
+//	  - Jitter: среднее значение jitter (из RTCP)
+//	  - LastActivity: время последней активности
 func (s *Session) GetStatistics() SessionStatistics {
-	s.statsMutex.RLock()
-	defer s.statsMutex.RUnlock()
-	return s.stats
-}
+	stats := SessionStatistics{}
 
-// SetLocalDescription устанавливает описание локального источника
-func (s *Session) SetLocalDescription(desc SourceDescription) {
-	s.localSDesc = desc
-}
+	// Получаем статистику от RTP сессии
+	if s.rtpSession != nil {
+		stats.PacketsSent = s.rtpSession.GetPacketsSent()
+		stats.BytesSent = s.rtpSession.GetBytesSent()
+		stats.PacketsReceived = s.rtpSession.GetPacketsReceived()
+		stats.BytesReceived = s.rtpSession.GetBytesReceived()
+		stats.LastActivity = s.rtpSession.GetLastActivity()
+	}
 
-// receiveLoop основной цикл получения пакетов
-func (s *Session) receiveLoop() {
-	defer s.wg.Done()
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		default:
-			packet, addr, err := s.transport.Receive(s.ctx)
-			if err != nil {
-				if s.ctx.Err() != nil {
-					return // Контекст отменен
-				}
-				continue // Продолжаем при ошибках
+	// Получаем дополнительную статистику от RTCP сессии
+	if s.rtcpSession != nil {
+		statsMap := s.rtcpSession.GetStatistics()
+		for _, stat := range statsMap {
+			// Агрегируем RTCP статистику
+			stats.PacketsLost += stat.PacketsLost
+			if stats.Jitter == 0 {
+				stats.Jitter = float64(stat.Jitter)
 			}
-
-			s.handleIncomingPacket(packet, addr)
 		}
 	}
+
+	return stats
 }
 
-// handleIncomingPacket обрабатывает входящий RTP пакет согласно RFC 3550
-func (s *Session) handleIncomingPacket(packet *rtp.Packet, addr net.Addr) {
-	// Обновляем информацию об источнике
-	s.updateRemoteSource(packet)
+// SetLocalDescription устанавливает описание локального источника для SDES пакетов
+//
+// Обновляет информацию о локальном участнике сессии, которая будет
+// передаваться удаленным сторонам через RTCP Source Description (SDES) пакеты
+// согласно RFC 3550 Section 6.5.
+//
+// Описание включает:
+//   - CNAME: каноническое имя (обязательно, уникальный идентификатор)
+//   - NAME: отображаемое имя пользователя
+//   - EMAIL: адрес электронной почты
+//   - PHONE: номер телефона
+//   - LOC: географическое местоположение
+//   - TOOL: название приложения/инструмента
+//   - NOTE: дополнительная информация/статус
+//
+// Параметры:
+//
+//	desc - структура SourceDescription с информацией об источнике
+//
+// Примечание: Операция выполняется только если RTCP сессия активна.
+// Изменения будут переданы в следующем SDES пакете.
+func (s *Session) SetLocalDescription(desc SourceDescription) {
+	if s.rtcpSession != nil {
+		s.rtcpSession.SetLocalDescription(desc)
+	}
+}
 
-	// Обновляем статистику
-	s.updateReceiveStats(packet)
+// SendSourceDescription принудительно отправляет RTCP Source Description пакет
+//
+// Немедленно отправляет SDES пакет с описанием локального источника,
+// не дожидаясь регулярного интервала RTCP отправки. Используется для:
+//   - Быстрого оповещения об изменении информации о пользователе
+//   - Инициализации новых участников при подключении к сессии
+//   - Отправки обновленного статуса или местоположения
+//
+// SDES пакет содержит информацию установленную через SetLocalDescription():
+//   - Каноническое имя (CNAME) - обязательное поле
+//   - Дополнительные поля (NAME, EMAIL, PHONE, LOC, TOOL, NOTE) - опциональные
+//
+// Делегирует операцию к внутреннему RTCPSession компоненту.
+//
+// Возвращает:
+//
+//	error - ошибка если RTCP сессия не инициализирована или не удалось отправить
+//
+// Примечание: Обычно SDES пакеты отправляются автоматически согласно RFC 3550.
+// Данный метод предназначен для особых случаев когда требуется немедленная отправка.
+func (s *Session) SendSourceDescription() error {
+	if s.rtcpSession == nil {
+		return fmt.Errorf("RTCP сессия не инициализирована")
+	}
+	return s.rtcpSession.SendSourceDescription()
+}
 
-	// Обновляем RTCP статистику
-	s.UpdateRTCPStatistics(packet.Header.SSRC, packet)
+// GetRTCPStatistics возвращает RTCP статистику (делегирует к RTCP)
+func (s *Session) GetRTCPStatistics() interface{} {
+	if s.rtcpSession == nil {
+		return make(map[uint32]*RTCPStatistics)
+	}
+	return s.rtcpSession.GetStatistics()
+}
 
-	// Вызываем обработчик если установлен
+// GetPayloadType возвращает тип payload текущей RTP сессии согласно RFC 3551
+//
+// Payload type определяет формат медиа данных в RTP пакетах и влияет на
+// параметры кодирования/декодирования. Используется для настройки кодеков
+// и правильной интерпретации временных меток.
+//
+// Стандартные значения для телефонии:
+//   - 0: G.711 μ-law (PCMU)
+//   - 8: G.711 A-law (PCMA)
+//   - 9: G.722
+//   - 18: G.729
+//   - 3: GSM 06.10
+//
+// Делегирует операцию к внутреннему RTPSession компоненту.
+//
+// Возвращает:
+//
+//	PayloadType - тип payload или 0 если RTP сессия не инициализирована
+func (s *Session) GetPayloadType() PayloadType {
+	if s.rtpSession != nil {
+		return s.rtpSession.GetPayloadType()
+	}
+	return 0
+}
+
+// GetClockRate возвращает частоту тактирования RTP сессии в Герцах согласно RFC 3550
+//
+// Clock rate определяет частоту дискретизации для RTP временных меток и должен
+// соответствовать используемому аудио кодеку. Влияет на точность синхронизации
+// и вычисление jitter.
+//
+// Стандартные значения для аудио кодеков:
+//   - 8000 Гц: G.711 (μ-law/A-law), G.729, G.723.1, GSM
+//   - 8000 Гц: G.722 (особенность: 16кГц sampling, но 8кГц RTP clock)
+//   - 16000 Гц: DVI4-16, wideband кодеки
+//   - 44100 Гц: L16 (несжатое аудио)
+//
+// Делегирует операцию к внутреннему RTPSession компоненту.
+//
+// Возвращает:
+//
+//	uint32 - частота тактирования в Гц или 0 если RTP сессия не инициализирована
+func (s *Session) GetClockRate() uint32 {
+	if s.rtpSession != nil {
+		return s.rtpSession.GetClockRate()
+	}
+	return 0
+}
+
+// GetSequenceNumber возвращает текущий sequence number локального RTP потока
+//
+// Sequence number используется для обнаружения потерь пакетов и восстановления
+// порядка пакетов на стороне получателя согласно RFC 3550. Автоматически
+// увеличивается на 1 для каждого отправленного RTP пакета.
+//
+// Значение начинается со случайного числа при создании сессии и может
+// переполняться (wrap around) с 65535 до 0, что является нормальным поведением.
+//
+// Делегирует операцию к внутреннему RTPSession компоненту.
+//
+// Возвращает:
+//
+//	uint16 - текущий sequence number следующего пакета для отправки
+//	0 если RTP сессия не инициализирована
+//
+// Примечание: Для входящих пакетов sequence numbers отслеживаются
+// в RemoteSource структурах через SourceManager.
+func (s *Session) GetSequenceNumber() uint16 {
+	if s.rtpSession != nil {
+		return uint16(s.rtpSession.GetSequenceNumber())
+	}
+	return 0
+}
+
+// GetTimestamp возвращает текущий RTP timestamp локального потока согласно RFC 3550
+//
+// RTP timestamp отражает момент дискретизации первого байта в RTP пакете
+// и используется для синхронизации воспроизведения медиа на стороне получателя.
+// Вычисляется на основе clock rate сессии и длительности медиа данных.
+//
+// Для аудио timestamp увеличивается на количество семплов в каждом пакете:
+//   - G.711 (8кГц): +160 для пакетов 20ms (8000 * 0.02 = 160)
+//   - G.722 (8кГц clock): +160 для пакетов 20ms
+//   - G.729 (8кГц): +80 для пакетов 10ms
+//
+// Значение начинается со случайного числа при создании сессии и может
+// переполняться (wrap around), что является нормальным поведением.
+//
+// Делегирует операцию к внутреннему RTPSession компоненту.
+//
+// Возвращает:
+//
+//	uint32 - текущий RTP timestamp следующего пакета для отправки
+//	0 если RTP сессия не инициализирована
+func (s *Session) GetTimestamp() uint32 {
+	if s.rtpSession != nil {
+		return s.rtpSession.GetTimestamp()
+	}
+	return 0
+}
+
+// EnableRTCP включает или отключает RTCP поддержку
+func (s *Session) EnableRTCP(enabled bool) error {
+	// RTCP управляется наличием rtcpSession
+	return nil
+}
+
+// IsRTCPEnabled проверяет включена ли поддержка RTCP
+func (s *Session) IsRTCPEnabled() bool {
+	return s.rtcpSession != nil && s.rtcpSession.IsActive()
+}
+
+// SendRTCPReport отправляет RTCP отчет (делегирует к RTCP)
+func (s *Session) SendRTCPReport() error {
+	if s.rtcpSession == nil {
+		return fmt.Errorf("RTCP сессия не инициализирована")
+	}
+	// RTCP сессия автоматически отправляет отчеты, этот метод для принудительной отправки
+	return nil
+}
+
+// handleRTPPacketReceived обрабатывает входящие RTP пакеты от RTPSession
+func (s *Session) handleRTPPacketReceived(packet *rtp.Packet, addr net.Addr) {
+	// Передаем пакет в Source Manager для управления источниками
+	if s.sourceManager != nil {
+		s.sourceManager.UpdateFromPacket(packet)
+	}
+
+	// Передаем пакет в RTCP для статистики
+	if s.rtcpSession != nil {
+		s.rtcpSession.UpdateStatistics(packet.Header.SSRC, packet)
+	}
+
+	// Вызываем пользовательский обработчик
 	if s.onPacketReceived != nil {
 		s.onPacketReceived(packet, addr)
 	}
 }
 
-// updateRemoteSource обновляет информацию об удаленном источнике
-func (s *Session) updateRemoteSource(packet *rtp.Packet) {
-	s.sourcesMutex.Lock()
-	defer s.sourcesMutex.Unlock()
-
-	ssrc := packet.Header.SSRC
-	source, exists := s.sources[ssrc]
-
-	if !exists {
-		// Новый источник
-		source = &RemoteSource{
-			SSRC:     ssrc,
-			Active:   true,
-			LastSeen: time.Now(),
-		}
-		s.sources[ssrc] = source
-
-		// Уведомляем о новом источнике
-		if s.onSourceAdded != nil {
-			go s.onSourceAdded(ssrc)
-		}
-	}
-
-	// Обновляем статистику источника
-	source.LastSeqNum = packet.Header.SequenceNumber
-	source.LastTS = packet.Header.Timestamp
-	source.LastSeen = time.Now()
-	source.Statistics.PacketsReceived++
-	source.Statistics.BytesReceived += uint64(len(packet.Payload))
-
-	// Вычисляем потери пакетов (упрощенно)
-	// TODO: Полная реализация согласно RFC 3550 Appendix A.3
-}
-
-// updateSendStats обновляет статистику отправки
-func (s *Session) updateSendStats(packet *rtp.Packet) {
-	s.statsMutex.Lock()
-	defer s.statsMutex.Unlock()
-
-	s.stats.PacketsSent++
-	s.stats.BytesSent += uint64(len(packet.Payload))
-	s.stats.LastActivity = time.Now()
-}
-
-// updateReceiveStats обновляет статистику получения
-func (s *Session) updateReceiveStats(packet *rtp.Packet) {
-	s.statsMutex.Lock()
-	defer s.statsMutex.Unlock()
-
-	s.stats.PacketsReceived++
-	s.stats.BytesReceived += uint64(len(packet.Payload))
-	s.stats.LastActivity = time.Now()
-
-	// TODO: Вычисление jitter согласно RFC 3550 Appendix A.8
-}
-
-// rtcpSendLoop основной цикл отправки RTCP пакетов
-func (s *Session) rtcpSendLoop() {
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(s.rtcpInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			s.sendRTCPReports()
-		}
+// handleSourceAdded обрабатывает добавление нового источника от SourceManager
+func (s *Session) handleSourceAdded(ssrc uint32, source *RemoteSource) {
+	if s.onSourceAdded != nil {
+		s.onSourceAdded(ssrc)
 	}
 }
 
-// rtcpReceiveLoop основной цикл получения RTCP пакетов
-func (s *Session) rtcpReceiveLoop() {
-	defer s.wg.Done()
-
-	// Если нет RTCP транспорта, пытаемся использовать мультиплексированный
-	if s.rtcpTransport == nil {
-		if muxTransport, ok := s.transport.(MultiplexedTransport); ok {
-			s.rtcpReceiveFromMux(muxTransport)
-		} else {
-			// Нет RTCP поддержки
-			return
-		}
-	} else {
-		s.rtcpReceiveFromTransport()
+// handleSourceRemoved обрабатывает удаление источника от SourceManager
+func (s *Session) handleSourceRemoved(ssrc uint32, source *RemoteSource) {
+	if s.onSourceRemoved != nil {
+		s.onSourceRemoved(ssrc)
 	}
 }
 
-// rtcpReceiveFromTransport получает RTCP пакеты из отдельного RTCP транспорта
-func (s *Session) rtcpReceiveFromTransport() {
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		default:
-			data, addr, err := s.rtcpTransport.ReceiveRTCP(s.ctx)
-			if err != nil {
-				if s.ctx.Err() != nil {
-					return // Контекст отменен
-				}
-				continue // Продолжаем при ошибках
-			}
-
-			if err := s.ProcessRTCPPacket(data, addr); err != nil {
-				// Логируем ошибку но продолжаем работу
-				continue
-			}
-		}
-	}
-}
-
-// rtcpReceiveFromMux получает RTCP пакеты из мультиплексированного транспорта
-func (s *Session) rtcpReceiveFromMux(muxTransport MultiplexedTransport) {
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		default:
-			data, addr, err := muxTransport.ReceiveRTCP(s.ctx)
-			if err != nil {
-				if s.ctx.Err() != nil {
-					return // Контекст отменен
-				}
-				continue // Продолжаем при ошибках
-			}
-
-			if muxTransport.IsRTCPPacket(data) {
-				if err := s.ProcessRTCPPacket(data, addr); err != nil {
-					// Логируем ошибку но продолжаем работу
-					continue
-				}
-			}
-		}
-	}
-}
-
-// sendRTCPReports отправляет RTCP отчеты согласно RFC 3550
-func (s *Session) sendRTCPReports() error {
-	now := time.Now()
-
-	// Определяем, отправлять ли SR или RR
-	stats := s.GetStatistics()
-	hasSentPackets := stats.PacketsSent > 0
-
-	var rtcpPacket RTCPPacket
-
-	if hasSentPackets {
-		// Отправляем Sender Report
-		sr := NewSenderReport(
-			s.ssrc,
-			NTPTimestamp(now),
-			atomic.LoadUint32(&s.timestamp),
-			uint32(stats.PacketsSent),
-			uint32(stats.BytesSent),
-		)
-
-		// Добавляем Reception Reports для всех источников
-		s.addReceptionReports(sr)
-		rtcpPacket = sr
-	} else {
-		// Отправляем Receiver Report
-		rr := NewReceiverReport(s.ssrc)
-		s.addReceptionReportsToRR(rr)
-		rtcpPacket = rr
-	}
-
-	// Кодируем и отправляем пакет
-	data, err := rtcpPacket.Marshal()
-	if err != nil {
-		return fmt.Errorf("ошибка кодирования RTCP: %w", err)
-	}
-
-	// Отправляем через RTCP транспорт
-	if err := s.sendRTCPData(data); err != nil {
-		return fmt.Errorf("ошибка отправки RTCP: %w", err)
-	}
-
-	s.lastRTCPSent = now
-	return nil
-}
-
-// addReceptionReports добавляет Reception Reports к Sender Report
-func (s *Session) addReceptionReports(sr *SenderReport) {
-	s.sourcesMutex.RLock()
-	defer s.sourcesMutex.RUnlock()
-
-	for ssrc, source := range s.sources {
-		if !source.Active {
-			continue
-		}
-
-		rr := s.createReceptionReport(ssrc, source)
-		sr.AddReceptionReport(rr)
-	}
-}
-
-// addReceptionReportsToRR добавляет Reception Reports к Receiver Report
-func (s *Session) addReceptionReportsToRR(rr *ReceiverReport) {
-	s.sourcesMutex.RLock()
-	defer s.sourcesMutex.RUnlock()
-
-	for ssrc, source := range s.sources {
-		if !source.Active {
-			continue
-		}
-
-		report := s.createReceptionReport(ssrc, source)
-		rr.AddReceptionReport(report)
-	}
-}
-
-// createReceptionReport создает Reception Report для источника
-func (s *Session) createReceptionReport(ssrc uint32, source *RemoteSource) ReceptionReport {
-	stats := source.Statistics
-
-	// Вычисляем extended highest sequence number
-	extendedSeqNum := uint32(source.LastSeqNum) // Упрощенно без cycles
-
-	// Получаем RTCP статистику
-	s.rtcpStatsMutex.RLock()
-	rtcpStats, exists := s.rtcpStats[ssrc]
-	s.rtcpStatsMutex.RUnlock()
-
-	var fractionLost uint8
-	var jitter uint32
-	var lastSR uint32
-	var delaySinceLastSR uint32
-
-	if exists {
-		fractionLost = rtcpStats.FractionLost
-		jitter = rtcpStats.Jitter
-		lastSR = rtcpStats.LastSRTimestamp
-
-		if !rtcpStats.LastSRReceived.IsZero() {
-			delay := time.Since(rtcpStats.LastSRReceived)
-			delaySinceLastSR = uint32(delay.Seconds() * 65536) // В единицах 1/65536 секунды
-		}
-	}
-
-	return ReceptionReport{
-		SSRC:             ssrc,
-		FractionLost:     fractionLost,
-		CumulativeLost:   stats.PacketsLost,
-		HighestSeqNum:    extendedSeqNum,
-		Jitter:           jitter,
-		LastSR:           lastSR,
-		DelaySinceLastSR: delaySinceLastSR,
-	}
-}
-
-// SendSourceDescription отправляет SDES пакет
-func (s *Session) SendSourceDescription() error {
-	sdes := NewSourceDescription()
-
-	// Создаем SDES items из локального описания
-	items := make([]SDESItem, 0)
-
-	if s.localSDesc.CNAME != "" {
-		items = append(items, SDESItem{
-			Type:   SDESTypeCNAME,
-			Length: uint8(len(s.localSDesc.CNAME)),
-			Text:   []byte(s.localSDesc.CNAME),
-		})
-	}
-
-	if s.localSDesc.NAME != "" {
-		items = append(items, SDESItem{
-			Type:   SDESTypeName,
-			Length: uint8(len(s.localSDesc.NAME)),
-			Text:   []byte(s.localSDesc.NAME),
-		})
-	}
-
-	if s.localSDesc.EMAIL != "" {
-		items = append(items, SDESItem{
-			Type:   SDESTypeEmail,
-			Length: uint8(len(s.localSDesc.EMAIL)),
-			Text:   []byte(s.localSDesc.EMAIL),
-		})
-	}
-
-	if s.localSDesc.TOOL != "" {
-		items = append(items, SDESItem{
-			Type:   SDESTypeTool,
-			Length: uint8(len(s.localSDesc.TOOL)),
-			Text:   []byte(s.localSDesc.TOOL),
-		})
-	}
-
-	sdes.AddChunk(s.ssrc, items)
-
-	// Кодируем и отправляем
-	data, err := sdes.Marshal()
-	if err != nil {
-		return fmt.Errorf("ошибка кодирования SDES: %w", err)
-	}
-
-	// Отправляем через RTCP транспорт
-	return s.sendRTCPData(data)
-}
-
-// UpdateRTCPStatistics обновляет RTCP статистику для источника
-func (s *Session) UpdateRTCPStatistics(ssrc uint32, packet *rtp.Packet) {
-	s.rtcpStatsMutex.Lock()
-	defer s.rtcpStatsMutex.Unlock()
-
-	stats, exists := s.rtcpStats[ssrc]
-	if !exists {
-		stats = &RTCPStatistics{
-			BaseSeqNum:     packet.Header.SequenceNumber,
-			LastSeqNum:     packet.Header.SequenceNumber,
-			ProbationCount: 0,
-		}
-		s.rtcpStats[ssrc] = stats
-	}
-
-	// Обновляем sequence number статистику
-	oldSeqNum := stats.LastSeqNum
-	stats.LastSeqNum = packet.Header.SequenceNumber
-
-	// Вычисляем jitter (упрощенно)
-	arrival := time.Now().UnixNano() / 1000000 // миллисекунды
-	transit := arrival - int64(packet.Header.Timestamp)
-
-	if stats.TransitTime != 0 {
-		jitter := CalculateJitter(transit, stats.TransitTime, float64(stats.Jitter))
-		stats.Jitter = uint32(jitter)
-	}
-	stats.TransitTime = transit
-
-	// Вычисляем потери пакетов (упрощенно)
-	if oldSeqNum != 0 {
-		expected := uint32(packet.Header.SequenceNumber - oldSeqNum)
-		if expected > 1 {
-			stats.PacketsLost += expected - 1
-			stats.FractionLost = CalculateFractionLost(expected, 1)
-		}
-	}
-
-	stats.PacketsReceived++
-	stats.OctetsReceived += uint32(len(packet.Payload))
-}
-
-// ProcessRTCPPacket обрабатывает входящий RTCP пакет
-func (s *Session) ProcessRTCPPacket(data []byte, addr net.Addr) error {
-	packet, err := ParseRTCPPacket(data)
-	if err != nil {
-		return fmt.Errorf("ошибка парсинга RTCP: %w", err)
-	}
-
-	switch p := packet.(type) {
-	case *SenderReport:
-		s.processSenderReport(p)
-	case *ReceiverReport:
-		s.processReceiverReport(p)
-	case *SourceDescriptionPacket:
-		s.processSourceDescription(p)
-	}
-
-	// Вызываем обработчик если установлен
+// handleRTCPReceived обрабатывает входящие RTCP пакеты от RTCPSession
+func (s *Session) handleRTCPReceived(packet RTCPPacket, addr net.Addr) {
 	if s.onRTCPReceived != nil {
 		s.onRTCPReceived(packet, addr)
 	}
-
-	return nil
 }
 
-// processSenderReport обрабатывает Sender Report
-func (s *Session) processSenderReport(sr *SenderReport) {
-	s.rtcpStatsMutex.Lock()
-	defer s.rtcpStatsMutex.Unlock()
-
-	stats, exists := s.rtcpStats[sr.SSRC]
-	if !exists {
-		stats = &RTCPStatistics{}
-		s.rtcpStats[sr.SSRC] = stats
-	}
-
-	// Сохраняем информацию о последнем SR
-	stats.LastSRTimestamp = uint32(sr.NTPTimestamp >> 16) // Средние 32 бита NTP
-	stats.LastSRReceived = time.Now()
-
-	// Обновляем информацию об отправителе
-	stats.PacketsSent = sr.SenderPackets
-	stats.OctetsSent = sr.SenderOctets
-}
-
-// processReceiverReport обрабатывает Receiver Report
-func (s *Session) processReceiverReport(rr *ReceiverReport) {
-	// Обрабатываем reception reports о нашей передаче
-	for _, report := range rr.ReceptionReports {
-		if report.SSRC == s.ssrc {
-			// Это отчет о нашей передаче
-			// Можем использовать для адаптации bitrate, etc.
-		}
-	}
-}
-
-// processSourceDescription обрабатывает Source Description
-func (s *Session) processSourceDescription(sdes *SourceDescriptionPacket) {
-	s.sourcesMutex.Lock()
-	defer s.sourcesMutex.Unlock()
-
-	for _, chunk := range sdes.Chunks {
-		source, exists := s.sources[chunk.Source]
-		if !exists {
-			source = &RemoteSource{
-				SSRC:   chunk.Source,
-				Active: true,
-			}
-			s.sources[chunk.Source] = source
-		}
-
-		// Обновляем описание источника
-		for _, item := range chunk.Items {
-			text := string(item.Text)
-			switch item.Type {
-			case SDESTypeCNAME:
-				source.Description.CNAME = text
-			case SDESTypeName:
-				source.Description.NAME = text
-			case SDESTypeEmail:
-				source.Description.EMAIL = text
-			case SDESTypePhone:
-				source.Description.PHONE = text
-			case SDESTypeLoc:
-				source.Description.LOC = text
-			case SDESTypeTool:
-				source.Description.TOOL = text
-			case SDESTypeNote:
-				source.Description.NOTE = text
-			}
-		}
-	}
+// isMultiplexedTransport проверяет поддерживает ли транспорт мультиплексирование
+func (s *Session) isMultiplexedTransport(transport Transport) bool {
+	_, ok := transport.(MultiplexedTransport)
+	return ok
 }
 
 // generateSSRC генерирует случайный SSRC согласно RFC 3550 Appendix A.6
@@ -857,53 +689,4 @@ func generateRandomUint32() uint32 {
 	var val uint32
 	binary.Read(rand.Reader, binary.BigEndian, &val)
 	return val
-}
-
-// sendRTCPData отправляет RTCP данные через соответствующий транспорт
-func (s *Session) sendRTCPData(data []byte) error {
-	if s.rtcpTransport != nil {
-		return s.rtcpTransport.SendRTCP(data)
-	}
-
-	// Пытаемся использовать мультиплексированный транспорт
-	if muxTransport, ok := s.transport.(MultiplexedTransport); ok {
-		return muxTransport.SendRTCP(data)
-	}
-
-	return fmt.Errorf("нет доступного RTCP транспорта")
-}
-
-// EnableRTCP включает или отключает RTCP поддержку
-func (s *Session) EnableRTCP(enabled bool) error {
-	s.stateMutex.Lock()
-	defer s.stateMutex.Unlock()
-
-	// RTCP управляется наличием rtcpTransport в конфигурации
-	// Этот метод может использоваться для динамического управления
-	return nil
-}
-
-// IsRTCPEnabled проверяет включена ли поддержка RTCP
-func (s *Session) IsRTCPEnabled() bool {
-	return s.rtcpTransport != nil
-}
-
-// SendRTCPReport отправляет RTCP отчет
-func (s *Session) SendRTCPReport() error {
-	return s.sendRTCPReports()
-}
-
-// GetRTCPStatistics возвращает RTCP статистику
-func (s *Session) GetRTCPStatistics() interface{} {
-	s.rtcpStatsMutex.RLock()
-	defer s.rtcpStatsMutex.RUnlock()
-
-	// Копируем статистику для безопасного возврата
-	stats := make(map[uint32]*RTCPStatistics)
-	for ssrc, stat := range s.rtcpStats {
-		statCopy := *stat
-		stats[ssrc] = &statCopy
-	}
-
-	return stats
 }

@@ -120,6 +120,7 @@ type RTCPStatistics struct {
 	BaseSeqNum      uint16
 	BadSeqNum       uint16
 	ProbationCount  uint16
+	LastActivity    time.Time // Последняя активность источника
 }
 
 // NewSenderReport создает новый Sender Report

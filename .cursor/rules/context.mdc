@@ -1,9 +1,0 @@
----
-description: 
-globs: 
-alwaysApply: true
----
-- On every code generation or edit, invoke the MCP server **`context7`**
-  to pull the latest official examples and API documentation for any
-  libraries or frameworks mentioned in the task.
-- Use the fetched data to validate calls and prevent outdated or imaginary APIs.

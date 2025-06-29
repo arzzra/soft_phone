@@ -1,5 +1,3 @@
-// Package media implements media session layer for softphone applications
-// Supports multiple RTP sessions, jitter buffer, DTMF, and various media directions
 package media
 
 import (
@@ -9,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	rtpPkg "github.com/arzzra/soft_phone/pkg/rtp"
 	"github.com/pion/rtp"
 )
 
@@ -18,20 +17,33 @@ var _ MediaSessionInterface = (*MediaSession)(nil)
 // rtpPkg заменяет импорт ../rtp для использования локальных типов
 type PayloadType = uint8
 
-// Session определяет интерфейс для RTP сессии с опциональной поддержкой RTCP
-type Session interface {
-	Start() error
-	Stop() error
-	SendAudio([]byte, time.Duration) error
-	SendPacket(*rtp.Packet) error
-	GetSSRC() uint32
+// Session является алиасом для SessionRTP интерфейса из пакета rtp.
+// Представляет абстракцию RTP транспорта для отправки и приема медиа данных.
+// Каждая Session управляет одним RTP потоком с определенным SSRC.
+//
+// Интерфейс Session предоставляет:
+//   - Управление жизненным циклом RTP сессии (Start/Stop)
+//   - Отправку аудио данных и RTP пакетов
+//   - Получение статистики и состояния сессии
+//   - RTCP функциональность для мониторинга качества связи
+//
+// MediaSession может управлять несколькими Session одновременно для
+// поддержки различных сценариев (основной/резервный каналы, разные кодеки).
+type Session = rtpPkg.SessionRTP
 
-	// RTCP поддержка (опциональная)
-	EnableRTCP(enabled bool) error
-	IsRTCPEnabled() bool
-	GetRTCPStatistics() interface{}
-	SendRTCPReport() error
-}
+// Константы для размеров аудио пакетов
+const (
+	// Размеры PCM пакетов для G.711 при 8kHz
+	StandardPCMSamples20ms = 160 // 20ms для 8kHz (160 samples)
+	StandardPCMSamples10ms = 80  // 10ms для 8kHz (80 samples)
+	StandardPCMSamples30ms = 240 // 30ms для 8kHz (240 samples)
+	StandardPCMSamples40ms = 320 // 40ms для 8kHz (320 samples)
+
+	// DTMF константы
+	DefaultDTMFDuration = 100 * time.Millisecond // Стандартная длительность DTMF
+	DTMFVolumeMaxDbm    = 63                     // Максимальная громкость DTMF в -dBm
+	DTMFPayloadTypeRFC  = 101                    // Стандартный payload type для DTMF согласно RFC 4733
+)
 
 // Константы payload типов из RFC 3551
 const (
@@ -43,7 +55,8 @@ const (
 	PayloadTypeG729 = PayloadType(18) // G.729
 )
 
-// MediaDirection определяет направление медиа потока согласно SDP
+// MediaDirection определяет направление медиа потока согласно атрибутам SDP (RFC 4566).
+// Используется для управления отправкой и приемом медиа данных в сессии.
 type MediaDirection int
 
 const (
@@ -68,7 +81,8 @@ func (d MediaDirection) String() string {
 	}
 }
 
-// MediaSessionState состояние медиа сессии
+// MediaSessionState представляет текущее состояние медиа сессии.
+// Сессия проходит через различные состояния в течение своего жизненного цикла.
 type MediaSessionState int
 
 const (
@@ -93,7 +107,40 @@ func (s MediaSessionState) String() string {
 	}
 }
 
-// MediaSession представляет медиа сессию софтфона
+// MediaSession представляет медиа сессию для обработки аудио потоков в VoIP приложениях.
+//
+// MediaSession является центральным компонентом медиа слоя, который:
+//   - Управляет множественными RTP сессиями
+//   - Обрабатывает входящие и исходящие аудио потоки
+//   - Поддерживает различные аудио кодеки
+//   - Обеспечивает буферизацию и timing для RTP пакетов
+//   - Предоставляет DTMF функциональность
+//   - Собирает статистику и RTCP отчеты
+//
+// Пример создания и использования:
+//
+//	config := DefaultMediaSessionConfig()
+//	config.SessionID = "call-123"
+//	config.PayloadType = PayloadTypePCMU
+//
+//	session, err := NewMediaSession(config)
+//	if err != nil {
+//	    return err
+//	}
+//	defer session.Stop()
+//
+//	// Добавление RTP транспорта
+//	rtpSession := createRTPSession()
+//	err = session.AddRTPSession("primary", rtpSession)
+//
+//	// Запуск сессии
+//	err = session.Start()
+//
+//	// Отправка аудио
+//	audioData := getAudioData()
+//	err = session.SendAudio(audioData)
+//
+// MediaSession является thread-safe и может использоваться из разных горутин.
 type MediaSession struct {
 	// Основные параметры
 	sessionID   string
@@ -131,6 +178,7 @@ type MediaSession struct {
 	audioProcessor *AudioProcessor
 
 	// Обработчики событий
+	callbacksMutex      sync.RWMutex                             // Защита callback'ов от race conditions
 	onAudioReceived     func([]byte, PayloadType, time.Duration) // Callback для обработанных аудио данных (после аудио процессора)
 	onRawAudioReceived  func([]byte, PayloadType, time.Duration) // Callback для сырых аудио данных (payload без обработки)
 	onRawPacketReceived func(*rtp.Packet)                        // Callback для сырых RTP пакетов (весь пакет)
@@ -155,7 +203,34 @@ type MediaSession struct {
 	lastRTCPSent   time.Time
 }
 
-// MediaSessionConfig конфигурация медиа сессии
+// MediaSessionConfig содержит параметры конфигурации для создания MediaSession.
+// Все поля являются опциональными, кроме SessionID.
+//
+// Пример конфигурации:
+//
+//	config := MediaSessionConfig{
+//	    SessionID:   "call-456",
+//	    Direction:   DirectionSendRecv,
+//	    PayloadType: PayloadTypePCMU,
+//	    Ptime:       20 * time.Millisecond,
+//
+//	    // Jitter buffer
+//	    JitterEnabled:    true,
+//	    JitterBufferSize: 10,
+//	    JitterDelay:      60 * time.Millisecond,
+//
+//	    // DTMF
+//	    DTMFEnabled:     true,
+//	    DTMFPayloadType: 101,
+//
+//	    // Callbacks
+//	    OnAudioReceived: func(data []byte, pt PayloadType, ptime time.Duration) {
+//	        // Обработка полученного аудио
+//	    },
+//	    OnDTMFReceived: func(event DTMFEvent) {
+//	        fmt.Printf("DTMF: %s\n", event.Digit)
+//	    },
+//	}
 type MediaSessionConfig struct {
 	SessionID   string
 	Direction   MediaDirection
@@ -184,7 +259,15 @@ type MediaSessionConfig struct {
 	OnRTCPReport func(RTCPReport) // Callback для обработки RTCP отчетов
 }
 
-// MediaStatistics статистика медиа сессии
+// MediaStatistics содержит статистику работы медиа сессии.
+// Обновляется в реальном времени во время работы сессии.
+//
+// Статистика включает:
+//   - Счетчики отправленных/полученных пакетов и байт
+//   - Информацию о DTMF событиях
+//   - Параметры jitter buffer
+//   - Метрики качества связи (packet loss rate)
+//   - Время последней активности
 type MediaStatistics struct {
 	AudioPacketsSent     uint64
 	AudioPacketsReceived uint64
@@ -217,7 +300,10 @@ func DefaultMediaSessionConfig() MediaSessionConfig {
 // NewMediaSession создает новую медиа сессию
 func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 	if config.SessionID == "" {
-		return nil, fmt.Errorf("session ID обязателен")
+		return nil, &MediaError{
+			Code:    ErrorCodeSessionInvalidConfig,
+			Message: "session ID обязателен",
+		}
 	}
 
 	// Устанавливаем значения по умолчанию
@@ -275,7 +361,7 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 		session.jitterBuffer, err = NewJitterBuffer(jitterConfig)
 		if err != nil {
 			cancel()
-			return nil, fmt.Errorf("ошибка создания jitter buffer: %w", err)
+			return nil, WrapMediaError(ErrorCodeJitterBufferConfigInvalid, config.SessionID, "ошибка создания jitter buffer", err)
 		}
 	}
 
@@ -284,9 +370,9 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 		session.dtmfSender = NewDTMFSender(config.DTMFPayloadType)
 		session.dtmfReceiver = NewDTMFReceiver(config.DTMFPayloadType)
 
-		// Устанавливаем callback для DTMF receiver
-		if session.dtmfReceiver != nil && session.onDTMFReceived != nil {
-			session.dtmfReceiver.SetCallback(session.onDTMFReceived)
+		// Устанавливаем callback для DTMF receiver (безопасно в конструкторе)
+		if session.dtmfReceiver != nil && config.OnDTMFReceived != nil {
+			session.dtmfReceiver.SetCallback(config.OnDTMFReceived)
 		}
 	}
 
@@ -300,27 +386,68 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 	return session, nil
 }
 
-// AddRTPSession добавляет RTP сессию к медиа сессии
+// AddRTPSession добавляет RTP сессию к медиа сессии.
+// Каждая MediaSession может управлять несколькими RTP сессиями одновременно.
+// Это позволяет реализовать резервные каналы или использовать разные кодеки.
+//
+// Параметры:
+//   - rtpSessionID: уникальный идентификатор RTP сессии в рамках медиа сессии
+//   - rtpSession: объект, реализующий интерфейс Session (SessionRTP)
+//
+// Возвращает ошибку если:
+//   - RTP сессия с таким ID уже существует
+//   - Передан nil объект сессии
+//
+// Пример использования:
+//
+//	// Создание основной RTP сессии
+//	primaryRTP := createRTPSession("127.0.0.1", 5004)
+//	err := mediaSession.AddRTPSession("primary", primaryRTP)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Добавление резервной сессии
+//	backupRTP := createRTPSession("192.168.1.100", 5006)
+//	err = mediaSession.AddRTPSession("backup", backupRTP)
 func (ms *MediaSession) AddRTPSession(rtpSessionID string, rtpSession Session) error {
 	ms.sessionsMutex.Lock()
 	defer ms.sessionsMutex.Unlock()
 
 	if _, exists := ms.rtpSessions[rtpSessionID]; exists {
-		return fmt.Errorf("RTP сессия с ID %s уже существует", rtpSessionID)
+		return NewRTPError(ErrorCodeRTPSessionNotFound, ms.sessionID, rtpSessionID,
+			fmt.Sprintf("RTP сессия с ID %s уже существует", rtpSessionID), 0, 0, 0)
 	}
 
 	ms.rtpSessions[rtpSessionID] = rtpSession
 	return nil
 }
 
-// RemoveRTPSession удаляет RTP сессию
+// RemoveRTPSession удаляет RTP сессию из медиа сессии.
+// Автоматически останавливает удаляемую сессию перед удалением.
+//
+// Параметры:
+//   - rtpSessionID: идентификатор RTP сессии для удаления
+//
+// Возвращает ошибку если:
+//   - RTP сессия с указанным ID не найдена
+//   - Ошибка при остановке RTP сессии
+//
+// Пример использования:
+//
+//	// Удаление резервной сессии
+//	err := mediaSession.RemoveRTPSession("backup")
+//	if err != nil {
+//	    log.Printf("Ошибка удаления сессии: %v", err)
+//	}
 func (ms *MediaSession) RemoveRTPSession(rtpSessionID string) error {
 	ms.sessionsMutex.Lock()
 	defer ms.sessionsMutex.Unlock()
 
 	session, exists := ms.rtpSessions[rtpSessionID]
 	if !exists {
-		return fmt.Errorf("RTP сессия с ID %s не найдена", rtpSessionID)
+		return NewRTPError(ErrorCodeRTPSessionNotFound, ms.sessionID, rtpSessionID,
+			fmt.Sprintf("RTP сессия с ID %s не найдена", rtpSessionID), 0, 0, 0)
 	}
 
 	// Останавливаем RTP сессию
@@ -338,7 +465,14 @@ func (ms *MediaSession) Start() error {
 	defer ms.stateMutex.Unlock()
 
 	if ms.state != MediaStateIdle {
-		return fmt.Errorf("медиа сессия уже запущена или закрыта")
+		return &MediaError{
+			Code:      ErrorCodeSessionAlreadyStarted,
+			Message:   "медиа сессия уже запущена или закрыта",
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": ms.state,
+			},
+		}
 	}
 
 	// Инициализируем timing для RTP потока
@@ -363,8 +497,11 @@ func (ms *MediaSession) Start() error {
 	ms.wg.Add(1)
 	go ms.audioProcessorLoop()
 
-	// Запускаем RTCP цикл если включен
-	if ms.IsRTCPEnabled() {
+	// Запускаем RTCP цикл если включен (избегаем deadlock)
+	ms.rtcpStatsMutex.RLock()
+	rtcpEnabled := ms.rtcpEnabled
+	ms.rtcpStatsMutex.RUnlock()
+	if rtcpEnabled {
 		ms.wg.Add(1)
 		go ms.rtcpSendLoop()
 	}
@@ -431,57 +568,135 @@ func (ms *MediaSession) Stop() error {
 // Данные добавляются в буфер и отправляются с правильным timing
 func (ms *MediaSession) SendAudio(audioData []byte) error {
 	if !ms.canSend() {
-		return fmt.Errorf("отправка запрещена в режиме %s", ms.direction)
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"direction": ms.direction,
+			},
+		}
 	}
 
 	state := ms.GetState()
 	if state != MediaStateActive {
-		return fmt.Errorf("медиа сессия не активна: %s", state)
+		return &MediaError{
+			Code:      ErrorCodeSessionNotStarted,
+			Message:   fmt.Sprintf("медиа сессия не активна: %s", state),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": state,
+			},
+		}
 	}
 
 	// Обрабатываем аудио через процессор
 	processedData, err := ms.audioProcessor.ProcessOutgoing(audioData)
 	if err != nil {
-		return fmt.Errorf("ошибка обработки аудио: %w", err)
+		return WrapMediaError(ErrorCodeAudioProcessingFailed, ms.sessionID, "ошибка обработки аудио", err)
 	}
 
 	// Добавляем в буфер для отправки с правильным timing
 	return ms.addToAudioBuffer(processedData)
 }
 
-// SendAudioRaw отправляет аудио данные без обработки (уже закодированные)
-// Данные добавляются в буфер и отправляются с правильным timing
+// SendAudioRaw отправляет уже закодированные аудио данные без обработки.
+// Используется для отправки аудио, которое уже было обработано
+// внешними средствами и соответствует целевому payload type.
+//
+// Данные добавляются в внутренний буфер и отправляются
+// с правильным timing согласно ptime сессии.
+//
+// Параметры:
+//   - encodedData: уже закодированные в целевом payload type аудио данные
+//
+// Возвращает ошибку если:
+//   - Медиа сессия не поддерживает отправку (режим recvonly или inactive)
+//   - Медиа сессия не активна
+//   - Неправильный размер данных для текущего payload type и ptime
+//
+// Пример использования:
+//
+//	// Отправка уже закодированных G.711 данных
+//	g711Data := encodeToG711(rawPCM) // внешняя обработка
+//	err := session.SendAudioRaw(g711Data)
+//	if err != nil {
+//	    log.Printf("Ошибка отправки: %v", err)
+//	}
 func (ms *MediaSession) SendAudioRaw(encodedData []byte) error {
 	if !ms.canSend() {
-		return fmt.Errorf("отправка запрещена в режиме %s", ms.direction)
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"direction": ms.direction,
+			},
+		}
 	}
 
 	state := ms.GetState()
 	if state != MediaStateActive {
-		return fmt.Errorf("медиа сессия не активна: %s", state)
+		return &MediaError{
+			Code:      ErrorCodeSessionNotStarted,
+			Message:   fmt.Sprintf("медиа сессия не активна: %s", state),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": state,
+			},
+		}
 	}
 
 	// Проверяем размер данных для заданного payload типа и ptime
-	expectedSize := ms.getExpectedPayloadSize()
+	expectedSize := ms.GetExpectedPayloadSize()
 	if len(encodedData) != expectedSize {
-		return fmt.Errorf("неожиданный размер закодированных данных: %d, ожидается: %d для %s с ptime %v",
-			len(encodedData), expectedSize, ms.getPayloadTypeName(), ms.ptime)
+		return NewAudioError(ErrorCodeAudioSizeInvalid, ms.sessionID,
+			fmt.Sprintf("неожиданный размер закодированных данных: %d, ожидается: %d для %s с ptime %v",
+				len(encodedData), expectedSize, ms.GetPayloadTypeName(), ms.ptime),
+			ms.payloadType, expectedSize, len(encodedData), getSampleRateForPayloadType(ms.payloadType), ms.ptime)
 	}
 
 	// Добавляем в буфер для отправки с правильным timing
 	return ms.addToAudioBuffer(encodedData)
 }
 
-// SendAudioWithFormat отправляет аудио данные в указанном формате
-// Данные добавляются в буфер и отправляются с правильным timing
+// SendAudioWithFormat отправляет аудио данные в указанном payload type.
+// Позволяет отправлять данные в формате, отличном от основного кодека сессии.
+//
+// Параметры:
+//   - audioData: аудио данные для отправки
+//   - payloadType: целевой payload type (может отличаться от основного кодека)
+//   - skipProcessing: если true, пропустить обработку через аудио процессор
+//
+// Возвращает ошибку в тех же случаях, что и SendAudio.
+//
+// Пример использования:
+//
+//	// Отправка аудио в G.722 вместо основного G.711
+//	g722Data := convertToG722(pcmData)
+//	err := session.SendAudioWithFormat(g722Data, PayloadTypeG722, true)
 func (ms *MediaSession) SendAudioWithFormat(audioData []byte, payloadType PayloadType, skipProcessing bool) error {
 	if !ms.canSend() {
-		return fmt.Errorf("отправка запрещена в режиме %s", ms.direction)
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"direction": ms.direction,
+			},
+		}
 	}
 
 	state := ms.GetState()
 	if state != MediaStateActive {
-		return fmt.Errorf("медиа сессия не активна: %s", state)
+		return &MediaError{
+			Code:      ErrorCodeSessionNotStarted,
+			Message:   fmt.Sprintf("медиа сессия не активна: %s", state),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": state,
+			},
+		}
 	}
 
 	var finalData []byte
@@ -502,7 +717,8 @@ func (ms *MediaSession) SendAudioWithFormat(audioData []byte, payloadType Payloa
 		tempProcessor := NewAudioProcessor(tempConfig)
 		finalData, err = tempProcessor.ProcessOutgoing(audioData)
 		if err != nil {
-			return fmt.Errorf("ошибка обработки аудио в формате %d: %w", payloadType, err)
+			return WrapMediaError(ErrorCodeAudioProcessingFailed, ms.sessionID,
+				fmt.Sprintf("ошибка обработки аудио в формате %d", payloadType), err)
 		}
 	}
 
@@ -510,16 +726,46 @@ func (ms *MediaSession) SendAudioWithFormat(audioData []byte, payloadType Payloa
 	return ms.addToAudioBuffer(finalData)
 }
 
-// WriteAudioDirect напрямую записывает аудио данные в RTP сессии
-// ⚠️ ВНИМАНИЕ: Нарушает timing RTP потока! Используйте только в особых случаях
+// WriteAudioDirect напрямую записывает аудио данные во все RTP сессии.
+//
+// ⚠️ ОПАСНОСТЬ: Этот метод ОБХОДИТ внутреннюю систему timing и может
+// нарушить правильность RTP потока!
+//
+// Используйте этот метод только в особых случаях, когда:
+//   - Нужно отправить специальные payload не через стандартный поток
+//   - Требуется отправить данные немедленно без ожидания timing
+//   - Отладка и тестирование
+//
+// Параметры:
+//   - rtpPayload: готовый payload для отправки в RTP пакете
+//
+// Особенности:
+//   - Не проходит через аудио процессор
+//   - Не проходит через jitter buffer
+//   - Не соблюдает ptime сессии
+//   - Отправляется немедленно во все RTP сессии
 func (ms *MediaSession) WriteAudioDirect(rtpPayload []byte) error {
 	if !ms.canSend() {
-		return fmt.Errorf("отправка запрещена в режиме %s", ms.direction)
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"direction": ms.direction,
+			},
+		}
 	}
 
 	state := ms.GetState()
 	if state != MediaStateActive {
-		return fmt.Errorf("медиа сессия не активна: %s", state)
+		return &MediaError{
+			Code:      ErrorCodeSessionNotStarted,
+			Message:   fmt.Sprintf("медиа сессия не активна: %s", state),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": state,
+			},
+		}
 	}
 
 	// Отправляем данные напрямую без какой-либо обработки или проверки
@@ -544,16 +790,31 @@ func (ms *MediaSession) WriteAudioDirect(rtpPayload []byte) error {
 // SendDTMF отправляет DTMF событие
 func (ms *MediaSession) SendDTMF(digit DTMFDigit, duration time.Duration) error {
 	if !ms.canSend() {
-		return fmt.Errorf("отправка запрещена в режиме %s", ms.direction)
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"direction": ms.direction,
+			},
+		}
 	}
 
 	if !ms.dtmfEnabled || ms.dtmfSender == nil {
-		return fmt.Errorf("DTMF не включен")
+		return NewDTMFError(ErrorCodeDTMFNotEnabled, ms.sessionID,
+			"DTMF не включен", DTMFDigit(0), time.Duration(0))
 	}
 
 	state := ms.GetState()
 	if state != MediaStateActive {
-		return fmt.Errorf("медиа сессия не активна: %s", state)
+		return &MediaError{
+			Code:      ErrorCodeSessionNotStarted,
+			Message:   fmt.Sprintf("медиа сессия не активна: %s", state),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": state,
+			},
+		}
 	}
 
 	// Создаем DTMF событие
@@ -567,7 +828,7 @@ func (ms *MediaSession) SendDTMF(digit DTMFDigit, duration time.Duration) error 
 	// Генерируем RTP пакеты для DTMF
 	packets, err := ms.dtmfSender.GeneratePackets(event)
 	if err != nil {
-		return fmt.Errorf("ошибка генерации DTMF: %w", err)
+		return WrapMediaError(ErrorCodeDTMFSendFailed, ms.sessionID, "ошибка генерации DTMF", err)
 	}
 
 	// Отправляем через все RTP сессии
@@ -590,11 +851,40 @@ func (ms *MediaSession) SendDTMF(digit DTMFDigit, duration time.Duration) error 
 	return nil
 }
 
-// SetPtime изменяет packet time
+// SetPtime изменяет длительность аудио пакета (packet time).
+// Автоматически переконфигурирует аудио процессор и тайминг отправки.
+//
+// Параметры:
+//   - ptime: новая длительность пакета (должно быть от 10 до 40 мс)
+//
+// Возвращает ошибку если:
+//   - Указанное значение выходит за допустимые пределы (10-40ms)
+//
+// Особенности:
+//   - Очищает внутренний аудио буфер
+//   - Обновляет конфигурацию аудио процессора
+//   - Перезапускает таймер отправки с новым интервалом
+//
+// Пример использования:
+//
+//	// Установка длительности пакета 30мс
+//	err := session.SetPtime(30 * time.Millisecond)
+//	if err != nil {
+//	    log.Printf("Ошибка изменения ptime: %v", err)
+//	}
 func (ms *MediaSession) SetPtime(ptime time.Duration) error {
 	// Проверяем допустимые значения (10-40ms для телефонии)
 	if ptime < time.Millisecond*10 || ptime > time.Millisecond*40 {
-		return fmt.Errorf("недопустимое значение ptime: %v (допустимо 10-40ms)", ptime)
+		return &MediaError{
+			Code:      ErrorCodeAudioTimingInvalid,
+			Message:   fmt.Sprintf("недопустимое значение ptime: %v (допустимо 10-40ms)", ptime),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"requested_ptime": ptime,
+				"min_ptime":       time.Millisecond * 10,
+				"max_ptime":       time.Millisecond * 40,
+			},
+		}
 	}
 
 	ms.bufferMutex.Lock()
@@ -624,7 +914,24 @@ func (ms *MediaSession) SetPtime(ptime time.Duration) error {
 	return nil
 }
 
-// EnableJitterBuffer включает/выключает jitter buffer
+// EnableJitterBuffer включает или отключает jitter buffer в работающей сессии.
+// Может быть вызван как до, так и после запуска сессии.
+//
+// Параметры:
+//   - enabled: true для включения, false для отключения jitter buffer
+//
+// Особенности:
+//   - При включении создает новый jitter buffer с конфигурацией по умолчанию
+//   - При отключении останавливает и очищает существующий buffer
+//   - Может быть вызван в любое время жизни сессии
+//
+// Пример использования:
+//
+//	// Включение jitter buffer в работающей сессии
+//	err := session.EnableJitterBuffer(true)
+//	if err != nil {
+//	    log.Printf("Ошибка включения jitter buffer: %v", err)
+//	}
 func (ms *MediaSession) EnableJitterBuffer(enabled bool) error {
 	ms.jitterEnabled = enabled
 
@@ -690,8 +997,12 @@ func (ms *MediaSession) canReceive() bool {
 
 // handleError обрабатывает ошибки медиа сессии
 func (ms *MediaSession) handleError(err error) {
-	if ms.onMediaError != nil {
-		go ms.onMediaError(err)
+	ms.callbacksMutex.RLock()
+	errorHandler := ms.onMediaError
+	ms.callbacksMutex.RUnlock()
+
+	if errorHandler != nil {
+		go errorHandler(err)
 	}
 }
 
@@ -743,8 +1054,9 @@ func getSampleRateForPayloadType(pt PayloadType) uint32 {
 	}
 }
 
-// getExpectedPayloadSize возвращает ожидаемый размер payload для текущих настроек
-func (ms *MediaSession) getExpectedPayloadSize() int {
+// GetExpectedPayloadSize возвращает ожидаемый размер payload для текущих настроек
+// Размер зависит от типа кодека и времени пакетизации (ptime)
+func (ms *MediaSession) GetExpectedPayloadSize() int {
 	// Используем предварительно рассчитанное значение вместо пересчета
 	samplesPerPacket := ms.samplesPerPacket
 
@@ -767,8 +1079,9 @@ func (ms *MediaSession) getExpectedPayloadSize() int {
 	}
 }
 
-// getPayloadTypeName возвращает название кодека для payload типа
-func (ms *MediaSession) getPayloadTypeName() string {
+// GetPayloadTypeName возвращает человекочитаемое название кодека для текущего payload типа
+// Полезно для логирования и отладки
+func (ms *MediaSession) GetPayloadTypeName() string {
 	switch ms.payloadType {
 	case PayloadTypePCMU:
 		return "G.711 μ-law (PCMU)"
@@ -858,7 +1171,7 @@ func (ms *MediaSession) sendBufferedAudio() {
 	}
 
 	// Вычисляем размер одного пакета
-	expectedSize := ms.getExpectedPayloadSize()
+	expectedSize := ms.GetExpectedPayloadSize()
 
 	// Если данных недостаточно для полного пакета, ждем еще
 	if len(ms.audioBuffer) < expectedSize {
@@ -941,40 +1254,52 @@ func (ms *MediaSession) FlushAudioBuffer() error {
 // EnableSilenceSuppression включает/отключает подавление тишины
 // При включении пустые пакеты не отправляются
 func (ms *MediaSession) EnableSilenceSuppression(enabled bool) {
-	// TODO: Реализовать VAD (Voice Activity Detection)
+	// TODO: Реализовать VAD (детектор голосовой активности)
 	// Пока просто сохраняем настройку
 }
 
 // SetRawAudioHandler устанавливает callback для получения сырых аудио данных без обработки
 // Вызывается с payload из RTP пакета до обработки аудио процессором
 func (ms *MediaSession) SetRawAudioHandler(handler func([]byte, PayloadType, time.Duration)) {
+	ms.callbacksMutex.Lock()
+	defer ms.callbacksMutex.Unlock()
 	ms.onRawAudioReceived = handler
 }
 
 // ClearRawAudioHandler убирает callback для сырых аудио данных
 func (ms *MediaSession) ClearRawAudioHandler() {
+	ms.callbacksMutex.Lock()
+	defer ms.callbacksMutex.Unlock()
 	ms.onRawAudioReceived = nil
 }
 
 // HasRawAudioHandler проверяет, установлен ли callback для сырых аудио данных
 func (ms *MediaSession) HasRawAudioHandler() bool {
+	ms.callbacksMutex.RLock()
+	defer ms.callbacksMutex.RUnlock()
 	return ms.onRawAudioReceived != nil
 }
 
 // SetRawPacketHandler устанавливает callback для получения сырых аудио RTP пакетов без декодирования
 // DTMF пакеты продолжают обрабатываться отдельно через DTMF callback
 func (ms *MediaSession) SetRawPacketHandler(handler func(*rtp.Packet)) {
+	ms.callbacksMutex.Lock()
+	defer ms.callbacksMutex.Unlock()
 	ms.onRawPacketReceived = handler
 }
 
 // ClearRawPacketHandler убирает callback для сырых аудио пакетов, возвращая к стандартной обработке
 // DTMF callback продолжает работать независимо
 func (ms *MediaSession) ClearRawPacketHandler() {
+	ms.callbacksMutex.Lock()
+	defer ms.callbacksMutex.Unlock()
 	ms.onRawPacketReceived = nil
 }
 
 // HasRawPacketHandler проверяет, установлен ли callback для сырых аудио пакетов
 func (ms *MediaSession) HasRawPacketHandler() bool {
+	ms.callbacksMutex.RLock()
+	defer ms.callbacksMutex.RUnlock()
 	return ms.onRawPacketReceived != nil
 }
 
@@ -1059,8 +1384,12 @@ func (ms *MediaSession) processIncomingPacket(packet *rtp.Packet) {
 	}
 
 	// Если установлен callback для сырых аудио пакетов, отправляем аудио пакет как есть
-	if ms.onRawPacketReceived != nil {
-		ms.onRawPacketReceived(packet)
+	ms.callbacksMutex.RLock()
+	rawPacketHandler := ms.onRawPacketReceived
+	ms.callbacksMutex.RUnlock()
+
+	if rawPacketHandler != nil {
+		rawPacketHandler(packet)
 		// Также обновляем статистику для сырых пакетов
 		ms.updateReceiveStats(len(packet.Payload))
 		ms.updateLastActivity()
@@ -1084,13 +1413,19 @@ func (ms *MediaSession) processDecodedPacket(packet *rtp.Packet) {
 		return
 	}
 
+	// Безопасно получаем callback-и под мьютексом
+	ms.callbacksMutex.RLock()
+	rawAudioHandler := ms.onRawAudioReceived
+	audioHandler := ms.onAudioReceived
+	ms.callbacksMutex.RUnlock()
+
 	// Сначала вызываем callback для сырых аудио данных если установлен
-	if ms.onRawAudioReceived != nil {
-		ms.onRawAudioReceived(packet.Payload, ms.payloadType, ms.ptime)
+	if rawAudioHandler != nil {
+		rawAudioHandler(packet.Payload, ms.payloadType, ms.ptime)
 	}
 
 	// Затем обрабатываем через аудио процессор для обработанных данных
-	if ms.audioProcessor != nil && ms.onAudioReceived != nil {
+	if ms.audioProcessor != nil && audioHandler != nil {
 		processedData, err := ms.audioProcessor.ProcessIncoming(packet.Payload)
 		if err != nil {
 			ms.handleError(err)
@@ -1098,7 +1433,7 @@ func (ms *MediaSession) processDecodedPacket(packet *rtp.Packet) {
 		}
 
 		// Вызываем callback для обработанных данных
-		ms.onAudioReceived(processedData, ms.payloadType, ms.ptime)
+		audioHandler(processedData, ms.payloadType, ms.ptime)
 	}
 
 	// Обновляем статистику (используем размер исходных данных)
@@ -1139,8 +1474,11 @@ func (ms *MediaSession) EnableRTCP(enabled bool) error {
 		ms.rtcpStats = RTCPStatistics{}
 		ms.lastRTCPSent = time.Now()
 
-		// Запускаем RTCP цикл если сессия активна
-		if ms.GetState() == MediaStateActive {
+		// Запускаем RTCP цикл если сессия активна (избегаем deadlock)
+		ms.stateMutex.RLock()
+		isActive := ms.state == MediaStateActive
+		ms.stateMutex.RUnlock()
+		if isActive {
 			ms.wg.Add(1)
 			go ms.rtcpSendLoop()
 		}
@@ -1166,17 +1504,94 @@ func (ms *MediaSession) IsRTCPEnabled() bool {
 	return ms.rtcpEnabled
 }
 
-// GetRTCPStatistics возвращает RTCP статистику
+// GetRTCPStatistics возвращает агрегированную RTCP статистику со всех RTP сессий
+// Если RTCP отключен, возвращает локальную статистику
 func (ms *MediaSession) GetRTCPStatistics() RTCPStatistics {
 	ms.rtcpStatsMutex.RLock()
 	defer ms.rtcpStatsMutex.RUnlock()
-	return ms.rtcpStats
+
+	if !ms.rtcpEnabled {
+		return ms.rtcpStats
+	}
+
+	// Начинаем с локальной статистики
+	aggregatedStats := ms.rtcpStats
+
+	// Собираем статистику со всех RTP сессий
+	ms.sessionsMutex.RLock()
+	defer ms.sessionsMutex.RUnlock()
+
+	for _, rtpSession := range ms.rtpSessions {
+		if !rtpSession.IsRTCPEnabled() {
+			continue
+		}
+
+		rtpStats := rtpSession.GetRTCPStatistics()
+
+		// Проверяем тип возвращаемых данных согласно SessionRTP интерфейсу
+		if statsMap, ok := rtpStats.(map[uint32]*RTCPStatistics); ok {
+			// Агрегируем статистику из всех SSRC источников
+			for _, stat := range statsMap {
+				if stat == nil {
+					continue
+				}
+
+				// Суммируем счетчики
+				aggregatedStats.PacketsSent += stat.PacketsSent
+				aggregatedStats.PacketsReceived += stat.PacketsReceived
+				aggregatedStats.OctetsSent += stat.OctetsSent
+				aggregatedStats.OctetsReceived += stat.OctetsReceived
+				aggregatedStats.PacketsLost += stat.PacketsLost
+
+				// Берем максимальные значения для jitter и потерь
+				if stat.Jitter > aggregatedStats.Jitter {
+					aggregatedStats.Jitter = stat.Jitter
+				}
+				if stat.FractionLost > aggregatedStats.FractionLost {
+					aggregatedStats.FractionLost = stat.FractionLost
+				}
+
+				// Обновляем время последнего SR если это более свежий отчет
+				if stat.LastSRReceived.After(aggregatedStats.LastSRReceived) {
+					aggregatedStats.LastSRReceived = stat.LastSRReceived
+					aggregatedStats.LastSRTimestamp = stat.LastSRTimestamp
+				}
+			}
+		}
+	}
+
+	return aggregatedStats
+}
+
+// GetDetailedRTCPStatistics возвращает детальную RTCP статистику по каждой RTP сессии
+// Полезно для диагностики и мониторинга отдельных потоков
+func (ms *MediaSession) GetDetailedRTCPStatistics() map[string]interface{} {
+	if !ms.IsRTCPEnabled() {
+		return nil
+	}
+
+	result := make(map[string]interface{})
+
+	ms.sessionsMutex.RLock()
+	defer ms.sessionsMutex.RUnlock()
+
+	for sessionID, rtpSession := range ms.rtpSessions {
+		if rtpSession.IsRTCPEnabled() {
+			result[sessionID] = rtpSession.GetRTCPStatistics()
+		}
+	}
+
+	return result
 }
 
 // SendRTCPReport принудительно отправляет RTCP отчет
 func (ms *MediaSession) SendRTCPReport() error {
 	if !ms.IsRTCPEnabled() {
-		return fmt.Errorf("RTCP не включен")
+		return &MediaError{
+			Code:      ErrorCodeRTCPNotEnabled,
+			Message:   "RTCP не включен",
+			SessionID: ms.sessionID,
+		}
 	}
 
 	// Отправляем RTCP отчеты через все активные RTP сессии
