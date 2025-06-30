@@ -72,7 +72,7 @@ func NewAudioProcessor(config AudioProcessorConfig) *AudioProcessor {
 	}
 
 	// Вычисляем размер буфера на основе ptime
-	samplesPerPacket := int(config.SampleRate * uint32(config.Ptime.Seconds()))
+	samplesPerPacket := int(float64(config.SampleRate) * config.Ptime.Seconds())
 	bufferSize := samplesPerPacket * config.Channels * getBytesPerSample(config.PayloadType)
 
 	return &AudioProcessor{
@@ -208,7 +208,7 @@ type AudioProcessorStatistics struct {
 
 // getExpectedPacketSize вычисляет ожидаемый размер пакета
 func (ap *AudioProcessor) getExpectedPacketSize() int {
-	samplesPerPacket := int(ap.config.SampleRate * uint32(ap.config.Ptime.Seconds()))
+	samplesPerPacket := int(float64(ap.config.SampleRate) * ap.config.Ptime.Seconds())
 	return samplesPerPacket * ap.config.Channels * getBytesPerSample(ap.config.PayloadType)
 }
 

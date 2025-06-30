@@ -52,7 +52,7 @@ func ExampleBasicMediaSession() error {
 		session.GetState(), session.GetDirection())
 
 	// Симулируем отправку аудио данных
-	audioData := generateTestAudio(StandardPCMSamples20ms) // 20ms аудио для 8kHz
+	audioData := generateTestAudioSoftphone(StandardPCMSamples20ms) // 20ms аудио для 8kHz
 
 	for i := 0; i < 5; i++ {
 		if err := session.SendAudio(audioData); err != nil {
@@ -105,7 +105,7 @@ func ExampleRawAudioSending() error {
 
 	// 1. Обычная отправка с обработкой
 	fmt.Println("1. Отправка с обработкой через аудио процессор:")
-	rawPCM := generateTestAudio(StandardPCMSamples20ms) // 20ms PCM аудио
+	rawPCM := generateTestAudioSoftphone(StandardPCMSamples20ms) // 20ms PCM аудио
 	err = session.SendAudio(rawPCM)
 	if err != nil {
 		fmt.Printf("   Ошибка: %v\n", err)
@@ -170,7 +170,7 @@ func ExampleRawAudioSending() error {
 		// Генерируем данные правильного размера
 		sampleRate := getSampleRateForPayloadType(session.GetPayloadType())
 		samplesNeeded := int(float64(sampleRate) * ptime.Seconds())
-		testData := generateTestAudio(samplesNeeded)
+		testData := generateTestAudioSoftphone(samplesNeeded)
 
 		err = session.SendAudio(testData)
 		if err != nil {
@@ -195,7 +195,7 @@ func ExampleRawAudioSending() error {
 	// Отправляем данные с интервалами меньше ptime (должны накапливаться в буфере)
 	fmt.Println("   Отправка данных с интервалом 5ms (меньше ptime 20ms):")
 	for i := 0; i < 5; i++ {
-		smallData := generateTestAudio(40) // Маленькие порции
+		smallData := generateTestAudioSoftphone(40) // Маленькие порции
 		err = session.SendAudio(smallData)
 		if err != nil {
 			fmt.Printf("   Ошибка: %v\n", err)
@@ -251,7 +251,7 @@ func ExampleRawPacketHandling() error {
 	fmt.Printf("   Raw packet handler установлен: %v\n", session.HasRawPacketHandler())
 
 	// Симулируем получение пакета (обычно приходит от RTP сессии)
-	mockPacket := createMockRTPPacket(PayloadTypePCMU, generateTestAudio(StandardPCMSamples20ms))
+	mockPacket := createMockRTPPacket(PayloadTypePCMU, generateTestAudioSoftphone(StandardPCMSamples20ms))
 	session.processIncomingPacket(mockPacket)
 
 	fmt.Printf("   Декодированных пакетов: %d, сырых пакетов: %d\n",
@@ -408,7 +408,7 @@ func ExampleMediaDirections() error {
 		}
 
 		// Тестируем отправку аудио
-		audioData := generateTestAudio(StandardPCMSamples20ms)
+		audioData := generateTestAudioSoftphone(StandardPCMSamples20ms)
 		err = session.SendAudio(audioData)
 
 		switch direction {
@@ -747,8 +747,8 @@ func (m *MockRTPSession) SendRTCPReport() error {
 	return nil
 }
 
-// generateTestAudio генерирует тестовые аудио данные
-func generateTestAudio(samples int) []byte {
+// generateTestAudioSoftphone генерирует тестовые аудио данные
+func generateTestAudioSoftphone(samples int) []byte {
 	data := make([]byte, samples)
 	for i := range data {
 		// Генерируем простую синусоиду

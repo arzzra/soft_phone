@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// ExampleErrorHandling демонстрирует использование новой системы ошибок
-func ExampleErrorHandling() {
+// ExampleErrorHandlingAdvanced демонстрирует использование новой системы ошибок
+func ExampleErrorHandlingAdvanced() {
 	fmt.Println("=== Примеры использования системы ошибок медиа слоя ===")
 
 	// 1. Создание простой ошибки медиа

@@ -182,54 +182,16 @@ func setSockOptBuffers(fd, bufferSize int) error {
 }
 
 // setSockOptDSCP устанавливает DSCP маркировку для QoS
-func setSockOptDSCP(fd, dscp int) error {
-	// DSCP находится в старших 6 битах TOS поля
-	tos := dscp << 2
+// Реализация зависит от платформы (см. transport_socket_*.go файлы)
 
-	// Устанавливаем для IPv4
-	if err := syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_TOS, tos); err != nil {
-		// Не критично если не удалось - некоторые системы не поддерживают
-		return nil
-	}
-
-	// Пытаемся установить для IPv6 (может не работать на всех системах)
-	syscall.SetsockoptInt(fd, syscall.IPPROTO_IPV6, syscall.IPV6_TCLASS, tos)
-
-	return nil
-}
-
-// setSockOptReusePort включает SO_REUSEPORT для множественных сокетов на одном порту
-func setSockOptReusePort(fd int) error {
-	// SO_REUSEPORT позволяет нескольким процессам слушать один порт
-	// На Windows используем SO_REUSEADDR вместо SO_REUSEPORT
-	return syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-}
+// setSockOptReusePort включает переиспользование адреса/порта для множественных сокетов
+// Реализация зависит от платформы (см. transport_socket_*.go файлы)
 
 // setSockOptBindToDevice привязывает сокет к конкретному сетевому интерфейсу
-func setSockOptBindToDevice(fd int, device string) error {
-	// SO_BINDTODEVICE работает только на Linux
-	return syscall.SetsockoptString(fd, syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, device)
-}
+// Реализация зависит от платформы (см. transport_socket_*.go файлы)
 
 // setSockOptVoiceOptimizations применяет дополнительные оптимизации для голоса
-func setSockOptVoiceOptimizations(fd int) error {
-	// Отключаем алгоритм Nagle для снижения задержки
-	if err := syscall.SetsockoptInt(fd, syscall.IPPROTO_TCP, syscall.TCP_NODELAY, 1); err != nil {
-		// Игнорируем ошибку для UDP сокетов
-	}
-
-	// Включаем keepalive для обнаружения разрывов соединения
-	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_KEEPALIVE, 1); err != nil {
-		// Игнорируем ошибку для UDP сокетов
-	}
-
-	// Устанавливаем приоритет сокета (высокий для голоса)
-	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_PRIORITY, 6); err != nil {
-		// Игнорируем ошибку если система не поддерживает
-	}
-
-	return nil
-}
+// Реализация зависит от платформы (см. transport_socket_*.go файлы)
 
 // createUDPAddr создает *net.UDPAddr из строкового адреса с проверкой
 func createUDPAddr(addr string) (*net.UDPAddr, error) {

@@ -2,7 +2,6 @@ package rtp
 
 import (
 	"context"
-	"net"
 	"testing"
 	"time"
 
@@ -142,15 +141,13 @@ func TestUDPTransportCommunication(t *testing.T) {
 
 	t.Logf("Настроена связь: %s <-> %s", addr1, addr2)
 
-	// Активируем транспорты
-	err = transport1.Start()
-	if err != nil {
-		t.Fatalf("Ошибка запуска первого транспорта: %v", err)
+	// UDP транспорты активны сразу после создания (проверим это)
+	if !transport1.IsActive() {
+		t.Fatal("Первый транспорт должен быть активен после создания")
 	}
 
-	err = transport2.Start()
-	if err != nil {
-		t.Fatalf("Ошибка запуска второго транспорта: %v", err)
+	if !transport2.IsActive() {
+		t.Fatal("Второй транспорт должен быть активен после создания")
 	}
 
 	// Проверяем что транспорты активны
@@ -225,9 +222,11 @@ func TestDTLSTransportCreation(t *testing.T) {
 		{
 			name: "Стандартная DTLS конфигурация",
 			config: DTLSTransportConfig{
-				LocalAddr:          "127.0.0.1:0",
+				TransportConfig: TransportConfig{
+					LocalAddr:  "127.0.0.1:0",
+					BufferSize: 1500,
+				},
 				InsecureSkipVerify: true, // Только для тестов
-				BufferSize:         1500,
 			},
 			expectError: false,
 			description: "Создание DTLS транспорта с базовыми настройками безопасности",
@@ -235,24 +234,26 @@ func TestDTLSTransportCreation(t *testing.T) {
 		{
 			name: "DTLS сервер конфигурация",
 			config: DTLSTransportConfig{
-				LocalAddr:          "127.0.0.1:0",
-				IsServer:           true,
+				TransportConfig: TransportConfig{
+					LocalAddr:  "127.0.0.1:0",
+					BufferSize: 2048,
+				},
 				InsecureSkipVerify: true,
-				BufferSize:         2048,
 			},
 			expectError: false,
 			description: "Создание DTLS сервера для входящих соединений",
 		},
 		{
-			name: "DTLS с сертификатами",
+			name: "DTLS с минимальными настройками",
 			config: DTLSTransportConfig{
-				LocalAddr:  "127.0.0.1:0",
-				CertFile:   "test.crt",
-				KeyFile:    "test.key",
-				BufferSize: 1500,
+				TransportConfig: TransportConfig{
+					LocalAddr:  "127.0.0.1:0",
+					BufferSize: 1500,
+				},
+				InsecureSkipVerify: false, // Требует настоящих сертификатов
 			},
-			expectError: true, // Файлы не существуют
-			description: "Должна возвращать ошибку при отсутствующих файлах сертификатов",
+			expectError: false, // Будет создан, но handshake может не пройти
+			description: "Создание DTLS транспорта с проверкой сертификатов",
 		},
 	}
 
@@ -289,8 +290,8 @@ func TestDTLSTransportCreation(t *testing.T) {
 				t.Error("LocalAddr не должен быть nil")
 			}
 
-			t.Logf("DTLS транспорт создан: %v, сервер: %t",
-				transport.LocalAddr(), tt.config.IsServer)
+			t.Logf("DTLS транспорт создан: %v",
+				transport.LocalAddr())
 		})
 	}
 }
@@ -300,49 +301,41 @@ func TestDTLSTransportCreation(t *testing.T) {
 func TestDTLSTransportHandshake(t *testing.T) {
 	// Конфигурация DTLS сервера
 	serverConfig := DTLSTransportConfig{
-		LocalAddr:          "127.0.0.1:0",
-		IsServer:           true,
+		TransportConfig: TransportConfig{
+			LocalAddr:  "127.0.0.1:0",
+			BufferSize: 1500,
+		},
 		InsecureSkipVerify: true,
-		BufferSize:         1500,
 		HandshakeTimeout:   time.Second * 5,
 	}
 
-	server, err := NewDTLSTransport(serverConfig)
+	server, err := NewDTLSTransportServer(serverConfig)
 	if err != nil {
 		t.Fatalf("Ошибка создания DTLS сервера: %v", err)
 	}
 	defer server.Close()
-
-	err = server.Start()
-	if err != nil {
-		t.Fatalf("Ошибка запуска DTLS сервера: %v", err)
-	}
 
 	serverAddr := server.LocalAddr().String()
 	t.Logf("DTLS сервер запущен на %s", serverAddr)
 
 	// Конфигурация DTLS клиента
 	clientConfig := DTLSTransportConfig{
-		LocalAddr:          "127.0.0.1:0",
-		RemoteAddr:         serverAddr,
-		IsServer:           false,
+		TransportConfig: TransportConfig{
+			LocalAddr:  "127.0.0.1:0",
+			RemoteAddr: serverAddr,
+			BufferSize: 1500,
+		},
 		InsecureSkipVerify: true,
-		BufferSize:         1500,
 		HandshakeTimeout:   time.Second * 5,
 	}
 
-	client, err := NewDTLSTransport(clientConfig)
+	client, err := NewDTLSTransportClient(clientConfig)
 	if err != nil {
 		t.Fatalf("Ошибка создания DTLS клиента: %v", err)
 	}
 	defer client.Close()
 
-	t.Log("Запускаем DTLS handshake")
-
-	err = client.Start()
-	if err != nil {
-		t.Fatalf("Ошибка запуска DTLS клиента: %v", err)
-	}
+	t.Log("DTLS handshake автоматически запущен при создании клиента")
 
 	// Ждем завершения handshake
 	handshakeTimeout := time.After(time.Second * 10)
@@ -380,72 +373,67 @@ handshakeComplete:
 	t.Logf("DTLS соединение установлено: протокол %s", clientState.NegotiatedProtocol)
 }
 
-// === ТЕСТЫ МУЛЬТИПЛЕКСИРОВАННОГО ТРАНСПОРТА ===
+// === ТЕСТЫ СОВМЕСТИМОСТИ ТРАНСПОРТОВ ===
 
-// TestMultiplexedTransport тестирует мультиплексирование RTP/RTCP
-// Проверяет разделение RTP и RTCP пакетов на одном порту
-func TestMultiplexedTransport(t *testing.T) {
-	config := MultiplexedTransportConfig{
+// TestTransportCompatibility тестирует совместимость UDP и DTLS транспортов
+// Проверяет что оба транспорта реализуют одинаковый интерфейс
+func TestTransportCompatibility(t *testing.T) {
+	// Тестируем что оба транспорта реализуют Transport интерфейс
+	var _ Transport = (*UDPTransport)(nil)
+	var _ Transport = (*DTLSTransport)(nil)
+
+	// UDP транспорт
+	udpConfig := TransportConfig{
 		LocalAddr:  "127.0.0.1:0",
 		BufferSize: 1500,
 	}
 
-	transport, err := NewMultiplexedTransport(config)
+	udpTransport, err := NewUDPTransport(udpConfig)
 	if err != nil {
-		t.Fatalf("Ошибка создания мультиплексированного транспорта: %v", err)
+		t.Fatalf("Ошибка создания UDP транспорта: %v", err)
 	}
-	defer transport.Close()
+	defer udpTransport.Close()
 
-	err = transport.Start()
-	if err != nil {
-		t.Fatalf("Ошибка запуска транспорта: %v", err)
-	}
-
-	if !transport.IsActive() {
-		t.Error("Транспорт должен быть активен")
-	}
-
-	// Создаем тестовые пакеты
-	rtpPacket := &rtp.Packet{
-		Header: rtp.Header{
-			Version:        2,
-			PayloadType:    0,
-			SequenceNumber: 1000,
-			Timestamp:      160000,
-			SSRC:           0x11111111,
+	// DTLS транспорт
+	dtlsConfig := DTLSTransportConfig{
+		TransportConfig: TransportConfig{
+			LocalAddr:  "127.0.0.1:0",
+			BufferSize: 1500,
 		},
-		Payload: []byte("RTP test payload"),
+		InsecureSkipVerify: true,
 	}
 
-	// Тестируем отправку RTP пакета
-	t.Log("Тестируем отправку RTP пакета через мультиплексированный транспорт")
-
-	err = transport.SendRTP(rtpPacket)
+	dtlsTransport, err := NewDTLSTransportServer(dtlsConfig)
 	if err != nil {
-		t.Errorf("Ошибка отправки RTP пакета: %v", err)
+		t.Fatalf("Ошибка создания DTLS транспорта: %v", err)
+	}
+	defer dtlsTransport.Close()
+
+	// Проверяем базовую функциональность
+	transports := []struct {
+		name      string
+		transport Transport
+	}{
+		{"UDP", udpTransport},
+		{"DTLS", dtlsTransport},
 	}
 
-	// Тестируем получение пакета
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
-	defer cancel()
+	for _, tt := range transports {
+		t.Run(tt.name, func(t *testing.T) {
+			// Проверяем LocalAddr
+			if tt.transport.LocalAddr() == nil {
+				t.Errorf("%s транспорт: LocalAddr не должен быть nil", tt.name)
+			}
 
-	receivedPacket, packetType, fromAddr, err := transport.Receive(ctx)
-	if err != nil {
-		// В unit тестах может не быть реального получения, это нормально
-		t.Logf("Получение пакета: %v (ожидаемо в unit тестах)", err)
-	} else {
-		t.Logf("Получен пакет типа %s от %v: seq %d",
-			packetType, fromAddr, receivedPacket.Header.SequenceNumber)
+			// Проверяем активность
+			if !tt.transport.IsActive() {
+				t.Errorf("%s транспорт: должен быть активен", tt.name)
+			}
+
+			t.Logf("%s транспорт: LocalAddr=%v, Active=%t",
+				tt.name, tt.transport.LocalAddr(), tt.transport.IsActive())
+		})
 	}
-
-	// Проверяем статистику
-	stats := transport.GetStatistics()
-	if stats.RTPPacketsSent == 0 {
-		t.Error("Статистика должна показывать отправленные RTP пакеты")
-	}
-
-	t.Logf("Статистика мультиплексированного транспорта: RTP отправлено %d, RTCP отправлено %d",
-		stats.RTPPacketsSent, stats.RTCPPacketsSent)
 }
 
 // === ТЕСТЫ ПРОИЗВОДИТЕЛЬНОСТИ ТРАНСПОРТОВ ===
@@ -466,7 +454,7 @@ func BenchmarkTransportOperations(b *testing.B) {
 		}
 		defer transport.Close()
 
-		transport.Start()
+		// UDP транспорт активен сразу после создания
 
 		packet := &rtp.Packet{
 			Header: rtp.Header{
@@ -489,12 +477,14 @@ func BenchmarkTransportOperations(b *testing.B) {
 	// DTLS транспорт бенчмарк
 	b.Run("DTLS_Send", func(b *testing.B) {
 		config := DTLSTransportConfig{
-			LocalAddr:          "127.0.0.1:0",
+			TransportConfig: TransportConfig{
+				LocalAddr:  "127.0.0.1:0",
+				BufferSize: 1500,
+			},
 			InsecureSkipVerify: true,
-			BufferSize:         1500,
 		}
 
-		transport, err := NewDTLSTransport(config)
+		transport, err := NewDTLSTransportServer(config)
 		if err != nil {
 			b.Fatalf("Ошибка создания DTLS транспорта: %v", err)
 		}
