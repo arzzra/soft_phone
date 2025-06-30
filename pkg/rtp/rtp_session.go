@@ -293,3 +293,9 @@ func (rs *RTPSession) GetLastActivity() time.Time {
 	}
 	return time.Unix(0, nanos)
 }
+
+// RegisterIncomingHandler регистрирует обработчик входящих RTP пакетов
+// Thread-safe метод для обновления callback'а
+func (rs *RTPSession) RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr)) {
+	rs.onPacketReceived = handler
+}

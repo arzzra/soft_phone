@@ -50,18 +50,26 @@ type JitterBuffer struct {
 	mutex sync.RWMutex
 
 	// Каналы для управления
-	outputChan chan *rtp.Packet
-	stopChan   chan struct{}
-	stopped    bool
+	outputChan         chan *rtp.Packet          // Для обратной совместимости
+	outputChanExtended chan *PacketWithSessionID // Новый канал с поддержкой ID сессии
+	stopChan           chan struct{}
+	stopped            bool
 }
 
 // JitterPacket представляет RTP пакет в jitter buffer с метаданными о времени.
 // Содержит время получения и ожидаемое время воспроизведения.
 type JitterPacket struct {
-	packet   *rtp.Packet
-	arrival  time.Time
-	expected time.Time
-	index    int // Для heap interface
+	packet       *rtp.Packet
+	arrival      time.Time
+	expected     time.Time
+	index        int    // Для heap interface
+	rtpSessionID string // ID RTP сессии источника
+}
+
+// PacketWithSessionID представляет RTP пакет с ID сессии для передачи через каналы
+type PacketWithSessionID struct {
+	Packet       *rtp.Packet
+	RTPSessionID string
 }
 
 // packetHeap реализует heap.Interface для сортировки по timestamp
@@ -113,14 +121,15 @@ func NewJitterBuffer(config JitterBufferConfig) (*JitterBuffer, error) {
 	}
 
 	jb := &JitterBuffer{
-		config:       config,
-		maxSize:      config.BufferSize,
-		currentDelay: config.InitialDelay,
-		targetDelay:  config.InitialDelay,
-		rtpClockRate: 8000, // По умолчанию для телефонии
-		baseTime:     time.Now(),
-		outputChan:   make(chan *rtp.Packet, config.BufferSize),
-		stopChan:     make(chan struct{}),
+		config:             config,
+		maxSize:            config.BufferSize,
+		currentDelay:       config.InitialDelay,
+		targetDelay:        config.InitialDelay,
+		rtpClockRate:       8000, // По умолчанию для телефонии
+		baseTime:           time.Now(),
+		outputChan:         make(chan *rtp.Packet, config.BufferSize),
+		outputChanExtended: make(chan *PacketWithSessionID, config.BufferSize),
+		stopChan:           make(chan struct{}),
 	}
 
 	heap.Init(&jb.packets)
@@ -138,8 +147,13 @@ func (jb *JitterBuffer) SetClockRate(rate uint32) {
 	jb.rtpClockRate = rate
 }
 
-// Put добавляет пакет в jitter buffer
+// Put добавляет пакет в jitter buffer (для обратной совместимости)
 func (jb *JitterBuffer) Put(packet *rtp.Packet) error {
+	return jb.PutWithSessionID(packet, "")
+}
+
+// PutWithSessionID добавляет пакет в jitter buffer с указанием ID сессии
+func (jb *JitterBuffer) PutWithSessionID(packet *rtp.Packet, rtpSessionID string) error {
 	jb.mutex.Lock()
 	defer jb.mutex.Unlock()
 
@@ -182,9 +196,10 @@ func (jb *JitterBuffer) Put(packet *rtp.Packet) error {
 
 	// Создаем jitter packet
 	jitterPacket := &JitterPacket{
-		packet:   packet,
-		arrival:  now,
-		expected: expectedTime,
+		packet:       packet,
+		arrival:      now,
+		expected:     expectedTime,
+		rtpSessionID: rtpSessionID,
 	}
 
 	// Добавляем в буфер
@@ -227,6 +242,26 @@ func (jb *JitterBuffer) GetBlocking() (*rtp.Packet, error) {
 	}
 }
 
+// GetWithSessionID получает пакет из jitter buffer с ID сессии (неблокирующий)
+func (jb *JitterBuffer) GetWithSessionID() (*rtp.Packet, string, bool) {
+	select {
+	case packetWithID := <-jb.outputChanExtended:
+		return packetWithID.Packet, packetWithID.RTPSessionID, true
+	default:
+		return nil, "", false
+	}
+}
+
+// GetBlockingWithSessionID получает пакет из jitter buffer с ID сессии (блокирующий)
+func (jb *JitterBuffer) GetBlockingWithSessionID() (*rtp.Packet, string, error) {
+	select {
+	case packetWithID := <-jb.outputChanExtended:
+		return packetWithID.Packet, packetWithID.RTPSessionID, nil
+	case <-jb.stopChan:
+		return nil, "", fmt.Errorf("jitter buffer остановлен")
+	}
+}
+
 // Stop останавливает jitter buffer
 func (jb *JitterBuffer) Stop() {
 	jb.mutex.Lock()
@@ -236,6 +271,7 @@ func (jb *JitterBuffer) Stop() {
 		jb.stopped = true
 		close(jb.stopChan)
 		close(jb.outputChan)
+		close(jb.outputChanExtended)
 	}
 }
 
@@ -309,11 +345,25 @@ func (jb *JitterBuffer) processOutput() {
 		}
 
 		// Время пришло, выводим пакет
-		packet := heap.Pop(&jb.packets).(*JitterPacket)
+		jitterPacket := heap.Pop(&jb.packets).(*JitterPacket)
+
+		// Отправляем в расширенный канал (с ID сессии)
+		packetWithID := &PacketWithSessionID{
+			Packet:       jitterPacket.packet,
+			RTPSessionID: jitterPacket.rtpSessionID,
+		}
 
 		select {
-		case jb.outputChan <- packet.packet:
-			// Пакет отправлен
+		case jb.outputChanExtended <- packetWithID:
+			// Успешно отправлено в расширенный канал
+		default:
+			// Расширенный канал заполнен
+		}
+
+		// Для обратной совместимости также отправляем в старый канал
+		select {
+		case jb.outputChan <- jitterPacket.packet:
+			// Пакет отправлен в старый канал
 		default:
 			// Выходной канал заполнен, пакет потерян
 			jb.packetsDropped++

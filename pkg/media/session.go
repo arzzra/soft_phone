@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
@@ -178,12 +179,12 @@ type MediaSession struct {
 	audioProcessor *AudioProcessor
 
 	// Обработчики событий
-	callbacksMutex      sync.RWMutex                             // Защита callback'ов от race conditions
-	onAudioReceived     func([]byte, PayloadType, time.Duration) // Callback для обработанных аудио данных (после аудио процессора)
-	onRawAudioReceived  func([]byte, PayloadType, time.Duration) // Callback для сырых аудио данных (payload без обработки)
-	onRawPacketReceived func(*rtp.Packet)                        // Callback для сырых RTP пакетов (весь пакет)
-	onDTMFReceived      func(DTMFEvent)
-	onMediaError        func(error)
+	callbacksMutex      sync.RWMutex                                     // Защита callback'ов от race conditions
+	onAudioReceived     func([]byte, PayloadType, time.Duration, string) // Callback для обработанных аудио данных (после аудио процессора)
+	onRawAudioReceived  func([]byte, PayloadType, time.Duration, string) // Callback для сырых аудио данных (payload без обработки)
+	onRawPacketReceived func(*rtp.Packet, string)                        // Callback для сырых RTP пакетов (весь пакет)
+	onDTMFReceived      func(DTMFEvent, string)                          // Callback для DTMF событий
+	onMediaError        func(error, string)                              // Callback для ошибок
 
 	// Управление жизненным циклом
 	ctx    context.Context
@@ -247,11 +248,11 @@ type MediaSessionConfig struct {
 	DTMFPayloadType uint8 // RFC 4733 payload type (обычно 101)
 
 	// Обработчики событий
-	OnAudioReceived     func([]byte, PayloadType, time.Duration) // Callback для обработанных аудио данных (после аудио процессора)
-	OnRawAudioReceived  func([]byte, PayloadType, time.Duration) // Callback для сырых аудио данных (payload без обработки)
-	OnRawPacketReceived func(*rtp.Packet)                        // Callback для сырых RTP пакетов (весь пакет без декодирования)
-	OnDTMFReceived      func(DTMFEvent)
-	OnMediaError        func(error)
+	OnAudioReceived     func([]byte, PayloadType, time.Duration, string) // Callback для обработанных аудио данных (после аудио процессора)
+	OnRawAudioReceived  func([]byte, PayloadType, time.Duration, string) // Callback для сырых аудио данных (payload без обработки)
+	OnRawPacketReceived func(*rtp.Packet, string)                        // Callback для сырых RTP пакетов (весь пакет без декодирования)
+	OnDTMFReceived      func(DTMFEvent, string)                          // Callback для DTMF событий
+	OnMediaError        func(error, string)                              // Callback для ошибок
 
 	// RTCP настройки (опциональные)
 	RTCPEnabled  bool
@@ -372,7 +373,10 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 
 		// Устанавливаем callback для DTMF receiver (безопасно в конструкторе)
 		if session.dtmfReceiver != nil && config.OnDTMFReceived != nil {
-			session.dtmfReceiver.SetCallback(config.OnDTMFReceived)
+			// Создаем обертку для вызова с пустым rtpSessionID для обратной совместимости
+			session.dtmfReceiver.SetCallback(func(event DTMFEvent) {
+				config.OnDTMFReceived(event, "")
+			})
 		}
 	}
 
@@ -420,6 +424,12 @@ func (ms *MediaSession) AddRTPSession(rtpSessionID string, rtpSession Session) e
 	}
 
 	ms.rtpSessions[rtpSessionID] = rtpSession
+
+	// Регистрируем handler для входящих пакетов с замыканием rtpSessionID
+	rtpSession.RegisterIncomingHandler(func(packet *rtp.Packet, addr net.Addr) {
+		ms.handleIncomingRTPPacketWithID(packet, rtpSessionID)
+	})
+
 	return nil
 }
 
@@ -996,13 +1006,17 @@ func (ms *MediaSession) canReceive() bool {
 }
 
 // handleError обрабатывает ошибки медиа сессии
-func (ms *MediaSession) handleError(err error) {
+func (ms *MediaSession) handleError(err error, rtpSessionID ...string) {
 	ms.callbacksMutex.RLock()
 	errorHandler := ms.onMediaError
 	ms.callbacksMutex.RUnlock()
 
 	if errorHandler != nil {
-		go errorHandler(err)
+		sessionID := ""
+		if len(rtpSessionID) > 0 {
+			sessionID = rtpSessionID[0]
+		}
+		go errorHandler(err, sessionID)
 	}
 }
 
@@ -1260,7 +1274,7 @@ func (ms *MediaSession) EnableSilenceSuppression(enabled bool) {
 
 // SetRawAudioHandler устанавливает callback для получения сырых аудио данных без обработки
 // Вызывается с payload из RTP пакета до обработки аудио процессором
-func (ms *MediaSession) SetRawAudioHandler(handler func([]byte, PayloadType, time.Duration)) {
+func (ms *MediaSession) SetRawAudioHandler(handler func([]byte, PayloadType, time.Duration, string)) {
 	ms.callbacksMutex.Lock()
 	defer ms.callbacksMutex.Unlock()
 	ms.onRawAudioReceived = handler
@@ -1282,7 +1296,7 @@ func (ms *MediaSession) HasRawAudioHandler() bool {
 
 // SetRawPacketHandler устанавливает callback для получения сырых аудио RTP пакетов без декодирования
 // DTMF пакеты продолжают обрабатываться отдельно через DTMF callback
-func (ms *MediaSession) SetRawPacketHandler(handler func(*rtp.Packet)) {
+func (ms *MediaSession) SetRawPacketHandler(handler func(*rtp.Packet, string)) {
 	ms.callbacksMutex.Lock()
 	defer ms.callbacksMutex.Unlock()
 	ms.onRawPacketReceived = handler
@@ -1320,8 +1334,8 @@ func (ms *MediaSession) jitterBufferLoop() {
 			slog.Debug("media.jitterBufferLoop Stopped")
 			return
 		default:
-			// Получаем пакет из jitter buffer
-			packet, err := ms.jitterBuffer.GetBlocking()
+			// Получаем пакет из jitter buffer с ID сессии
+			packet, rtpSessionID, err := ms.jitterBuffer.GetBlockingWithSessionID()
 			if err != nil {
 				if ms.ctx.Err() != nil {
 					slog.Debug("media.jitterBufferLoop Stopped")
@@ -1333,7 +1347,7 @@ func (ms *MediaSession) jitterBufferLoop() {
 
 			// Обрабатываем пакет если можем принимать
 			if ms.canReceive() && ms.GetState() == MediaStateActive {
-				ms.processIncomingPacket(packet)
+				ms.processIncomingPacketWithID(packet, rtpSessionID)
 			}
 		}
 	}
@@ -1384,17 +1398,40 @@ func (ms *MediaSession) HandleIncomingRTPPacket(packet *rtp.Packet) {
 	}
 }
 
-// processIncomingPacket обрабатывает входящий RTP пакет
-func (ms *MediaSession) processIncomingPacket(packet *rtp.Packet) {
+// handleIncomingRTPPacketWithID обрабатывает входящий RTP пакет с известным ID сессии
+func (ms *MediaSession) handleIncomingRTPPacketWithID(packet *rtp.Packet, rtpSessionID string) {
+	if packet == nil {
+		return
+	}
 	if !ms.canReceive() {
 		return
 	}
 
+	// Если включен jitter buffer, добавляем пакет в него с ID сессии
+	if ms.jitterEnabled && ms.jitterBuffer != nil {
+		err := ms.jitterBuffer.PutWithSessionID(packet, rtpSessionID)
+		if err != nil {
+			ms.handleError(err, rtpSessionID)
+		}
+	} else {
+		// Иначе обрабатываем пакет напрямую с ID сессии
+		ms.processIncomingPacketWithID(packet, rtpSessionID)
+	}
+}
+
+// processIncomingPacket обрабатывает входящий RTP пакет
+func (ms *MediaSession) processIncomingPacket(packet *rtp.Packet) {
+	// Вызываем новый метод с пустым ID для обратной совместимости
+	ms.processIncomingPacketWithID(packet, "")
+}
+
+// processIncomingPacketWithID обрабатывает входящий RTP пакет с известным ID сессии
+func (ms *MediaSession) processIncomingPacketWithID(packet *rtp.Packet, rtpSessionID string) {
 	// Сначала всегда проверяем DTMF пакеты (независимо от режима)
 	if ms.dtmfEnabled && ms.dtmfReceiver != nil {
 		if isDTMF, err := ms.dtmfReceiver.ProcessPacket(packet); isDTMF {
 			if err != nil {
-				ms.handleError(err)
+				ms.handleError(err, rtpSessionID)
 			} else {
 				ms.updateDTMFReceiveStats()
 			}
@@ -1408,7 +1445,7 @@ func (ms *MediaSession) processIncomingPacket(packet *rtp.Packet) {
 	ms.callbacksMutex.RUnlock()
 
 	if rawPacketHandler != nil {
-		rawPacketHandler(packet)
+		rawPacketHandler(packet, rtpSessionID)
 		// Также обновляем статистику для сырых пакетов
 		ms.updateReceiveStats(len(packet.Payload))
 		ms.updateLastActivity()
@@ -1416,11 +1453,17 @@ func (ms *MediaSession) processIncomingPacket(packet *rtp.Packet) {
 	}
 
 	// Стандартная обработка аудио с декодированием
-	ms.processDecodedPacket(packet)
+	ms.processDecodedPacketWithID(packet, rtpSessionID)
 }
 
 // processDecodedPacket обрабатывает аудио пакет с декодированием
 func (ms *MediaSession) processDecodedPacket(packet *rtp.Packet) {
+	// Вызываем новый метод с пустым ID для обратной совместимости
+	ms.processDecodedPacketWithID(packet, "")
+}
+
+// processDecodedPacketWithID обрабатывает аудио пакет с декодированием и ID сессии
+func (ms *MediaSession) processDecodedPacketWithID(packet *rtp.Packet, rtpSessionID string) {
 	// Проверяем payload type - должен соответствовать нашему аудио кодеку
 	if PayloadType(packet.PayloadType) != ms.payloadType {
 		// Игнорируем пакеты с неизвестным payload type
@@ -1440,19 +1483,19 @@ func (ms *MediaSession) processDecodedPacket(packet *rtp.Packet) {
 
 	// Сначала вызываем callback для сырых аудио данных если установлен
 	if rawAudioHandler != nil {
-		rawAudioHandler(packet.Payload, ms.payloadType, ms.ptime)
+		rawAudioHandler(packet.Payload, ms.payloadType, ms.ptime, rtpSessionID)
 	}
 
 	// Затем обрабатываем через аудио процессор для обработанных данных
 	if ms.audioProcessor != nil && audioHandler != nil {
 		processedData, err := ms.audioProcessor.ProcessIncoming(packet.Payload)
 		if err != nil {
-			ms.handleError(err)
+			ms.handleError(err, rtpSessionID)
 			return
 		}
 
 		// Вызываем callback для обработанных данных
-		audioHandler(processedData, ms.payloadType, ms.ptime)
+		audioHandler(processedData, ms.payloadType, ms.ptime, rtpSessionID)
 	}
 
 	// Обновляем статистику (используем размер исходных данных)

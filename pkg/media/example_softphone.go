@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"net"
 	"strings"
 	"time"
 
@@ -22,18 +23,18 @@ func ExampleBasicMediaSession() error {
 	config.Ptime = time.Millisecond * 20 // 20ms пакеты
 
 	// Устанавливаем обработчики событий
-	config.OnAudioReceived = func(audioData []byte, payloadType PayloadType, ptime time.Duration) {
-		fmt.Printf("Получен аудио пакет: %d байт, тип %d, ptime %v\n",
-			len(audioData), payloadType, ptime)
+	config.OnAudioReceived = func(audioData []byte, payloadType PayloadType, ptime time.Duration, rtpSessionID string) {
+		fmt.Printf("Получен аудио пакет: %d байт, тип %d, ptime %v, сессия %s\n",
+			len(audioData), payloadType, ptime, rtpSessionID)
 	}
 
-	config.OnDTMFReceived = func(event DTMFEvent) {
-		fmt.Printf("📞 DTMF символ получен: '%s' (немедленно при нажатии)\n",
-			event.Digit.String())
+	config.OnDTMFReceived = func(event DTMFEvent, rtpSessionID string) {
+		fmt.Printf("📞 DTMF символ получен: '%s' от сессии %s (немедленно при нажатии)\n",
+			event.Digit.String(), rtpSessionID)
 	}
 
-	config.OnMediaError = func(err error) {
-		fmt.Printf("Ошибка медиа: %v\n", err)
+	config.OnMediaError = func(err error, rtpSessionID string) {
+		fmt.Printf("Ошибка медиа (сессия %s): %v\n", rtpSessionID, err)
 	}
 
 	// Создаем медиа сессию
@@ -230,10 +231,10 @@ func ExampleRawPacketHandling() error {
 	var decodedPacketsReceived int
 
 	// Обычный callback для декодированного аудио
-	config.OnAudioReceived = func(audioData []byte, payloadType PayloadType, ptime time.Duration) {
+	config.OnAudioReceived = func(audioData []byte, payloadType PayloadType, ptime time.Duration, rtpSessionID string) {
 		decodedPacketsReceived++
-		fmt.Printf("📢 Декодированное аудио: %d байт, payload %d, ptime %v\n",
-			len(audioData), payloadType, ptime)
+		fmt.Printf("📢 Декодированное аудио: %d байт, payload %d, ptime %v, сессия %s\n",
+			len(audioData), payloadType, ptime, rtpSessionID)
 	}
 
 	session, err := NewMediaSession(config)
@@ -260,10 +261,10 @@ func ExampleRawPacketHandling() error {
 	// 2. Переключаемся на режим сырых аудио пакетов
 	fmt.Println("\n2️⃣ Режим сырых аудио RTP пакетов (DTMF обрабатывается отдельно):")
 
-	session.SetRawPacketHandler(func(packet *rtp.Packet) {
+	session.SetRawPacketHandler(func(packet *rtp.Packet, rtpSessionID string) {
 		rawPacketsReceived++
-		fmt.Printf("📦 Сырой аудио RTP пакет: seq=%d, ts=%d, payload=%d байт, PT=%d\n",
-			packet.SequenceNumber, packet.Timestamp, len(packet.Payload), packet.PayloadType)
+		fmt.Printf("📦 Сырой аудио RTP пакет: seq=%d, ts=%d, payload=%d байт, PT=%d, сессия %s\n",
+			packet.SequenceNumber, packet.Timestamp, len(packet.Payload), packet.PayloadType, rtpSessionID)
 
 		// Приложение может самостоятельно обработать аудио пакет
 		// Например, сохранить в файл, переслать куда-то еще, etc.
@@ -304,9 +305,9 @@ func ExampleRawPacketHandling() error {
 
 	rawConfig := DefaultMediaSessionConfig()
 	rawConfig.SessionID = "call-raw-config"
-	rawConfig.OnRawPacketReceived = func(packet *rtp.Packet) {
-		fmt.Printf("🎯 Сырой аудио пакет через конфигурацию: seq=%d, size=%d\n",
-			packet.SequenceNumber, len(packet.Payload))
+	rawConfig.OnRawPacketReceived = func(packet *rtp.Packet, rtpSessionID string) {
+		fmt.Printf("🎯 Сырой аудио пакет через конфигурацию: seq=%d, size=%d, сессия %s\n",
+			packet.SequenceNumber, len(packet.Payload), rtpSessionID)
 	}
 
 	rawSession, err := NewMediaSession(rawConfig)
@@ -511,10 +512,10 @@ func ExampleDTMFHandling() error {
 
 	// Счетчик полученных DTMF
 	dtmfReceived := 0
-	config.OnDTMFReceived = func(event DTMFEvent) {
+	config.OnDTMFReceived = func(event DTMFEvent, rtpSessionID string) {
 		dtmfReceived++
-		fmt.Printf("📞 DTMF символ #%d получен: '%s' (немедленно при нажатии)\n",
-			dtmfReceived, event.Digit.String())
+		fmt.Printf("📞 DTMF символ #%d получен: '%s' от сессии %s (немедленно при нажатии)\n",
+			dtmfReceived, event.Digit.String(), rtpSessionID)
 	}
 
 	session, err := NewMediaSession(config)
@@ -745,6 +746,11 @@ func (m *MockRTPSession) SendRTCPReport() error {
 	}
 	// Симуляция отправки RTCP отчета
 	return nil
+}
+
+// RegisterIncomingHandler регистрирует обработчик входящих RTP пакетов
+func (m *MockRTPSession) RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr)) {
+	// Mock реализация - ничего не делаем
 }
 
 // generateTestAudioSoftphone генерирует тестовые аудио данные

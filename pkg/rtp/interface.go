@@ -2,6 +2,7 @@
 package rtp
 
 import (
+	"net"
 	"time"
 
 	"github.com/pion/rtp"
@@ -149,4 +150,19 @@ type SessionRTP interface {
 	//   - Отправки финальных отчетов при завершении сессии
 	//   - Диагностики проблем качества связи
 	SendRTCPReport() error
+
+	// RegisterIncomingHandler регистрирует обработчик входящих RTP пакетов
+	// Позволяет внешнему коду обрабатывать полученные RTP пакеты
+	//
+	// Параметры:
+	//   handler - функция обработчик, получающая RTP пакет и адрес отправителя
+	//
+	// Примечание: Новый обработчик заменяет предыдущий, если был установлен
+	//
+	// Пример:
+	//   session.RegisterIncomingHandler(func(packet *rtp.Packet, addr net.Addr) {
+	//       fmt.Printf("Получен пакет от %s: SSRC=%d, SeqNum=%d\n",
+	//           addr, packet.SSRC, packet.SequenceNumber)
+	//   })
+	RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr))
 }

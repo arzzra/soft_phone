@@ -158,18 +158,18 @@ func createCallerSession(t *testing.T, results *TestResults) (media_sdp.SDPMedia
 	builderConfig.DTMFEnabled = true
 
 	// Настраиваем callback'и для caller
-	builderConfig.MediaConfig.OnAudioReceived = func(data []byte, pt media.PayloadType, ptime time.Duration) {
-		t.Logf("🎵 [CALLER] Получено аудио: %d байт, payload type %d, ptime %v", len(data), pt, ptime)
+	builderConfig.MediaConfig.OnAudioReceived = func(data []byte, pt media.PayloadType, ptime time.Duration, sessionID string) {
+		t.Logf("🎵 [CALLER %s] Получено аудио: %d байт, payload type %d, ptime %v", sessionID, len(data), pt, ptime)
 		results.incrementCallerAudio(data)
 	}
 
-	builderConfig.MediaConfig.OnDTMFReceived = func(event media.DTMFEvent) {
-		t.Logf("[CALLER] Получен DTMF: %s, длительность: %v", event.Digit, event.Duration)
+	builderConfig.MediaConfig.OnDTMFReceived = func(event media.DTMFEvent, sessionID string) {
+		t.Logf("[CALLER %s] Получен DTMF: %s, длительность: %v", sessionID, event.Digit, event.Duration)
 		results.incrementCallerDTMF(event.Digit)
 	}
 
-	builderConfig.MediaConfig.OnMediaError = func(err error) {
-		t.Logf("[CALLER] Ошибка медиа: %v", err)
+	builderConfig.MediaConfig.OnMediaError = func(err error, sessionID string) {
+		t.Logf("[CALLER %s] Ошибка медиа: %v", sessionID, err)
 	}
 
 	// Создаем builder
@@ -199,18 +199,18 @@ func createCalleeSession(t *testing.T, results *TestResults, offer *sdp.SessionD
 	handlerConfig.DTMFEnabled = true
 
 	// Настраиваем callback'и для callee
-	handlerConfig.MediaConfig.OnAudioReceived = func(data []byte, pt media.PayloadType, ptime time.Duration) {
-		t.Logf("🎵 [CALLEE] Получено аудио: %d байт, payload type %d, ptime %v", len(data), pt, ptime)
+	handlerConfig.MediaConfig.OnAudioReceived = func(data []byte, pt media.PayloadType, ptime time.Duration, sessionID string) {
+		t.Logf("🎵 [CALLEE %s] Получено аудио: %d байт, payload type %d, ptime %v", sessionID, len(data), pt, ptime)
 		results.incrementCalleeAudio(data)
 	}
 
-	handlerConfig.MediaConfig.OnDTMFReceived = func(event media.DTMFEvent) {
-		t.Logf("[CALLEE] Получен DTMF: %s, длительность: %v", event.Digit, event.Duration)
+	handlerConfig.MediaConfig.OnDTMFReceived = func(event media.DTMFEvent, sessionID string) {
+		t.Logf("[CALLEE %s] Получен DTMF: %s, длительность: %v", sessionID, event.Digit, event.Duration)
 		results.incrementCalleeDTMF(event.Digit)
 	}
 
-	handlerConfig.MediaConfig.OnMediaError = func(err error) {
-		t.Logf("[CALLEE] Ошибка медиа: %v", err)
+	handlerConfig.MediaConfig.OnMediaError = func(err error, sessionID string) {
+		t.Logf("[CALLEE %s] Ошибка медиа: %v", sessionID, err)
 	}
 
 	// Создаем handler

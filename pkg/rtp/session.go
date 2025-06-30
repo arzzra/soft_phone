@@ -690,3 +690,17 @@ func generateRandomUint32() uint32 {
 	binary.Read(rand.Reader, binary.BigEndian, &val)
 	return val
 }
+
+// RegisterIncomingHandler регистрирует обработчик входящих RTP пакетов
+// Делегирует вызов к внутреннему RTPSession компоненту
+//
+// Параметры:
+//
+//	handler - функция обработчик, вызываемая для каждого входящего RTP пакета
+//
+// Примечание: Обработчик заменяет предыдущий, если был установлен
+func (s *Session) RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr)) {
+	if s.rtpSession != nil {
+		s.rtpSession.RegisterIncomingHandler(handler)
+	}
+}

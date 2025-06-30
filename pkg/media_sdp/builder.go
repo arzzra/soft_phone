@@ -8,7 +8,6 @@ import (
 
 	"github.com/arzzra/soft_phone/pkg/media"
 	"github.com/arzzra/soft_phone/pkg/rtp"
-	pionrtp "github.com/pion/rtp"
 	"github.com/pion/sdp/v3"
 )
 
@@ -76,8 +75,6 @@ func (b *sdpMediaBuilder) createRTPSession() error {
 			NAME:  b.config.SessionName,
 			TOOL:  b.config.UserAgent,
 		},
-		// Устанавливаем callback для получения RTP пакетов
-		OnPacketReceived: b.handleIncomingRTPPacket,
 	}
 
 	// Настраиваем RTCP если включен
@@ -537,15 +534,6 @@ func getLocalHostname() string {
 
 	// Если не удалось, возвращаем localhost
 	return "127.0.0.1"
-}
-
-// handleIncomingRTPPacket обрабатывает входящие RTP пакеты
-func (b *sdpMediaBuilder) handleIncomingRTPPacket(packet *pionrtp.Packet, _ net.Addr) {
-	// Передаем пакет в media сессию если она создана
-	if b.mediaSession != nil {
-		// Используем метод HandleIncomingRTPPacket для передачи пакета в media сессию
-		b.mediaSession.HandleIncomingRTPPacket(packet)
-	}
 }
 
 // getCodecName возвращает имя кодека по payload type

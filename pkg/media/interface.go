@@ -70,7 +70,7 @@ type MediaSessionInterface interface {
 	FlushAudioBuffer() error
 
 	// Обработчики сырых пакетов
-	SetRawPacketHandler(handler func(*rtp.Packet))
+	SetRawPacketHandler(handler func(*rtp.Packet, string))
 	ClearRawPacketHandler()
 	HasRawPacketHandler() bool
 
