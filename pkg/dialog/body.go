@@ -1,25 +1,25 @@
 package dialog
 
-type Body struct {
+type BodyImpl struct {
 	contentType string
 	content     []byte
 }
 
-func (b *Body) Type() string {
+func (b *BodyImpl) ContentType() string {
 	return b.contentType
 }
 
-func (b *Body) Content() []byte {
+func (b *BodyImpl) Data() []byte {
 	return b.content
 }
 
-func NewBody(contentType string, content []byte) Body {
-	return Body{contentType, content}
+func NewBody(contentType string, content []byte) *BodyImpl {
+	return &BodyImpl{contentType, content}
 }
 
-func (b *Body) Copy() *Body {
+func (b *BodyImpl) Copy() *BodyImpl {
 	var bodyCopy []byte
 	copy(bodyCopy, b.content)
 
-	return &Body{b.contentType, bodyCopy}
+	return &BodyImpl{b.contentType, bodyCopy}
 }

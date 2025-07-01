@@ -30,15 +30,26 @@ type IStack interface {
 	//OnRequest(method sip.RequestMethod, h RequestHandler)
 }
 
-type InviteOpts func(req sip.Request)
+// InviteOpts опции для создания INVITE запроса
+type InviteOpts struct {
+	Body Body // тело запроса (например, SDP)
+}
 
 /* -------------------------------------------------
    Dialog — абстракция сеанса (RFC3261 §12)
 --------------------------------------------------*/
 
-type ResponseOpt func(resp sip.Response)
+type ResponseOpt func(resp *sip.Response)
 
-type ReferOpts func(req sip.Request)
+// ReferOpts опции для REFER запроса
+type ReferOpts struct {
+	// ReferSub заголовок для управления подпиской (RFC 4488)
+	ReferSub *string
+	// NoReferSub отключает подписку NOTIFY
+	NoReferSub bool
+	// Дополнительные заголовки
+	Headers map[string]string
+}
 
 type IDialog interface {
 	Key() DialogKey
@@ -73,4 +84,10 @@ type IDialog interface {
 type DialogKey struct {
 	CallID              string
 	LocalTag, RemoteTag string
+}
+
+// Body представляет тело SIP сообщения
+type Body interface {
+	ContentType() string
+	Data() []byte
 }

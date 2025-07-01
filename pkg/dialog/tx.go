@@ -122,33 +122,33 @@ func mapTxStateToDialogState(txState TxState, txType TxType, isSuccess bool) Dia
 	case TxTypeInviteClient:
 		switch txState {
 		case TxCalling:
-			return Trying // отправили INVITE
+			return DialogStateTrying // отправили INVITE
 		case TxProceeding:
-			return Ringing // получили 1xx
+			return DialogStateRinging // получили 1xx
 		case TxCompleted:
-			return Terminated // получили 3xx-6xx (отклонение)
+			return DialogStateTerminated // получили 3xx-6xx (отклонение)
 		case TxTerminated:
 			if isSuccess {
-				return InCall // получили 2xx (успех)
+				return DialogStateEstablished // получили 2xx (успех)
 			}
-			return Terminated // финал после таймера
+			return DialogStateTerminated // финал после таймера
 		}
 
 	case TxTypeInviteServer:
 		switch txState {
 		case TxProceeding:
-			return Ringing // получили INVITE
+			return DialogStateRinging // получили INVITE
 		case TxCompleted:
-			return InCall // отправили 200 OK
+			return DialogStateEstablished // отправили 200 OK
 		case TxConfirmed:
-			return InCall // получили ACK, остаемся в InCall
+			return DialogStateEstablished // получили ACK, остаемся в InCall
 		case TxTerminated:
-			return Terminated // финал
+			return DialogStateTerminated // финал
 		}
 	}
 
 	// Non-INVITE транзакции не меняют состояние Dialog
-	return Idle // возвращаем нейтральное состояние
+	return DialogStateInit // возвращаем нейтральное состояние
 }
 
 // NewTransaction создает новую транзакцию с привязкой к диалогу
@@ -197,21 +197,21 @@ func initInviteClientFSM(transaction *Transaction) *fsm.FSM {
 				// Отправляем INVITE запрос
 				if shouldUpdateDialog(transaction.txType) {
 					dialogState := mapTxStateToDialogState(TxCalling, transaction.txType, false)
-					transaction.dialog.setState(dialogState)
+					transaction.dialog.updateState(dialogState)
 				}
 			},
 			"enter_" + TxProceeding.String(): func(ctx context.Context, e *fsm.Event) {
 				// Получили предварительный ответ
 				if shouldUpdateDialog(transaction.txType) {
 					dialogState := mapTxStateToDialogState(TxProceeding, transaction.txType, false)
-					transaction.dialog.setState(dialogState)
+					transaction.dialog.updateState(dialogState)
 				}
 			},
 			"enter_" + TxCompleted.String(): func(ctx context.Context, e *fsm.Event) {
 				// Получили финальный ответ, запускаем таймер
 				if shouldUpdateDialog(transaction.txType) {
 					dialogState := mapTxStateToDialogState(TxCompleted, transaction.txType, false)
-					transaction.dialog.setState(dialogState)
+					transaction.dialog.updateState(dialogState)
 				}
 			},
 			"enter_" + TxTerminated.String(): func(ctx context.Context, e *fsm.Event) {
@@ -220,7 +220,7 @@ func initInviteClientFSM(transaction *Transaction) *fsm.FSM {
 					// Определяем, был ли это успешный ответ (2xx) по событию
 					isSuccess := e.Event == "success"
 					dialogState := mapTxStateToDialogState(TxTerminated, transaction.txType, isSuccess)
-					transaction.dialog.setState(dialogState)
+					transaction.dialog.updateState(dialogState)
 				}
 			},
 		},
@@ -247,28 +247,28 @@ func initInviteServerFSM(transaction *Transaction) *fsm.FSM {
 				// Получили INVITE, отправляем 100 Trying
 				if shouldUpdateDialog(transaction.txType) {
 					dialogState := mapTxStateToDialogState(TxProceeding, transaction.txType, false)
-					transaction.dialog.setState(dialogState)
+					transaction.dialog.updateState(dialogState)
 				}
 			},
 			"enter_" + TxCompleted.String(): func(ctx context.Context, e *fsm.Event) {
 				// Отправили финальный ответ, ждем ACK
 				if shouldUpdateDialog(transaction.txType) {
 					dialogState := mapTxStateToDialogState(TxCompleted, transaction.txType, false)
-					transaction.dialog.setState(dialogState)
+					transaction.dialog.updateState(dialogState)
 				}
 			},
 			"enter_" + TxConfirmed.String(): func(ctx context.Context, e *fsm.Event) {
 				// Получили ACK, поглощаем дополнительные ACK
 				if shouldUpdateDialog(transaction.txType) {
 					dialogState := mapTxStateToDialogState(TxConfirmed, transaction.txType, false)
-					transaction.dialog.setState(dialogState)
+					transaction.dialog.updateState(dialogState)
 				}
 			},
 			"enter_" + TxTerminated.String(): func(ctx context.Context, e *fsm.Event) {
 				// Транзакция завершена, уничтожаем
 				if shouldUpdateDialog(transaction.txType) {
 					dialogState := mapTxStateToDialogState(TxTerminated, transaction.txType, false)
-					transaction.dialog.setState(dialogState)
+					transaction.dialog.updateState(dialogState)
 				}
 			},
 		},
