@@ -97,6 +97,20 @@ type IDialog interface {
 	// ReferReplace замена вызова
 	ReferReplace(ctx context.Context, replaceDialog IDialog, opts ReferOpts) error
 
+	// WaitRefer ожидает ответ на REFER запрос и создает подписку при успехе.
+	//
+	// Должна вызываться после SendRefer() или SendReferWithReplaces() для ожидания
+	// ответа удаленной стороны. При получении 2xx ответа автоматически создается
+	// ReferSubscription для отслеживания NOTIFY сообщений о прогрессе перевода.
+	//
+	// Поведение по кодам ответа:
+	//   - 1xx: игнорируются, ожидание продолжается
+	//   - 2xx: создается подписка, возвращается ReferSubscription
+	//   - 3xx/4xx/5xx/6xx: возвращается ошибка
+	//
+	// Функция thread-safe, но должна вызываться только один раз после SendRefer().
+	WaitRefer(ctx context.Context) (*ReferSubscription, error)
+
 	// Bye завершает диалог.
 	Bye(ctx context.Context, reason string) error
 

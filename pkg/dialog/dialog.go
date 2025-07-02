@@ -44,6 +44,25 @@
 //	// Диалог установлен
 //	log.Printf("Вызов успешно установлен")
 //
+// Пример перевода вызова (REFER):
+//
+//	// Переводим вызов на другой номер
+//	transferTarget, _ := sip.ParseUri("sip:transfer@example.com")
+//	err = dialog.SendRefer(ctx, transferTarget, ReferOpts{})
+//	if err != nil {
+//		log.Printf("Ошибка отправки REFER: %v", err)
+//		return
+//	}
+//
+//	// Ожидаем подтверждение перевода
+//	subscription, err := dialog.WaitRefer(ctx)
+//	if err != nil {
+//		log.Printf("Перевод отклонен: %v", err)
+//		return
+//	}
+//
+//	log.Printf("Перевод принят, подписка ID: %s", subscription.ID)
+//
 // Пример использования (входящий вызов):
 //
 //	stack.OnIncomingDialog(func(dialog IDialog) {
@@ -192,8 +211,10 @@ type Dialog struct {
 	// Транзакции и запросы
 	inviteTx   sip.ClientTransaction // для UAC
 	serverTx   sip.ServerTransaction // для UAS
+	referTx    sip.ClientTransaction // для отслеживания REFER транзакции
 	inviteReq  *sip.Request          // исходный INVITE
 	inviteResp *sip.Response         // финальный ответ на INVITE
+	referReq   *sip.Request          // исходный REFER запрос
 
 	// Каналы для ожидания ответов
 	responseChan chan *sip.Response

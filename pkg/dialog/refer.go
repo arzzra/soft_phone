@@ -110,7 +110,40 @@ func ParseReplacesHeader(header string) (*ReplacesInfo, error) {
 	return info, nil
 }
 
-// SendRefer отправляет REFER запрос в рамках диалога
+// SendRefer отправляет REFER запрос для перевода вызова (call transfer).
+//
+// Функция реализует SIP REFER согласно RFC 3515 для выполнения перевода вызовов.
+// Отправляет запрос на перевод и сохраняет транзакцию для последующего ожидания
+// ответа через WaitRefer(). Не ожидает ответ автоматически - для этого нужно
+// вызвать WaitRefer() после SendRefer().
+//
+// Состояние диалога:
+// Может быть вызвана только для диалогов в состоянии Established.
+//
+// Параметры:
+//   - ctx: контекст для отмены операции
+//   - referTo: URI цели перевода (куда переводить вызов)
+//   - opts: опции REFER запроса (может быть nil)
+//
+// Возвращает:
+//   - Ошибку если диалог не в состоянии Established или не удалось отправить запрос
+//
+// Использование:
+//  1. Вызвать SendRefer() для отправки запроса
+//  2. Вызвать WaitRefer() для ожидания ответа и создания подписки
+//
+// Пример:
+//
+//	targetURI, _ := sip.ParseUri("sip:target@example.com")
+//	err := dialog.SendRefer(ctx, targetURI, &ReferOpts{})
+//	if err != nil {
+//		return fmt.Errorf("failed to send REFER: %w", err)
+//	}
+//
+//	subscription, err := dialog.WaitRefer(ctx)
+//	if err != nil {
+//		return fmt.Errorf("REFER was rejected: %w", err)
+//	}
 func (d *Dialog) SendRefer(ctx context.Context, referTo sip.Uri, opts *ReferOpts) error {
 	// Проверяем состояние
 	if d.State() != DialogStateEstablished {
@@ -149,54 +182,59 @@ func (d *Dialog) SendRefer(ctx context.Context, referTo sip.Uri, opts *ReferOpts
 		return fmt.Errorf("failed to send REFER: %w", err)
 	}
 
-	// Ждем ответ
-	select {
-	case res := <-tx.Responses():
-		if res.StatusCode >= 200 && res.StatusCode < 300 {
-			// Успешно принято, создаем подписку
-			// subscription := &ReferSubscription{
-			// 	ID:         req.GetHeader("CSeq").Value(),
-			// 	dialog:     d,
-			// 	referToURI: referTo,
-			// 	active:     true,
-			// }
+	// Сохраняем транзакцию и запрос для WaitRefer
+	d.referTx = tx
+	d.referReq = req
 
-			// Сохраняем подписку
-			subscription := &ReferSubscription{
-				ID:         req.GetHeader("CSeq").Value(),
-				dialog:     d,
-				referToURI: referTo,
-				active:     true,
-			}
-
-			d.mutex.Lock()
-			if d.referSubscriptions == nil {
-				d.referSubscriptions = make(map[string]*ReferSubscription)
-			}
-			d.referSubscriptions[subscription.ID] = subscription
-			d.mutex.Unlock()
-
-			// Начинаем отправку NOTIFY в отдельной горутине
-			go func() {
-				ctx := context.Background()
-				// Отправляем начальный NOTIFY (100 Trying)
-				if err := subscription.SendNotify(ctx, 100, "Trying"); err != nil {
-					if d.stack != nil && d.stack.config.Logger != nil {
-						d.stack.config.Logger.Printf("Failed to send initial NOTIFY: %v", err)
-					}
-				}
-			}()
-
-			return nil
-		}
-		return fmt.Errorf("REFER rejected: %d %s", res.StatusCode, res.Reason)
-
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return nil
 }
 
-// SendReferWithReplaces отправляет REFER с Replaces для attended transfer
+// SendReferWithReplaces отправляет REFER с Replaces заголовком для attended transfer.
+//
+// Функция реализует attended call transfer согласно RFC 3515 и RFC 3891.
+// В отличие от простого перевода (blind transfer), attended transfer заменяет
+// существующий диалог новым, позволяя выполнить консультативный перевод.
+//
+// Принцип работы:
+//  1. A звонит B, устанавливается диалог AB
+//  2. A звонит C, устанавливается диалог AC
+//  3. A отправляет REFER с Replaces B'у, указывая заменить диалог AB на AC
+//  4. B звонит C, заменяя исходный диалог
+//
+// Состояние диалога:
+// Может быть вызвана только для диалогов в состоянии Established.
+//
+// Параметры:
+//   - ctx: контекст для отмены операции
+//   - targetURI: URI цели для нового соединения
+//   - replaceDialog: диалог который должен быть заменен
+//   - opts: опции REFER запроса (может быть nil)
+//
+// Возвращает:
+//   - Ошибку если диалог не в состоянии Established или не удалось отправить запрос
+//
+// После SendReferWithReplaces необходимо вызвать WaitRefer() для ожидания ответа.
+//
+// Пример attended transfer:
+//
+//	// A звонит B
+//	dialogAB, _ := stack.NewInvite(ctx, bobURI, InviteOpts{})
+//	dialogAB.WaitAnswer(ctx)
+//
+//	// A звонит C
+//	dialogAC, _ := stack.NewInvite(ctx, charlieURI, InviteOpts{})
+//	dialogAC.WaitAnswer(ctx)
+//
+//	// A переводит B на C с заменой диалога
+//	err := dialogAB.SendReferWithReplaces(ctx, charlieURI, dialogAC, &ReferOpts{})
+//	if err != nil {
+//		return fmt.Errorf("failed to send REFER with Replaces: %w", err)
+//	}
+//
+//	subscription, err := dialogAB.WaitRefer(ctx)
+//	if err != nil {
+//		return fmt.Errorf("attended transfer failed: %w", err)
+//	}
 func (d *Dialog) SendReferWithReplaces(ctx context.Context, targetURI sip.Uri, replaceDialog IDialog, opts *ReferOpts) error {
 	// Проверяем состояние
 	if d.State() != DialogStateEstablished {
@@ -236,18 +274,11 @@ func (d *Dialog) SendReferWithReplaces(ctx context.Context, targetURI sip.Uri, r
 		return fmt.Errorf("failed to send REFER with Replaces: %w", err)
 	}
 
-	// Ждем ответ
-	select {
-	case res := <-tx.Responses():
-		if res.StatusCode >= 200 && res.StatusCode < 300 {
-			// Успешно принято
-			return nil
-		}
-		return fmt.Errorf("REFER with Replaces rejected: %d %s", res.StatusCode, res.Reason)
+	// Сохраняем транзакцию и запрос для WaitRefer
+	d.referTx = tx
+	d.referReq = req
 
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return nil
 }
 
 // SendNotify отправляет NOTIFY для REFER subscription
@@ -332,4 +363,171 @@ func (d *Dialog) HandleIncomingRefer(req *sip.Request, referTo sip.Uri, replaces
 	}()
 
 	return nil
+}
+
+// WaitRefer ожидает ответ на REFER запрос аналогично WaitAnswer для INVITE.
+//
+// Функция реализует асинхронную обработку REFER транзакций согласно RFC 3515.
+// Должна вызываться после SendRefer() или SendReferWithReplaces() для ожидания
+// ответа удаленной стороны на REFER запрос. При успешном ответе (2xx) автоматически
+// создается ReferSubscription для отслеживания NOTIFY сообщений о прогрессе
+// выполнения перевода вызова (RFC 4488).
+//
+// Поведение по кодам ответа:
+//   - 1xx (Provisional): игнорируются, ожидание продолжается
+//   - 2xx (Success): создается подписка, возвращается ReferSubscription
+//   - 3xx/4xx/5xx/6xx (Failure): возвращается ошибка с описанием
+//
+// Thread Safety:
+// Функция безопасна для вызова из разных горутин, но для одного диалога
+// должна вызываться только один раз после каждого SendRefer().
+//
+// Состояние диалога:
+// Функция может быть вызвана только если диалог находится в состоянии
+// Established и есть активная REFER транзакция.
+//
+// Timeout и отмена:
+// Операция может быть прервана через контекст ctx. При отмене контекста
+// функция немедленно возвращает ctx.Err().
+//
+// Параметры:
+//   - ctx: контекст для отмены операции и управления timeout'ом
+//
+// Возвращает:
+//   - *ReferSubscription: подписку для отслеживания NOTIFY сообщений при успехе (2xx)
+//   - error: ошибку если REFER был отклонен, произошла ошибка транзакции или нет активной REFER транзакции
+//
+// Возможные ошибки:
+//   - "нет активной REFER транзакции" - WaitRefer вызван без предварительного SendRefer
+//   - "REFER отклонен: <код> <причина>" - удаленная сторона отклонила перевод
+//   - "REFER транзакция завершена без ответа" - таймаут или сетевая ошибка
+//   - ctx.Err() - операция отменена через контекст
+//
+// Пример базового использования:
+//
+//	// Отправляем REFER для простого перевода
+//	targetURI, _ := sip.ParseUri("sip:transfer-target@example.com")
+//	err := dialog.SendRefer(ctx, targetURI, ReferOpts{})
+//	if err != nil {
+//		return fmt.Errorf("failed to send REFER: %w", err)
+//	}
+//
+//	// Ожидаем принятие REFER
+//	subscription, err := dialog.WaitRefer(ctx)
+//	if err != nil {
+//		return fmt.Errorf("REFER was rejected: %w", err)
+//	}
+//
+//	log.Printf("REFER принят, подписка ID: %s", subscription.ID)
+//
+// Пример с обработкой NOTIFY и таймаутом:
+//
+//	// Создаем контекст с таймаутом
+//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+//	defer cancel()
+//
+//	// Отправляем REFER
+//	err := dialog.SendRefer(ctx, targetURI, ReferOpts{})
+//	if err != nil {
+//		return err
+//	}
+//
+//	// Ожидаем ответ с обработкой ошибок
+//	subscription, err := dialog.WaitRefer(ctx)
+//	if err != nil {
+//		switch {
+//		case strings.Contains(err.Error(), "нет активной"):
+//			log.Printf("Programming error: WaitRefer called without SendRefer")
+//		case strings.Contains(err.Error(), "отклонен"):
+//			log.Printf("Transfer rejected by remote party: %v", err)
+//		case errors.Is(err, context.DeadlineExceeded):
+//			log.Printf("Transfer request timed out")
+//		default:
+//			log.Printf("Transfer failed: %v", err)
+//		}
+//		return err
+//	}
+//
+//	// Настраиваем отслеживание прогресса через NOTIFY
+//	log.Printf("Transfer accepted, monitoring progress...")
+//	// subscription теперь можно использовать для получения NOTIFY сообщений
+func (d *Dialog) WaitRefer(ctx context.Context) (*ReferSubscription, error) {
+	if d.referTx == nil || d.referReq == nil {
+		return nil, fmt.Errorf("нет активной REFER транзакции")
+	}
+
+	// Ожидаем ответы через каналы транзакции
+	for {
+		select {
+		case resp := <-d.referTx.Responses():
+			// Обрабатываем ответ в зависимости от кода
+			switch {
+			case resp.StatusCode >= 100 && resp.StatusCode < 200:
+				// Provisional responses - продолжаем ждать
+				continue
+			case resp.StatusCode >= 200 && resp.StatusCode < 300:
+				// Success - создаем подписку
+				cseqHeader := d.referReq.GetHeader("CSeq")
+				if cseqHeader == nil {
+					return nil, fmt.Errorf("отсутствует CSeq заголовок в REFER запросе")
+				}
+
+				// Получаем Refer-To URI из исходного запроса
+				referToHeader := d.referReq.GetHeader("Refer-To")
+				if referToHeader == nil {
+					return nil, fmt.Errorf("отсутствует Refer-To заголовок в REFER запросе")
+				}
+
+				// Парсим Refer-To URI
+				referToStr := referToHeader.Value()
+				// Убираем < > если есть
+				if strings.HasPrefix(referToStr, "<") && strings.HasSuffix(referToStr, ">") {
+					referToStr = strings.TrimPrefix(referToStr, "<")
+					referToStr = strings.TrimSuffix(referToStr, ">")
+				}
+
+				var referToURI sip.Uri
+				if err := sip.ParseUri(referToStr, &referToURI); err != nil {
+					return nil, fmt.Errorf("ошибка парсинга Refer-To URI: %w", err)
+				}
+
+				// Создаем подписку
+				subscription := &ReferSubscription{
+					ID:         cseqHeader.Value(),
+					dialog:     d,
+					referToURI: referToURI,
+					active:     true,
+				}
+
+				// Сохраняем подписку
+				d.mutex.Lock()
+				if d.referSubscriptions == nil {
+					d.referSubscriptions = make(map[string]*ReferSubscription)
+				}
+				d.referSubscriptions[subscription.ID] = subscription
+				d.mutex.Unlock()
+
+				// Очищаем транзакцию и запрос
+				d.referTx = nil
+				d.referReq = nil
+
+				return subscription, nil
+			default:
+				// Failure - REFER отклонен
+				d.referTx = nil
+				d.referReq = nil
+				return nil, fmt.Errorf("REFER отклонен: %d %s", resp.StatusCode, resp.Reason)
+			}
+
+		case <-d.referTx.Done():
+			// Транзакция завершена без финального ответа
+			d.referTx = nil
+			d.referReq = nil
+			return nil, fmt.Errorf("REFER транзакция завершена без ответа")
+
+		case <-ctx.Done():
+			// Контекст отменен
+			return nil, ctx.Err()
+		}
+	}
 }

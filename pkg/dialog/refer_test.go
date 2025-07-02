@@ -227,6 +227,12 @@ func TestSendRefer(t *testing.T) {
 		t.Fatalf("Failed to send REFER: %v", err)
 	}
 
+	// Ожидаем ответ на REFER
+	subscription, err := aliceDialog.WaitRefer(ctx)
+	if err != nil {
+		t.Fatalf("Failed to wait for REFER response: %v", err)
+	}
+
 	// Bob должен получить REFER
 	select {
 	case referInfo := <-referChan:
@@ -241,6 +247,10 @@ func TestSendRefer(t *testing.T) {
 	}
 
 	// Проверяем что подписка создана
+	if subscription == nil {
+		t.Fatal("Expected subscription to be created")
+	}
+
 	subs := dialog.GetAllReferSubscriptions()
 	if len(subs) != 1 {
 		t.Errorf("Expected 1 subscription, got %d", len(subs))
