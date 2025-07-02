@@ -11,43 +11,88 @@ import (
 	"github.com/emiago/sipgo/sip"
 )
 
+// TransportLayer определяет тип транспортного протокола для SIP сообщений.
+// Поддерживаются основные транспорты согласно RFC 3261 и расширениям.
 type TransportLayer string
 
 const (
+	// TransportUDP - UDP транспорт (RFC 3261)
+	// Наиболее распространенный, но ненадежный транспорт для SIP
 	TransportUDP TransportLayer = "UDP"
+
+	// TransportTCP - TCP транспорт (RFC 3261)
+	// Надежный транспорт, используется для больших сообщений
 	TransportTCP TransportLayer = "TCP"
+
+	// TransportTLS - TLS поверх TCP (RFC 3261)
+	// Защищенный транспорт для конфиденциальной связи
 	TransportTLS TransportLayer = "TLS"
-	TransportWS  TransportLayer = "WS"
+
+	// TransportWS - WebSocket транспорт (RFC 7118)
+	// Используется для веб-приложений и WebRTC
+	TransportWS TransportLayer = "WS"
 )
 
+// StackConfig содержит конфигурацию для SIP стека.
+//
+// Определяет основные параметры работы стека:
+//   - Транспортные настройки (протокол, адреса, порты)
+//   - Таймауты и ограничения ресурсов
+//   - Идентификация и логирование
 type StackConfig struct {
-	// Transport - конфигурация SIP транспорта
+	// Transport конфигурация SIP транспортного слоя
+	// Определяет протокол, адреса для прослушивания и другие сетевые параметры
 	Transport *TransportConfig
-	// UserAgent - заголовок User-Agent
+
+	// UserAgent строка идентификации в заголовке User-Agent
+	// Должна содержать название и версию приложения (например, "MyApp/1.0")
 	UserAgent string
-	// TxTimeout - таймаут транзакций (Timer F / B по RFC 3261)
+
+	// TxTimeout максимальное время ожидания ответа на транзакцию
+	// Соответствует Timer F для INVITE и Timer B для других запросов (RFC 3261)
+	// По умолчанию: 32 секунды
 	TxTimeout time.Duration
 
-	// MaxDialogs - максимальное количество одновременных диалогов
+	// MaxDialogs максимальное количество одновременных диалогов
+	// Ограничивает потребление памяти и защищает от DDoS атак
+	// По умолчанию: 1000
 	MaxDialogs int
 
-	// Logger - логгер для отладки (опционально)
+	// Logger опциональный логгер для отладки и диагностики
+	// Если nil, логирование отключено
 	Logger *log.Logger
 }
 
-// TransactionPool управляет активными транзакциями
+// TransactionPool управляет активными SIP транзакциями.
+//
+// Обеспечивает thread-safe доступ к множеству одновременных транзакций.
+// Ключом служит branch ID из заголовка Via.
 type TransactionPool struct {
+	// inviteTransactions карта активных INVITE транзакций
 	inviteTransactions map[string]*Transaction // key: branch ID
-	mutex              sync.RWMutex
+	// mutex для синхронизации доступа
+	mutex sync.RWMutex
 }
 
-// StackCallbacks колбэки для событий стека
+// StackCallbacks содержит обработчики событий SIP стека.
+//
+// Позволяет приложению реагировать на важные события стека.
 type StackCallbacks struct {
+	// OnIncomingDialog вызывается при получении нового входящего INVITE
 	OnIncomingDialog func(IDialog)
-	OnIncomingRefer  func(dialog IDialog, referTo sip.Uri, replaces *ReplacesInfo)
+	// OnIncomingRefer вызывается при получении REFER запроса (перевод вызова)
+	OnIncomingRefer func(dialog IDialog, referTo sip.Uri, replaces *ReplacesInfo)
 }
 
-// Stack основная структура SIP стека
+// Stack представляет основную реализацию SIP стека.
+//
+// Объединяет все компоненты для полноценной работы с SIP:
+//   - Транспортный слой (sipgo)
+//   - Управление диалогами
+//   - Обработка транзакций
+//   - Колбэки для приложения
+//
+// Все операции являются thread-safe.
 type Stack struct {
 	// sipgo компоненты
 	ua     *sipgo.UserAgent
@@ -71,7 +116,22 @@ type Stack struct {
 	cancel context.CancelFunc
 }
 
-// NewStack создает новый SIP стек
+// NewStack создает и инициализирует новый SIP стек с заданной конфигурацией.
+//
+// Выполняет полную инициализацию всех компонентов:
+//   - Валидация и установка значений по умолчанию для конфигурации
+//   - Создание транспортного слоя (UA, Server, Client)
+//   - Инициализация внутренних структур (карта диалогов, пул транзакций)
+//   - Настройка Contact заголовка для исходящих запросов
+//
+// Параметры:
+//   - config: конфигурация стека (может быть nil для значений по умолчанию)
+//
+// Возвращает:
+//   - Инициализированный SIP стек готовый к запуску
+//   - Ошибку если конфигурация невалидна или не удалось создать компоненты
+//
+// После создания стек нужно запустить через Start() в отдельной горутине.
 func NewStack(config *StackConfig) (*Stack, error) {
 	if config == nil {
 		config = &StackConfig{

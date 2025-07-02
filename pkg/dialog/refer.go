@@ -9,7 +9,11 @@ import (
 	"github.com/emiago/sipgo/sip"
 )
 
-// ReferSubscription представляет подписку на события REFER
+// ReferSubscription представляет подписку на NOTIFY сообщения о статусе REFER операции.
+//
+// Когда отправляется REFER запрос, создается подписка для отслеживания
+// статуса выполнения перевода. Удаленная сторона отправляет NOTIFY
+// с информацией о прогрессе (например, "100 Trying", "200 OK").
 type ReferSubscription struct {
 	// ID подписки (CSeq для multiple REFER)
 	ID string
@@ -30,15 +34,27 @@ type ReferSubscription struct {
 	mutex sync.RWMutex
 }
 
-// ReplacesInfo содержит информацию для Replaces заголовка
+// ReplacesInfo содержит информацию для Replaces заголовка (RFC 3891).
+//
+// Используется для attended call transfer, когда нужно заменить
+// существующий диалог новым. Определяет, какой именно
+// диалог должен быть заменен.
 type ReplacesInfo struct {
-	CallID    string
-	FromTag   string
-	ToTag     string
+	// CallID идентификатор заменяемого диалога
+	CallID string
+	// FromTag тег From заменяемого диалога
+	FromTag string
+	// ToTag тег To заменяемого диалога
+	ToTag string
+	// EarlyOnly разрешает замену только для early диалогов (не confirmed)
 	EarlyOnly bool
 }
 
-// BuildReplacesHeader создает Replaces заголовок из ReplacesInfo
+// BuildReplacesHeader создает строку Replaces заголовка согласно RFC 3891.
+//
+// Формат: "<Call-ID>;from-tag=<from-tag>;to-tag=<to-tag>[;early-only]"
+//
+// Пример выхода: "abc123;from-tag=tag1;to-tag=tag2;early-only"
 func (r *ReplacesInfo) BuildReplacesHeader() string {
 	replaces := fmt.Sprintf("%s;from-tag=%s;to-tag=%s", r.CallID, r.FromTag, r.ToTag)
 	if r.EarlyOnly {
@@ -47,7 +63,16 @@ func (r *ReplacesInfo) BuildReplacesHeader() string {
 	return replaces
 }
 
-// ParseReplacesHeader парсит Replaces заголовок
+// ParseReplacesHeader парсит строку Replaces заголовка в структуру ReplacesInfo.
+//
+// Парсит строку вида: "<Call-ID>;from-tag=<from-tag>;to-tag=<to-tag>[;early-only]"
+//
+// Параметры:
+//   - header: строка Replaces заголовка
+//
+// Возвращает:
+//   - Распарсенную структуру ReplacesInfo
+//   - Ошибку если формат некорректный или отсутствуют обязательные параметры
 func ParseReplacesHeader(header string) (*ReplacesInfo, error) {
 	parts := strings.Split(header, ";")
 	if len(parts) < 3 {

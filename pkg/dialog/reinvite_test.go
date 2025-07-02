@@ -12,7 +12,9 @@ import (
 
 // TestReInviteOutgoing тестирует отправку re-INVITE
 func TestReInviteOutgoing(t *testing.T) {
-	ctx := context.Background()
+	// Добавляем таймаут для всего теста
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	// Создаем тестовые стеки
 	aliceConfig := &StackConfig{
@@ -43,8 +45,8 @@ func TestReInviteOutgoing(t *testing.T) {
 		t.Fatalf("Failed to create Bob stack: %v", err)
 	}
 
-	// Канал для отслеживания изменений SDP
-	sdpChangeChan := make(chan Body)
+	// Канал для отслеживания изменений SDP (буферизованный чтобы избежать deadlock)
+	sdpChangeChan := make(chan Body, 10)
 
 	// Bob принимает вызовы
 	bobStack.OnIncomingDialog(func(dialog IDialog) {
@@ -57,16 +59,24 @@ func TestReInviteOutgoing(t *testing.T) {
 		})
 	})
 
-	// Запускаем стеки
+	// Запускаем стеки с proper cleanup
 	if err := aliceStack.Start(ctx); err != nil {
 		t.Fatalf("Failed to start Alice stack: %v", err)
 	}
-	defer aliceStack.Shutdown(ctx)
+	defer func() {
+		if err := aliceStack.Shutdown(ctx); err != nil {
+			t.Logf("Warning: Alice stack shutdown error: %v", err)
+		}
+	}()
 
 	if err := bobStack.Start(ctx); err != nil {
 		t.Fatalf("Failed to start Bob stack: %v", err)
 	}
-	defer bobStack.Shutdown(ctx)
+	defer func() {
+		if err := bobStack.Shutdown(ctx); err != nil {
+			t.Logf("Warning: Bob stack shutdown error: %v", err)
+		}
+	}()
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -128,6 +138,9 @@ a=rtpmap:18 G729/8000`)
 		t.Fatalf("Failed to send re-INVITE: %v", err)
 	}
 
+	// Даем время для отправки ACK до shutdown стека
+	time.Sleep(100 * time.Millisecond)
+
 	// Bob должен получить новое SDP
 	select {
 	case body := <-sdpChangeChan:
@@ -148,7 +161,9 @@ a=rtpmap:18 G729/8000`)
 
 // TestReInviteIncoming тестирует обработку входящего re-INVITE
 func TestReInviteIncoming(t *testing.T) {
-	ctx := context.Background()
+	// Добавляем таймаут для всего теста
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	// Создаем тестовые стеки
 	aliceConfig := &StackConfig{
@@ -172,8 +187,8 @@ func TestReInviteIncoming(t *testing.T) {
 	aliceStack, _ := NewStack(aliceConfig)
 	bobStack, _ := NewStack(bobConfig)
 
-	// Канал для отслеживания изменений SDP у Alice
-	aliceSdpChangeChan := make(chan Body)
+	// Канал для отслеживания изменений SDP у Alice (буферизованный чтобы избежать deadlock)
+	aliceSdpChangeChan := make(chan Body, 10)
 
 	// Alice принимает вызовы и отслеживает изменения
 	aliceStack.OnIncomingDialog(func(dialog IDialog) {
@@ -190,11 +205,24 @@ func TestReInviteIncoming(t *testing.T) {
 		dialog.Accept(ctx)
 	})
 
-	// Запускаем стеки
-	aliceStack.Start(ctx)
-	defer aliceStack.Shutdown(ctx)
-	bobStack.Start(ctx)
-	defer bobStack.Shutdown(ctx)
+	// Запускаем стеки с proper cleanup
+	if err := aliceStack.Start(ctx); err != nil {
+		t.Fatalf("Failed to start Alice stack: %v", err)
+	}
+	defer func() {
+		if err := aliceStack.Shutdown(ctx); err != nil {
+			t.Logf("Warning: Alice stack shutdown error: %v", err)
+		}
+	}()
+
+	if err := bobStack.Start(ctx); err != nil {
+		t.Fatalf("Failed to start Bob stack: %v", err)
+	}
+	defer func() {
+		if err := bobStack.Shutdown(ctx); err != nil {
+			t.Logf("Warning: Bob stack shutdown error: %v", err)
+		}
+	}()
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -235,6 +263,9 @@ a=sendrecv`)
 		t.Fatalf("Failed to send re-INVITE: %v", err)
 	}
 
+	// Даем время для отправки ACK до shutdown стека
+	time.Sleep(100 * time.Millisecond)
+
 	// Alice должна получить новое SDP
 	select {
 	case body := <-aliceSdpChangeChan:
@@ -267,7 +298,9 @@ func TestReInviteInWrongState(t *testing.T) {
 
 // TestReInviteHold тестирует постановку на удержание через re-INVITE
 func TestReInviteHold(t *testing.T) {
-	ctx := context.Background()
+	// Добавляем таймаут для всего теста
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	// Создаем тестовые стеки
 	aliceConfig := &StackConfig{
@@ -291,8 +324,8 @@ func TestReInviteHold(t *testing.T) {
 	aliceStack, _ := NewStack(aliceConfig)
 	bobStack, _ := NewStack(bobConfig)
 
-	// Канал для отслеживания hold/unhold
-	holdChan := make(chan bool)
+	// Канал для отслеживания hold/unhold (буферизованный чтобы избежать deadlock)
+	holdChan := make(chan bool, 10)
 
 	// Bob отслеживает изменения SDP
 	bobStack.OnIncomingDialog(func(dialog IDialog) {
@@ -309,11 +342,24 @@ func TestReInviteHold(t *testing.T) {
 		})
 	})
 
-	// Запускаем стеки
-	aliceStack.Start(ctx)
-	defer aliceStack.Shutdown(ctx)
-	bobStack.Start(ctx)
-	defer bobStack.Shutdown(ctx)
+	// Запускаем стеки с proper cleanup
+	if err := aliceStack.Start(ctx); err != nil {
+		t.Fatalf("Failed to start Alice stack: %v", err)
+	}
+	defer func() {
+		if err := aliceStack.Shutdown(ctx); err != nil {
+			t.Logf("Warning: Alice stack shutdown error: %v", err)
+		}
+	}()
+
+	if err := bobStack.Start(ctx); err != nil {
+		t.Fatalf("Failed to start Bob stack: %v", err)
+	}
+	defer func() {
+		if err := bobStack.Shutdown(ctx); err != nil {
+			t.Logf("Warning: Bob stack shutdown error: %v", err)
+		}
+	}()
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -365,6 +411,9 @@ a=sendonly`)
 		t.Fatalf("Failed to send hold re-INVITE: %v", err)
 	}
 
+	// Даем время для отправки ACK до проверки результата
+	time.Sleep(100 * time.Millisecond)
+
 	// Bob должен получить hold
 	select {
 	case onHold := <-holdChan:
@@ -394,6 +443,9 @@ a=sendrecv`)
 	if err != nil {
 		t.Fatalf("Failed to send unhold re-INVITE: %v", err)
 	}
+
+	// Даем время для отправки ACK до проверки результата
+	time.Sleep(100 * time.Millisecond)
 
 	// Bob должен получить unhold
 	select {

@@ -1,3 +1,66 @@
+// Package dialog предоставляет SIP диалог менеджмент согласно RFC 3261.
+//
+// Пакет реализует управление SIP диалогами с поддержкой UAC (User Agent Client)
+// и UAS (User Agent Server) ролей. Включает полную поддержку состояний диалога,
+// управление транзакциями, REFER для перевода вызовов и thread-safe операции.
+//
+// Основные компоненты:
+//   - Stack: SIP стек для управления диалогами и транспортом
+//   - Dialog: представляет SIP диалог с полным жизненным циклом
+//   - DialogState: состояния диалога (Init, Trying, Ringing, Established, Terminated)
+//
+// Пример использования (исходящий вызов):
+//
+//	config := &StackConfig{
+//		Transport: DefaultTransportConfig(),
+//		UserAgent: "MyApp/1.0",
+//	}
+//	stack, err := NewStack(config)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	// Запуск стека
+//	ctx := context.Background()
+//	go stack.Start(ctx)
+//
+//	// Создание исходящего вызова
+//	targetURI, _ := sip.ParseUri("sip:user@example.com")
+//	sdpBody := NewBody("application/sdp", []byte("v=0..."))
+//	opts := InviteOpts{Body: sdpBody}
+//
+//	dialog, err := stack.NewInvite(ctx, targetURI, opts)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	// Ожидание ответа
+//	err = dialog.WaitAnswer(ctx)
+//	if err != nil {
+//		log.Printf("Вызов не удался: %v", err)
+//		return
+//	}
+//
+//	// Диалог установлен
+//	log.Printf("Вызов успешно установлен")
+//
+// Пример использования (входящий вызов):
+//
+//	stack.OnIncomingDialog(func(dialog IDialog) {
+//		// Автоматически принимаем вызов
+//		go func() {
+//			time.Sleep(2 * time.Second) // имитация рингтона
+//
+//			sdpAnswer := NewBody("application/sdp", []byte("v=0..."))
+//			err := dialog.Accept(context.Background(), func(resp *sip.Response) {
+//				resp.SetBody(sdpAnswer.Data())
+//				resp.AppendHeader(sip.NewHeader("Content-Type", sdpAnswer.ContentType()))
+//			})
+//			if err != nil {
+//				log.Printf("Ошибка принятия вызова: %v", err)
+//			}
+//		}()
+//	})
 package dialog
 
 import (
@@ -11,21 +74,46 @@ import (
 	"github.com/looplab/fsm"
 )
 
+// DialogState представляет состояние SIP диалога согласно RFC 3261.
+//
+// Состояния диалога следуют стандартной машине состояний SIP:
+//   - Init: начальное состояние перед отправкой/получением INVITE
+//   - Trying: исходящий INVITE отправлен, ожидается ответ
+//   - Ringing: получен предварительный ответ (180, 183) или входящий вызов
+//   - Established: диалог установлен (200 OK + ACK)
+//   - Terminated: диалог завершен (BYE, ошибка, таймаут)
+//
+// Переходы состояний:
+//
+//	UAC (исходящий): Init → Trying → Ringing → Established → Terminated
+//	UAS (входящий): Init → Ringing → Established → Terminated
 type DialogState int
 
 const (
-	// DialogStateInit начальное состояние
+	// DialogStateInit - начальное состояние диалога.
+	// Диалог создан, но INVITE еще не отправлен/получен.
 	DialogStateInit DialogState = iota
-	// DialogStateTrying состояние когда идет вызов
+
+	// DialogStateTrying - состояние исходящего вызова (UAC).
+	// INVITE отправлен, ожидается предварительный или финальный ответ.
 	DialogStateTrying
-	// DialogStateRinging состояние когда пришел ответ 180/183 или входящий вызов
+
+	// DialogStateRinging - состояние ожидания ответа.
+	// Для UAC: получен 180/183 ответ
+	// Для UAS: получен INVITE, можно принять или отклонить
 	DialogStateRinging
-	// DialogStateEstablished когда получен 200 OK
+
+	// DialogStateEstablished - диалог успешно установлен.
+	// Получен 200 OK, отправлен ACK, медиа поток активен.
 	DialogStateEstablished
-	// DialogStateTerminated завершенный диалог
+
+	// DialogStateTerminated - диалог завершен.
+	// Отправлен/получен BYE, или произошла ошибка, или таймаут.
 	DialogStateTerminated
 )
 
+// String возвращает строковое представление состояния диалога.
+// Реализует интерфейс fmt.Stringer для удобства отладки и логирования.
 func (s DialogState) String() string {
 	switch s {
 	case DialogStateInit:
@@ -43,20 +131,48 @@ func (s DialogState) String() string {
 	}
 }
 
-// SimpleBody простая реализация интерфейса Body
+// SimpleBody - простая реализация интерфейса Body для SIP сообщений.
+//
+// Используется для передачи тела сообщения (например, SDP) в SIP запросах и ответах.
+// Содержит тип контента (Content-Type) и сами данные.
 type SimpleBody struct {
 	contentType string
 	data        []byte
 }
 
+// ContentType возвращает тип содержимого (Content-Type) тела сообщения.
 func (b *SimpleBody) ContentType() string {
 	return b.contentType
 }
 
+// Data возвращает данные тела сообщения в виде байтового массива.
 func (b *SimpleBody) Data() []byte {
 	return b.data
 }
 
+// Dialog представляет SIP диалог согласно RFC 3261, раздел 12.
+//
+// Диалог - это peer-to-peer SIP отношение между двумя UA, которое длится
+// некоторое время. Он устанавливается через обмен SIP сообщениями (INVITE)
+// и идентифицируется комбинацией Call-ID, локального и удаленного тега.
+//
+// Структура содержит:
+//   - Идентификаторы диалога (Call-ID, локальный и удаленный теги)
+//   - Информацию о маршрутизации (Route Set, Remote Target, Contact)
+//   - Управление транзакциями (INVITE, non-INVITE)
+//   - Машину состояний (FSM) для отслеживания состояния диалога
+//   - Колбэки для уведомлений о событиях
+//   - Thread-safe операции через мьютексы
+//
+// Диалог может быть:
+//   - UAC (User Agent Client) - для исходящих вызовов
+//   - UAS (User Agent Server) - для входящих вызовов
+//
+// Основные операции:
+//   - Accept/Reject - принятие/отклонение входящего вызова
+//   - Bye - завершение диалога
+//   - Refer - перевод вызова
+//   - ReInvite - изменение параметров сессии
 type Dialog struct {
 	// Ссылка на стек
 	stack *Stack
@@ -113,22 +229,41 @@ type Dialog struct {
 	mutex sync.RWMutex
 }
 
+// IsUAC возвращает true, если диалог является User Agent Client (исходящим вызовом).
 func (d *Dialog) IsUAC() bool {
 	return d.isUAC
 }
 
+// IsUAS возвращает true, если диалог является User Agent Server (входящим вызовом).
 func (d *Dialog) IsUAS() bool {
 	return !d.isUAC
 }
 
+// Key возвращает уникальный ключ диалога для идентификации.
+// Ключ состоит из Call-ID, локального и удаленного тегов.
 func (d *Dialog) Key() DialogKey {
 	return d.key
 }
 
+// State возвращает текущее состояние диалога.
 func (d *Dialog) State() DialogState {
 	return d.state
 }
 
+// Accept принимает входящий INVITE и отправляет 200 OK ответ.
+//
+// Метод может быть вызван только для UAS диалогов в состоянии Ringing.
+// После успешного выполнения диалог переходит в состояние Established.
+//
+// Параметры:
+//   - ctx: контекст для отмены операции
+//   - opts: опции для настройки ответа (тело, заголовки)
+//
+// Возвращает ошибку если:
+//   - диалог не в состоянии Ringing
+//   - диалог не является UAS
+//   - нет активной INVITE транзакции
+//   - не удалось отправить ответ
 func (d *Dialog) Accept(ctx context.Context, opts ...ResponseOpt) error {
 	// Проверяем, что диалог в состоянии Ringing
 	if d.State() != DialogStateRinging {
@@ -168,6 +303,20 @@ func (d *Dialog) Accept(ctx context.Context, opts ...ResponseOpt) error {
 	return nil
 }
 
+// Reject отклоняет входящий INVITE с указанным кодом ответа.
+//
+// Метод может быть вызван только для UAS диалогов в состоянии Ringing.
+// После успешного выполнения диалог переходит в состояние Terminated.
+//
+// Параметры:
+//   - ctx: контекст для отмены операции
+//   - code: код ответа (обычно 4xx, 5xx или 6xx)
+//   - reason: текстовое описание причины отклонения
+//
+// Примеры кодов:
+//   - 486 "Busy Here" - занято
+//   - 603 "Decline" - отклонено пользователем
+//   - 404 "Not Found" - пользователь не найден
 func (d *Dialog) Reject(ctx context.Context, code int, reason string) error {
 	// Проверяем, что диалог в состоянии Ringing
 	if d.State() != DialogStateRinging {
@@ -235,6 +384,21 @@ func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts R
 	return d.SendReferWithReplaces(ctx, targetURI, replaceDialog, &opts)
 }
 
+// Bye завершает установленный диалог отправкой BYE запроса.
+//
+// Метод может быть вызван только для диалогов в состоянии Established.
+// После успешного выполнения диалог переходит в состояние Terminated
+// и удаляется из стека.
+//
+// Параметры:
+//   - ctx: контекст для отмены операции
+//   - reason: причина завершения (может быть пустой)
+//
+// Возвращает ошибку если:
+//   - диалог не в состоянии Established
+//   - не удалось создать BYE запрос
+//   - BYE был отклонен удаленной стороной
+//   - произошел таймаут транзакции
 func (d *Dialog) Bye(ctx context.Context, reason string) error {
 	// Проверяем, что диалог в состоянии Established
 	if d.State() != DialogStateEstablished {
@@ -278,10 +442,14 @@ func (d *Dialog) Bye(ctx context.Context, reason string) error {
 	return nil
 }
 
+// OnStateChange регистрирует колбэк для уведомления о смене состояния диалога.
+// Колбэк вызывается при каждой смене состояния диалога.
 func (d *Dialog) OnStateChange(f func(DialogState)) {
 	d.stateChangeCallbacks = append(d.stateChangeCallbacks, f)
 }
 
+// OnBody регистрирует колбэк для обработки тела SIP сообщений.
+// Колбэк вызывается при получении сообщения с телом (например, SDP).
 func (d *Dialog) OnBody(f func(Body)) {
 	d.bodyCallbacks = append(d.bodyCallbacks, f)
 }
@@ -383,6 +551,11 @@ func (d *Dialog) ReInvite(ctx context.Context, opts InviteOpts) error {
 	return fmt.Errorf("no response received for re-INVITE")
 }
 
+// Close немедленно завершает диалог без отправки BYE.
+//
+// Отменяет контекст, закрывает каналы и освобождает ресурсы.
+// Используется для экстренного завершения без соблюдения SIP процедур.
+// Для корректного завершения используйте Bye().
 func (d *Dialog) Close() error {
 	// Отменяем контекст
 	if d.cancel != nil {

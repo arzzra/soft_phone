@@ -248,7 +248,9 @@ func TestCallRejection(t *testing.T) {
 
 // TestMultipleConcurrentCalls тестирует множественные одновременные вызовы
 func TestMultipleConcurrentCalls(t *testing.T) {
-	ctx := context.Background()
+	// Добавляем таймаут для всего теста
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	// Создаем конфигурацию для сервера
 	serverConfig := &StackConfig{
@@ -265,8 +267,10 @@ func TestMultipleConcurrentCalls(t *testing.T) {
 	serverStack.Start(ctx)
 	defer serverStack.Shutdown(ctx)
 
-	// Счетчик активных диалогов
+	// Счетчик активных диалогов на сервере
 	var activeDialogs sync.WaitGroup
+	// Счетчик клиентских горутин
+	var clientGoroutines sync.WaitGroup
 	dialogCount := 5
 
 	// Сервер принимает все вызовы
@@ -287,7 +291,10 @@ func TestMultipleConcurrentCalls(t *testing.T) {
 
 	// Создаем несколько клиентов
 	for i := 0; i < dialogCount; i++ {
+		clientGoroutines.Add(1)
 		go func(clientID int) {
+			defer clientGoroutines.Done()
+
 			// Создаем клиента
 			clientConfig := &StackConfig{
 				Transport: &TransportConfig{
@@ -304,11 +311,17 @@ func TestMultipleConcurrentCalls(t *testing.T) {
 				return
 			}
 
+			// Гарантируем cleanup даже при паниках
+			defer func() {
+				if err := clientStack.Shutdown(ctx); err != nil {
+					t.Logf("Client %d: Warning during shutdown: %v", clientID, err)
+				}
+			}()
+
 			if err := clientStack.Start(ctx); err != nil {
 				t.Errorf("Client %d: Failed to start stack: %v", clientID, err)
 				return
 			}
-			defer clientStack.Shutdown(ctx)
 
 			// Звоним на сервер
 			serverURI := sip.Uri{
@@ -343,8 +356,35 @@ func TestMultipleConcurrentCalls(t *testing.T) {
 		}(i)
 	}
 
-	// Ждем завершения всех вызовов
-	activeDialogs.Wait()
+	// Ждем завершения всех клиентских горутин с таймаутом
+	done := make(chan struct{})
+	go func() {
+		clientGoroutines.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Log("All client goroutines completed")
+	case <-ctx.Done():
+		t.Error("Test timeout waiting for client goroutines")
+		return
+	}
+
+	// Ждем завершения всех серверных диалогов с таймаутом
+	done2 := make(chan struct{})
+	go func() {
+		activeDialogs.Wait()
+		close(done2)
+	}()
+
+	select {
+	case <-done2:
+		t.Log("All server dialogs completed")
+	case <-time.After(5 * time.Second):
+		t.Error("Timeout waiting for server dialogs to complete")
+		return
+	}
 
 	// Проверяем что все диалоги завершены
 	serverStack.mutex.RLock()
