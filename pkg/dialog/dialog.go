@@ -63,6 +63,36 @@
 //
 //	log.Printf("Перевод принят, подписка ID: %s", subscription.ID)
 //
+// # Thread Safety
+//
+// Все операции в пакете dialog являются thread-safe и могут безопасно
+// использоваться из разных горутин:
+//
+//   - Dialog.State(), Dialog.Close() защищены мьютексами
+//   - Dialog.OnStateChange(), Dialog.OnBody() - thread-safe регистрация колбэков
+//   - Stack операции (OnIncomingDialog, NewInvite) защищены от race conditions
+//   - Колбэки защищены от паник через recover механизм
+//   - Close() использует sync.Once для безопасного множественного вызова
+//
+// Пример concurrent использования:
+//
+//	// Безопасно из разных горутин
+//	go func() {
+//		for {
+//			state := dialog.State() // thread-safe чтение
+//			if state == DialogStateTerminated {
+//				break
+//			}
+//			time.Sleep(100 * time.Millisecond)
+//		}
+//	}()
+//
+//	go func() {
+//		dialog.OnStateChange(func(state DialogState) {
+//			log.Printf("New state: %s", state) // колбэк защищен от паник
+//		})
+//	}()
+//
 // Пример использования (входящий вызов):
 //
 //	stack.OnIncomingDialog(func(dialog IDialog) {
@@ -80,6 +110,20 @@
 //			}
 //		}()
 //	})
+//
+// Дополнительные примеры concurrent безопасности:
+//
+//	// Безопасное завершение из нескольких горутин
+//	go func() {
+//		dialog.Close() // sync.Once защищает от множественного вызова
+//	}()
+//	go func() {
+//		dialog.Close() // безопасно - вызовется только один раз
+//	}()
+//
+//	// Регистрация колбэков из разных горутин
+//	go dialog.OnStateChange(func(state DialogState) { /* обработка 1 */ })
+//	go dialog.OnBody(func(body Body) { /* обработка 2 */ })
 package dialog
 
 import (
@@ -270,6 +314,9 @@ func (d *Dialog) Key() DialogKey {
 }
 
 // State возвращает текущее состояние диалога.
+//
+// Метод является thread-safe и может безопасно вызываться
+// из разных горутин одновременно.
 func (d *Dialog) State() DialogState {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
@@ -476,7 +523,9 @@ func (d *Dialog) Bye(ctx context.Context, reason string) error {
 }
 
 // OnStateChange регистрирует колбэк для уведомления о смене состояния диалога.
+//
 // Колбэк вызывается при каждой смене состояния диалога.
+// Метод является thread-safe. Колбэки защищены от паник через recover.
 func (d *Dialog) OnStateChange(f func(DialogState)) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
@@ -484,7 +533,9 @@ func (d *Dialog) OnStateChange(f func(DialogState)) {
 }
 
 // OnBody регистрирует колбэк для обработки тела SIP сообщений.
+//
 // Колбэк вызывается при получении сообщения с телом (например, SDP).
+// Метод является thread-safe. Колбэки вызываются безопасно.
 func (d *Dialog) OnBody(f func(Body)) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
@@ -593,6 +644,9 @@ func (d *Dialog) ReInvite(ctx context.Context, opts InviteOpts) error {
 // Отменяет контекст, закрывает каналы и освобождает ресурсы.
 // Используется для экстренного завершения без соблюдения SIP процедур.
 // Для корректного завершения используйте Bye().
+//
+// Метод является thread-safe и защищен sync.Once - может безопасно
+// вызываться из разных горутин одновременно. Повторные вызовы игнорируются.
 func (d *Dialog) Close() error {
 	var err error
 	d.closeOnce.Do(func() {
