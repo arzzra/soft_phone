@@ -387,9 +387,7 @@ func TestMultipleConcurrentCalls(t *testing.T) {
 	}
 
 	// Проверяем что все диалоги завершены
-	serverStack.mutex.RLock()
-	remainingDialogs := len(serverStack.dialogs)
-	serverStack.mutex.RUnlock()
+	remainingDialogs := serverStack.dialogs.Count()
 
 	if remainingDialogs != 0 {
 		t.Errorf("Server should have 0 active dialogs, has %d", remainingDialogs)

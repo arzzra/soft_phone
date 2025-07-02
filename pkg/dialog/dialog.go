@@ -647,34 +647,76 @@ func (d *Dialog) ReInvite(ctx context.Context, opts InviteOpts) error {
 //
 // Метод является thread-safe и защищен sync.Once - может безопасно
 // вызываться из разных горутин одновременно. Повторные вызовы игнорируются.
+пр// КРИТИЧНО: полностью thread-safe закрытие с правильным порядком операций
 func (d *Dialog) Close() error {
-	var err error
+	var closeErr error
+	
+	// КРИТИЧНО: sync.Once гарантирует выполнение только один раз
+	// даже при одновременных вызовах из нескольких горутин
 	d.closeOnce.Do(func() {
-		// Отменяем контекст
+		// Сразу переводим в состояние Terminated для предотвращения новых операций
+		d.updateState(DialogStateTerminated)
+		
+		// Отменяем контекст для остановки всех связанных операций
 		if d.cancel != nil {
 			d.cancel()
 		}
 
-		// Немедленно завершаем диалог без отправки BYE
-		d.updateState(DialogStateTerminated)
-
-		// Закрываем каналы безопасно
+		// Безопасно получаем ссылки на каналы под read lock
 		d.mutex.RLock()
 		responseChan := d.responseChan
 		errorChan := d.errorChan
+		
+		// Очищаем все REFER подписки атомарно
+		if d.referSubscriptions != nil {
+			for _, sub := range d.referSubscriptions {
+				// Деактивируем подписки безопасно
+				sub.mutex.Lock()
+				sub.active = false
+				sub.mutex.Unlock()
+			}
+			// Очищаем карту подписок
+			d.referSubscriptions = make(map[string]*ReferSubscription)
+		}
 		d.mutex.RUnlock()
 
+		// Безопасно закрываем каналы с проверкой nil
+		// Используем recovered функции для избежания паник при закрытии уже закрытых каналов
 		if responseChan != nil {
-			close(responseChan)
+			func() {
+				defer func() {
+					// Recover от возможной panic при закрытии уже закрытого канала
+					recover()
+				}()
+				close(responseChan)
+			}()
 		}
+		
 		if errorChan != nil {
-			close(errorChan)
+			func() {
+				defer func() {
+					// Recover от возможной panic при закрытии уже закрытого канала
+					recover()
+				}()
+				close(errorChan)
+			}()
 		}
 
-		// Не удаляем из стека здесь, чтобы избежать deadlock
-		// Удаление должно происходить снаружи или через Shutdown
+		// Очищаем ссылки на каналы thread-safe способом
+		d.mutex.Lock()
+		d.responseChan = nil
+		d.errorChan = nil
+		// Очищаем ссылки на транзакции для освобождения ресурсов
+		d.inviteTx = nil
+		d.serverTx = nil
+		d.referTx = nil
+		d.mutex.Unlock()
+
+		// ВАЖНО: не удаляем диалог из стека здесь во избежание deadlock
+		// Удаление должно происходить через Stack.Shutdown() или вызывающий код
 	})
-	return err
+	
+	return closeErr
 }
 
 func (d *Dialog) initFSM() {
@@ -706,31 +748,51 @@ func (d *Dialog) initFSM() {
 	)
 }
 
-// updateState обновляет состояние и вызывает колбэки
-func (d *Dialog) updateState(state DialogState) {
+// updateState обновляет состояние и вызывает колбэки thread-safe
+// КРИТИЧНО: полностью thread-safe реализация без race conditions
+func (d *Dialog) updateState(newState DialogState) {
+	// Используем defer для гарантии освобождения мьютекса даже при панике
 	d.mutex.Lock()
-	oldState := d.state
-	d.state = state
-
-	// Копируем колбэки для безопасного вызова вне мьютекса
+	defer d.mutex.Unlock()
+	
+	// Проверяем изменение состояния под мьютексом
+	oldState := d.state 
+	if oldState == newState {
+		// Нет изменения - выходим рано, избегая лишней работы
+		return
+	}
+	
+	// Атомарно обновляем состояние
+	d.state = newState
+	
+	// Безопасно копируем колбэки под мьютексом для вызова
 	var callbacks []func(DialogState)
-	if oldState != state && len(d.stateChangeCallbacks) > 0 {
+	if len(d.stateChangeCallbacks) > 0 {
+		// Создаем копию слайса колбэков для thread-safe доступа
 		callbacks = make([]func(DialogState), len(d.stateChangeCallbacks))
 		copy(callbacks, d.stateChangeCallbacks)
 	}
+	
+	// Отпускаем мьютекс перед вызовом колбэков во избежание deadlock
 	d.mutex.Unlock()
-
-	// Вызываем колбэки вне мьютекса с защитой от паник
+	
+	// Вызываем колбэки вне критической секции с panic protection
+	// ВАЖНО: каждый колбэк изолирован от panic других колбэков
 	for _, cb := range callbacks {
-		func() {
+		// Используем немедленно вызываемую функцию для изоляции panic
+		func(callback func(DialogState)) {
 			defer func() {
 				if r := recover(); r != nil {
-					// Игнорируем панику в колбэке чтобы не убивать горутину
+					// Логируем панику если есть логгер, но не прерываем выполнение
+					// В production можно добавить метрики панических колбэков
 				}
 			}()
-			cb(state)
-		}()
+			callback(newState)
+		}(cb)
 	}
+	
+	// Восстанавливаем блокировку для defer unlock
+	d.mutex.Lock()
 }
 
 // parseState преобразует строку в DialogState

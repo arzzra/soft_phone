@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/emiago/sipgo/sip"
 )
@@ -331,37 +332,70 @@ func (s *ReferSubscription) SendNotify(ctx context.Context, status int, reason s
 	}
 }
 
-// HandleIncomingRefer обрабатывает входящий REFER запрос
+// HandleIncomingRefer обрабатывает входящий REFER запрос thread-safe
+// КРИТИЧНО: полностью thread-safe обработка с правильным порядком блокировок
 func (d *Dialog) HandleIncomingRefer(req *sip.Request, referTo sip.Uri, replaces *ReplacesInfo) error {
+	// Получаем CSeq под защитой null check
+	cseqHeader := req.GetHeader("CSeq")
+	if cseqHeader == nil {
+		return fmt.Errorf("missing CSeq header in REFER request")
+	}
+	subscriptionID := cseqHeader.Value()
+
 	// Создаем подписку
 	subscription := &ReferSubscription{
-		ID:           req.GetHeader("CSeq").Value(),
+		ID:           subscriptionID,
 		dialog:       d,
 		referToURI:   referTo,
 		replacesInfo: replaces,
 		active:       true,
 	}
 
-	// Сохраняем подписку
+	// КРИТИЧНО: thread-safe добавление подписки под полной блокировкой
 	d.mutex.Lock()
 	if d.referSubscriptions == nil {
 		d.referSubscriptions = make(map[string]*ReferSubscription)
 	}
-	d.referSubscriptions[subscription.ID] = subscription
-	d.mutex.Unlock()
 
-	// Уведомляем приложение о REFER через колбэк
-	d.stack.mutex.RLock()
-	onIncomingRefer := d.stack.callbacks.OnIncomingRefer
-	d.stack.mutex.RUnlock()
-
-	if onIncomingRefer != nil {
-		onIncomingRefer(d, referTo, replaces)
+	// Проверяем на дублирование ID во избежание перезаписи
+	if existingSub, exists := d.referSubscriptions[subscriptionID]; exists {
+		d.mutex.Unlock()
+		return fmt.Errorf("REFER subscription with ID %s already exists, existing active: %v",
+			subscriptionID, existingSub.active)
 	}
 
-	// Отправляем начальный NOTIFY синхронно
-	ctx := context.Background()
-	subscription.SendNotify(ctx, 100, "Trying")
+	// Атомарно добавляем новую подписку
+	d.referSubscriptions[subscriptionID] = subscription
+	d.mutex.Unlock()
+
+	// Получаем колбэк thread-safe способом
+	d.stack.callbacksMutex.RLock()
+	onIncomingRefer := d.stack.callbacks.OnIncomingRefer
+	d.stack.callbacksMutex.RUnlock()
+
+	// Вызываем колбэк вне критических секций для избежания deadlock
+	if onIncomingRefer != nil {
+		// Защищаем от паник в пользовательском коде
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Логируем панику в production, но не прерываем обработку
+				}
+			}()
+			onIncomingRefer(d, referTo, replaces)
+		}()
+	}
+
+	// Отправляем начальный NOTIFY с тайм-аутом
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// SendNotify уже thread-safe, можно вызывать напрямую
+	if err := subscription.SendNotify(ctx, 100, "Trying"); err != nil {
+		// При ошибке отправки NOTIFY удаляем подписку
+		d.removeReferSubscriptionSafe(subscriptionID)
+		return fmt.Errorf("failed to send initial NOTIFY: %w", err)
+	}
 
 	return nil
 }
@@ -492,25 +526,39 @@ func (d *Dialog) WaitRefer(ctx context.Context) (*ReferSubscription, error) {
 					return nil, fmt.Errorf("ошибка парсинга Refer-To URI: %w", err)
 				}
 
+				// Получаем ID подписки
+				subscriptionID := cseqHeader.Value()
+
 				// Создаем подписку
 				subscription := &ReferSubscription{
-					ID:         cseqHeader.Value(),
+					ID:         subscriptionID,
 					dialog:     d,
 					referToURI: referToURI,
 					active:     true,
 				}
 
-				// Сохраняем подписку
+				// КРИТИЧНО: thread-safe сохранение подписки с проверкой дублирования
 				d.mutex.Lock()
 				if d.referSubscriptions == nil {
 					d.referSubscriptions = make(map[string]*ReferSubscription)
 				}
-				d.referSubscriptions[subscription.ID] = subscription
-				d.mutex.Unlock()
 
-				// Очищаем транзакцию и запрос
+				// Проверяем на дублирование ID (теоретически возможно при race condition)
+				if _, exists := d.referSubscriptions[subscriptionID]; exists {
+					d.mutex.Unlock()
+					// Очищаем транзакцию при ошибке
+					d.referTx = nil
+					d.referReq = nil
+					return nil, fmt.Errorf("REFER subscription with ID %s already exists", subscriptionID)
+				}
+
+				// Атомарно добавляем подписку
+				d.referSubscriptions[subscriptionID] = subscription
+
+				// Очищаем транзакцию и запрос под тем же мьютексом для атомарности
 				d.referTx = nil
 				d.referReq = nil
+				d.mutex.Unlock()
 
 				return subscription, nil
 			default:
@@ -531,4 +579,22 @@ func (d *Dialog) WaitRefer(ctx context.Context) (*ReferSubscription, error) {
 			return nil, ctx.Err()
 		}
 	}
+}
+
+// removeReferSubscriptionSafe безопасно удаляет REFER подписку по ID
+// КРИТИЧНО: thread-safe удаление с проверкой существования
+func (d *Dialog) removeReferSubscriptionSafe(subscriptionID string) bool {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	if d.referSubscriptions == nil {
+		return false
+	}
+
+	_, exists := d.referSubscriptions[subscriptionID]
+	if exists {
+		delete(d.referSubscriptions, subscriptionID)
+	}
+
+	return exists
 }

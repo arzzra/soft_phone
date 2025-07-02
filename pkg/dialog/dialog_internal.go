@@ -11,18 +11,6 @@ import (
 	"github.com/emiago/sipgo/sip"
 )
 
-// generateTag генерирует уникальный тег для диалога
-func generateTag() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback to pseudorandom if crypto/rand fails
-		for i := range b {
-			b[i] = byte(time.Now().UnixNano() + int64(i))
-		}
-	}
-	return hex.EncodeToString(b)
-}
-
 // generateBranch генерирует уникальный branch для Via заголовка
 func generateBranch() string {
 	b := make([]byte, 8)
@@ -35,17 +23,8 @@ func generateBranch() string {
 	return "z9hG4bK" + hex.EncodeToString(b)
 }
 
-// generateCallID генерирует уникальный Call-ID
-func generateCallID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback to pseudorandom if crypto/rand fails
-		for i := range b {
-			b[i] = byte(time.Now().UnixNano() + int64(i))
-		}
-	}
-	return hex.EncodeToString(b) + "@softphone"
-}
+// ВАЖНО: generateCallID() и generateTag() перенесены в id_generator.go
+// для оптимизированной thread-safe генерации с пулированием
 
 // incrementCSeq увеличивает локальный CSeq для нового запроса
 func (d *Dialog) incrementCSeq() uint32 {

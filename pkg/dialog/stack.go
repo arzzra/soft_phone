@@ -88,11 +88,12 @@ type StackCallbacks struct {
 //
 // Объединяет все компоненты для полноценной работы с SIP:
 //   - Транспортный слой (sipgo)
-//   - Управление диалогами
+//   - Управление диалогами через sharded map
 //   - Обработка транзакций
 //   - Колбэки для приложения
 //
-// Все операции являются thread-safe.
+// Все операции являются thread-safe с высокой производительностью.
+// КРИТИЧНО: использует sharded dialog map для устранения mutex bottleneck
 type Stack struct {
 	// sipgo компоненты
 	ua     *sipgo.UserAgent
@@ -106,10 +107,10 @@ type Stack struct {
 	contact sip.ContactHeader
 
 	// внутренние структуры
-	dialogs      map[DialogKey]*Dialog
-	transactions *TransactionPool
-	callbacks    StackCallbacks
-	mutex        sync.RWMutex
+	dialogs        *ShardedDialogMap // КРИТИЧНО: sharded map вместо обычной карты
+	transactions   *TransactionPool
+	callbacks      StackCallbacks
+	callbacksMutex sync.RWMutex // КРИТИЧНО: отдельный мьютекс только для колбэков
 
 	// контекст для управления жизненным циклом
 	ctx    context.Context
@@ -160,7 +161,7 @@ func NewStack(config *StackConfig) (*Stack, error) {
 
 	return &Stack{
 		config:  config,
-		dialogs: make(map[DialogKey]*Dialog),
+		dialogs: NewShardedDialogMap(), // КРИТИЧНО: используем sharded map
 		transactions: &TransactionPool{
 			inviteTransactions: make(map[string]*Transaction),
 		},
@@ -168,25 +169,21 @@ func NewStack(config *StackConfig) (*Stack, error) {
 }
 
 // findDialogByKey ищет диалог по ключу (Call-ID + tags)
+// КРИТИЧНО: использует sharded map без глобальной блокировки
 func (s *Stack) findDialogByKey(key DialogKey) (*Dialog, bool) {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	dialog, exists := s.dialogs[key]
-	return dialog, exists
+	return s.dialogs.Get(key)
 }
 
 // addDialog добавляет диалог в пул с потокобезопасностью
+// КРИТИЧНО: использует sharded map для высокой производительности
 func (s *Stack) addDialog(key DialogKey, dialog *Dialog) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	s.dialogs[key] = dialog
+	s.dialogs.Set(key, dialog)
 }
 
 // removeDialog удаляет диалог из пула
+// КРИТИЧНО: использует sharded map без глобальной блокировки
 func (s *Stack) removeDialog(key DialogKey) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	delete(s.dialogs, key)
+	s.dialogs.Delete(key)
 }
 
 // findTransactionByBranch ищет INVITE транзакцию по branch ID
@@ -252,16 +249,18 @@ func (s *Stack) DialogByKey(key DialogKey) (Dialog, bool) {
 }
 
 // OnIncomingDialog устанавливает callback для входящих диалогов
+// КРИТИЧНО: использует отдельный мьютекс для колбэков
 func (s *Stack) OnIncomingDialog(callback func(IDialog)) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.callbacksMutex.Lock()
+	defer s.callbacksMutex.Unlock()
 	s.callbacks.OnIncomingDialog = callback
 }
 
 // OnIncomingRefer устанавливает callback для входящих REFER запросов
+// КРИТИЧНО: использует отдельный мьютекс для колбэков
 func (s *Stack) OnIncomingRefer(callback func(dialog IDialog, referTo sip.Uri, replaces *ReplacesInfo)) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.callbacksMutex.Lock()
+	defer s.callbacksMutex.Unlock()
 	s.callbacks.OnIncomingRefer = callback
 }
 
@@ -357,15 +356,16 @@ func (s *Stack) Shutdown(ctx context.Context) error {
 		s.cancel()
 	}
 
-	// Закрываем все активные диалоги
-	s.mutex.Lock()
-	for key, dialog := range s.dialogs {
+	// Закрываем все активные диалоги с использованием sharded map
+	// КРИТИЧНО: безопасная итерация и закрытие всех диалогов
+	s.dialogs.ForEach(func(key DialogKey, dialog *Dialog) {
 		if err := dialog.Close(); err != nil && s.config.Logger != nil {
 			s.config.Logger.Printf("Error closing dialog %v: %v", key, err)
 		}
-	}
-	s.dialogs = make(map[DialogKey]*Dialog)
-	s.mutex.Unlock()
+	})
+
+	// Очищаем все диалоги атомарно
+	s.dialogs.Clear()
 
 	// Очищаем транзакции
 	s.transactions.mutex.Lock()
@@ -384,14 +384,14 @@ func (s *Stack) Shutdown(ctx context.Context) error {
 }
 
 // NewInvite инициирует исходящий INVITE
+// КРИТИЧНО: использует sharded map для масштабируемости
 func (s *Stack) NewInvite(ctx context.Context, target sip.Uri, opts InviteOpts) (IDialog, error) {
-	// Проверка лимита диалогов
-	s.mutex.RLock()
-	dialogCount := len(s.dialogs)
-	s.mutex.RUnlock()
-
-	if s.config.MaxDialogs > 0 && dialogCount >= s.config.MaxDialogs {
-		return nil, fmt.Errorf("maximum number of dialogs reached: %d", s.config.MaxDialogs)
+	// Проверка лимита диалогов с sharded map
+	if s.config.MaxDialogs > 0 {
+		dialogCount := s.dialogs.Count()
+		if dialogCount >= s.config.MaxDialogs {
+			return nil, fmt.Errorf("maximum number of dialogs reached: %d", s.config.MaxDialogs)
+		}
 	}
 
 	// Создаем новый диалог

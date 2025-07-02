@@ -31,15 +31,14 @@ func (s *Stack) handleIncomingInvite(req *sip.Request, tx sip.ServerTransaction)
 			return
 		}
 
-		// Проверяем лимит диалогов
-		s.mutex.RLock()
-		dialogCount := len(s.dialogs)
-		s.mutex.RUnlock()
-
-		if s.config.MaxDialogs > 0 && dialogCount >= s.config.MaxDialogs {
-			resp := sip.NewResponseFromRequest(req, 503, "Max dialogs reached", nil)
-			tx.Respond(resp)
-			return
+		// Проверяем лимит диалогов с sharded map
+		if s.config.MaxDialogs > 0 {
+			dialogCount := s.dialogs.Count()
+			if dialogCount >= s.config.MaxDialogs {
+				resp := sip.NewResponseFromRequest(req, 503, "Max dialogs reached", nil)
+				tx.Respond(resp)
+				return
+			}
 		}
 
 		// Создаем новый диалог
@@ -118,9 +117,9 @@ func (s *Stack) handleIncomingInvite(req *sip.Request, tx sip.ServerTransaction)
 		}
 
 		// Уведомляем приложение о входящем диалоге
-		s.mutex.RLock()
+		s.callbacksMutex.RLock()
 		onIncomingDialog := s.callbacks.OnIncomingDialog
-		s.mutex.RUnlock()
+		s.callbacksMutex.RUnlock()
 
 		if onIncomingDialog != nil {
 			onIncomingDialog(dialog)
@@ -288,13 +287,17 @@ func (s *Stack) handleIncomingRefer(req *sip.Request, tx sip.ServerTransaction) 
 	// Отправляем 202 Accepted
 	accepted := sip.NewResponseFromRequest(req, 202, "Accepted", nil)
 	if err := tx.Respond(accepted); err != nil {
-		s.config.Logger.Printf("Failed to send 202 Accepted: %v", err)
+		if s.config.Logger != nil {
+			s.config.Logger.Printf("Failed to send 202 Accepted: %v", err)
+		}
 		return
 	}
 
 	// Обрабатываем REFER через HandleIncomingRefer
 	if err := dialog.HandleIncomingRefer(req, referToUri, replaces); err != nil {
-		s.config.Logger.Printf("Failed to handle incoming REFER: %v", err)
+		if s.config.Logger != nil {
+			s.config.Logger.Printf("Failed to handle incoming REFER: %v", err)
+		}
 	}
 }
 
