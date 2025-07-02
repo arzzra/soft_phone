@@ -351,16 +351,17 @@ func (d *Dialog) HandleIncomingRefer(req *sip.Request, referTo sip.Uri, replaces
 	d.mutex.Unlock()
 
 	// Уведомляем приложение о REFER через колбэк
-	if d.stack.callbacks.OnIncomingRefer != nil {
-		d.stack.callbacks.OnIncomingRefer(d, referTo, replaces)
+	d.stack.mutex.RLock()
+	onIncomingRefer := d.stack.callbacks.OnIncomingRefer
+	d.stack.mutex.RUnlock()
+
+	if onIncomingRefer != nil {
+		onIncomingRefer(d, referTo, replaces)
 	}
 
-	// Отправляем начальный NOTIFY
-	go func() {
-		ctx := context.Background()
-		// Уведомляем о начале обработки
-		subscription.SendNotify(ctx, 100, "Trying")
-	}()
+	// Отправляем начальный NOTIFY синхронно
+	ctx := context.Background()
+	subscription.SendNotify(ctx, 100, "Trying")
 
 	return nil
 }

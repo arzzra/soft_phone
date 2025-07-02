@@ -118,8 +118,12 @@ func (s *Stack) handleIncomingInvite(req *sip.Request, tx sip.ServerTransaction)
 		}
 
 		// Уведомляем приложение о входящем диалоге
-		if s.callbacks.OnIncomingDialog != nil {
-			s.callbacks.OnIncomingDialog(dialog)
+		s.mutex.RLock()
+		onIncomingDialog := s.callbacks.OnIncomingDialog
+		s.mutex.RUnlock()
+
+		if onIncomingDialog != nil {
+			onIncomingDialog(dialog)
 		}
 	} else {
 		// re-INVITE - ищем существующий диалог
@@ -325,7 +329,12 @@ func (s *Stack) handleReInvite(req *sip.Request, tx sip.ServerTransaction, dialo
 
 		// Уведомляем о новом теле
 		if d, ok := dialog.(*Dialog); ok {
-			for _, cb := range d.bodyCallbacks {
+			d.mutex.RLock()
+			callbacks := make([]func(Body), len(d.bodyCallbacks))
+			copy(callbacks, d.bodyCallbacks)
+			d.mutex.RUnlock()
+
+			for _, cb := range callbacks {
 				cb(body)
 			}
 		}

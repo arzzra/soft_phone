@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/emiago/sipgo/sip"
 )
@@ -13,21 +14,36 @@ import (
 // generateTag генерирует уникальный тег для диалога
 func generateTag() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to pseudorandom if crypto/rand fails
+		for i := range b {
+			b[i] = byte(time.Now().UnixNano() + int64(i))
+		}
+	}
 	return hex.EncodeToString(b)
 }
 
 // generateBranch генерирует уникальный branch для Via заголовка
 func generateBranch() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to pseudorandom if crypto/rand fails
+		for i := range b {
+			b[i] = byte(time.Now().UnixNano() + int64(i))
+		}
+	}
 	return "z9hG4bK" + hex.EncodeToString(b)
 }
 
 // generateCallID генерирует уникальный Call-ID
 func generateCallID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to pseudorandom if crypto/rand fails
+		for i := range b {
+			b[i] = byte(time.Now().UnixNano() + int64(i))
+		}
+	}
 	return hex.EncodeToString(b) + "@softphone"
 }
 
@@ -38,6 +54,9 @@ func (d *Dialog) incrementCSeq() uint32 {
 
 // buildRequest создает новый запрос в контексте диалога
 func (d *Dialog) buildRequest(method sip.RequestMethod) (*sip.Request, error) {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
 	// Определяем Request-URI
 	reqURI := d.remoteTarget
 	if reqURI.Host == "" {
@@ -126,6 +145,9 @@ func (d *Dialog) buildRequest(method sip.RequestMethod) (*sip.Request, error) {
 
 // processResponse обрабатывает ответ и обновляет состояние диалога
 func (d *Dialog) processResponse(resp *sip.Response) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
 	// Обновляем remote tag если его еще нет
 	if d.remoteTag == "" {
 		if d.isUAC {
@@ -222,6 +244,9 @@ func (d *Dialog) processResponse(resp *sip.Response) error {
 
 // createResponse создает ответ на запрос в контексте диалога
 func (d *Dialog) createResponse(req *sip.Request, statusCode int, reason string) *sip.Response {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+
 	resp := sip.NewResponseFromRequest(req, statusCode, reason, nil)
 
 	// Добавляем локальный tag в To для UAS

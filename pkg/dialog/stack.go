@@ -253,11 +253,15 @@ func (s *Stack) DialogByKey(key DialogKey) (Dialog, bool) {
 
 // OnIncomingDialog устанавливает callback для входящих диалогов
 func (s *Stack) OnIncomingDialog(callback func(IDialog)) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.callbacks.OnIncomingDialog = callback
 }
 
 // OnIncomingRefer устанавливает callback для входящих REFER запросов
 func (s *Stack) OnIncomingRefer(callback func(dialog IDialog, referTo sip.Uri, replaces *ReplacesInfo)) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.callbacks.OnIncomingRefer = callback
 }
 

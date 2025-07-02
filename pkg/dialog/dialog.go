@@ -248,6 +248,9 @@ type Dialog struct {
 
 	// Мьютекс для синхронизации
 	mutex sync.RWMutex
+
+	// Для предотвращения множественного вызова Close()
+	closeOnce sync.Once
 }
 
 // IsUAC возвращает true, если диалог является User Agent Client (исходящим вызовом).
@@ -268,6 +271,8 @@ func (d *Dialog) Key() DialogKey {
 
 // State возвращает текущее состояние диалога.
 func (d *Dialog) State() DialogState {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
 	return d.state
 }
 
@@ -296,12 +301,17 @@ func (d *Dialog) Accept(ctx context.Context, opts ...ResponseOpt) error {
 		return fmt.Errorf("accept может быть вызван только для UAS")
 	}
 
-	if d.serverTx == nil || d.inviteReq == nil {
+	d.mutex.RLock()
+	serverTx := d.serverTx
+	inviteReq := d.inviteReq
+	d.mutex.RUnlock()
+
+	if serverTx == nil || inviteReq == nil {
 		return fmt.Errorf("нет активной INVITE транзакции")
 	}
 
 	// Создаем 200 OK ответ
-	resp := d.createResponse(d.inviteReq, 200, "OK")
+	resp := d.createResponse(inviteReq, 200, "OK")
 
 	// Применяем опции
 	for _, opt := range opts {
@@ -309,13 +319,15 @@ func (d *Dialog) Accept(ctx context.Context, opts ...ResponseOpt) error {
 	}
 
 	// Отправляем ответ
-	err := d.serverTx.Respond(resp)
+	err := serverTx.Respond(resp)
 	if err != nil {
 		return fmt.Errorf("ошибка отправки 200 OK: %w", err)
 	}
 
 	// Сохраняем ответ
+	d.mutex.Lock()
 	d.inviteResp = resp
+	d.mutex.Unlock()
 	d.processResponse(resp)
 
 	// Обновляем состояние
@@ -466,12 +478,16 @@ func (d *Dialog) Bye(ctx context.Context, reason string) error {
 // OnStateChange регистрирует колбэк для уведомления о смене состояния диалога.
 // Колбэк вызывается при каждой смене состояния диалога.
 func (d *Dialog) OnStateChange(f func(DialogState)) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
 	d.stateChangeCallbacks = append(d.stateChangeCallbacks, f)
 }
 
 // OnBody регистрирует колбэк для обработки тела SIP сообщений.
 // Колбэк вызывается при получении сообщения с телом (например, SDP).
 func (d *Dialog) OnBody(f func(Body)) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
 	d.bodyCallbacks = append(d.bodyCallbacks, f)
 }
 
@@ -578,26 +594,33 @@ func (d *Dialog) ReInvite(ctx context.Context, opts InviteOpts) error {
 // Используется для экстренного завершения без соблюдения SIP процедур.
 // Для корректного завершения используйте Bye().
 func (d *Dialog) Close() error {
-	// Отменяем контекст
-	if d.cancel != nil {
-		d.cancel()
-	}
+	var err error
+	d.closeOnce.Do(func() {
+		// Отменяем контекст
+		if d.cancel != nil {
+			d.cancel()
+		}
 
-	// Немедленно завершаем диалог без отправки BYE
-	d.updateState(DialogStateTerminated)
+		// Немедленно завершаем диалог без отправки BYE
+		d.updateState(DialogStateTerminated)
 
-	// Закрываем каналы
-	if d.responseChan != nil {
-		close(d.responseChan)
-	}
-	if d.errorChan != nil {
-		close(d.errorChan)
-	}
+		// Закрываем каналы безопасно
+		d.mutex.RLock()
+		responseChan := d.responseChan
+		errorChan := d.errorChan
+		d.mutex.RUnlock()
 
-	// Не удаляем из стека здесь, чтобы избежать deadlock
-	// Удаление должно происходить снаружи или через Shutdown
+		if responseChan != nil {
+			close(responseChan)
+		}
+		if errorChan != nil {
+			close(errorChan)
+		}
 
-	return nil
+		// Не удаляем из стека здесь, чтобы избежать deadlock
+		// Удаление должно происходить снаружи или через Shutdown
+	})
+	return err
 }
 
 func (d *Dialog) initFSM() {
@@ -631,14 +654,28 @@ func (d *Dialog) initFSM() {
 
 // updateState обновляет состояние и вызывает колбэки
 func (d *Dialog) updateState(state DialogState) {
+	d.mutex.Lock()
 	oldState := d.state
 	d.state = state
 
-	// Уведомляем о смене состояния
-	if oldState != state {
-		for _, cb := range d.stateChangeCallbacks {
+	// Копируем колбэки для безопасного вызова вне мьютекса
+	var callbacks []func(DialogState)
+	if oldState != state && len(d.stateChangeCallbacks) > 0 {
+		callbacks = make([]func(DialogState), len(d.stateChangeCallbacks))
+		copy(callbacks, d.stateChangeCallbacks)
+	}
+	d.mutex.Unlock()
+
+	// Вызываем колбэки вне мьютекса с защитой от паник
+	for _, cb := range callbacks {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Игнорируем панику в колбэке чтобы не убивать горутину
+				}
+			}()
 			cb(state)
-		}
+		}()
 	}
 }
 
@@ -673,14 +710,18 @@ func (d *Dialog) WaitAnswer(ctx context.Context) error {
 		return fmt.Errorf("WaitAnswer может быть вызван только для UAC")
 	}
 
-	if d.inviteTx == nil {
+	d.mutex.RLock()
+	inviteTx := d.inviteTx
+	d.mutex.RUnlock()
+
+	if inviteTx == nil {
 		return fmt.Errorf("нет активной INVITE транзакции")
 	}
 
 	// Ожидаем ответы через каналы транзакции
 	for {
 		select {
-		case resp := <-d.inviteTx.Responses():
+		case resp := <-inviteTx.Responses():
 			// Обрабатываем ответ
 			if err := d.processResponse(resp); err != nil {
 				return fmt.Errorf("ошибка обработки ответа: %w", err)
