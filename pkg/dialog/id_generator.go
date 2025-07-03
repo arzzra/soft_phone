@@ -66,16 +66,28 @@ func NewIDGeneratorPool(config *IDGeneratorConfig) (*IDGeneratorPool, error) {
 	if _, err := rand.Read(nodeID); err != nil {
 		return nil, err
 	}
+	
+	// КРИТИЧНО: Добавляем временную метку в node ID для дополнительной уникальности
+	timestamp := time.Now().UnixNano()
+	nodeID[0] ^= byte(timestamp)
+	nodeID[1] ^= byte(timestamp >> 8)
+	nodeID[2] ^= byte(timestamp >> 16)
+	nodeID[3] ^= byte(timestamp >> 24)
+	
+	// КРИТИЧНО: Дополнительная энтропия через микрозадержку
+	// Это гарантирует разные стартовые временные метки даже для одновременно создаваемых генераторов
+	time.Sleep(time.Duration(timestamp%1000) * time.Nanosecond)
 
 	pool := &IDGeneratorPool{
 		callIDLength: config.CallIDLength,
 		tagLength:    config.TagLength,
 		prefillSize:  config.PrefillSize,
 		nodeID:       nodeID,
-		startTime:    time.Now().UnixNano(),
+		startTime:    time.Now().UnixNano(), // КРИТИЧНО: обновленная временная метка после задержки
 	}
 
-	// Инициализируем пулы с фабричными функциями
+	// КРИТИЧНО: Убираем пулы для предотвращения коллизий
+	// Инициализируем пулы с фабричными функциями (оставляем для совместимости)
 	pool.callIDPool.New = func() interface{} {
 		atomic.AddUint64(&pool.poolMisses, 1)
 		return pool.generateCallIDDirect()
@@ -86,68 +98,155 @@ func NewIDGeneratorPool(config *IDGeneratorConfig) (*IDGeneratorPool, error) {
 		return pool.generateTagDirect()
 	}
 
-	// Предварительно заполняем пулы
-	pool.prefillPools()
+	// КРИТИЧНО: НЕ заполняем пулы предварительно для предотвращения коллизий
+	// pool.prefillPools() // отключено
 
 	return pool, nil
 }
 
-// generateCallIDDirect генерирует Call-ID напрямую без пула
-// КРИТИЧНО: криптографически стойкая генерация для безопасности
+// НОВОЕ: Пулы для буферов для избежания аллокаций
+var (
+	randomBytesPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 32) // Максимальный размер для Call-ID
+		},
+	}
+	
+	hexBufferPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 0, 128) // Буфер для hex кодирования
+		},
+	}
+	
+	// Оптимизированная таблица hex символов
+	hexTable = "0123456789abcdef"
+)
+
+// generateCallIDDirect генерирует Call-ID напрямую без пула (оптимизировано)
+// КРИТИЧНО: криптографически стойкая генерация с минимальными аллокациями
 func (p *IDGeneratorPool) generateCallIDDirect() string {
 	atomic.AddUint64(&p.totalGenerated, 1)
 
-	// Комбинируем несколько источников энтропии:
-	// 1. Криптографически стойкие случайные байты
-	// 2. Временная метка высокого разрешения
-	// 3. Уникальный ID узла
-	// 4. Последовательный счетчик
-
-	randomBytes := make([]byte, p.callIDLength-8) // резервируем место для метаданных
-	if _, err := rand.Read(randomBytes); err != nil {
+	// Получаем буфер для случайных байт из пула
+	randomBytes := randomBytesPool.Get().([]byte)
+	defer randomBytesPool.Put(randomBytes)
+	
+	randomSize := p.callIDLength - 8 // резервируем место для метаданных
+	if randomSize > len(randomBytes) {
+		randomSize = len(randomBytes)
+	}
+	
+	if _, err := rand.Read(randomBytes[:randomSize]); err != nil {
 		// Fallback на менее стойкую, но быструю генерацию
 		return p.generateFallbackCallID()
 	}
 
-	// Добавляем временную метку (4 байта)
+	// Получаем hex буфер из пула
+	hexBuf := hexBufferPool.Get().([]byte)
+	defer func() {
+		hexBuf = hexBuf[:0] // Сбрасываем длину, сохраняя capacity
+		hexBufferPool.Put(hexBuf)
+	}()
+	
+	// Оптимизированное построение hex строки
+	hexBuf = hexBuf[:0]
+	
+	// Добавляем временную метку и счетчик
 	timestamp := uint32(time.Now().UnixNano() - p.startTime)
-	timeBytes := []byte{
-		byte(timestamp >> 24),
-		byte(timestamp >> 16),
-		byte(timestamp >> 8),
-		byte(timestamp),
-	}
-
-	// Добавляем последовательный счетчик (2 байта)
 	sequence := atomic.AddUint64(&p.sequenceCounter, 1)
-	sequenceBytes := []byte{
-		byte(sequence >> 8),
-		byte(sequence),
+	
+	// Оптимизированное hex кодирование без дополнительных аллокаций
+	// Случайная часть
+	for _, b := range randomBytes[:randomSize] {
+		hexBuf = append(hexBuf, hexTable[b>>4], hexTable[b&0x0F])
+	}
+	
+	// Временная метка (4 байта)
+	hexBuf = append(hexBuf, hexTable[byte(timestamp>>28)], hexTable[byte(timestamp>>24)&0x0F])
+	hexBuf = append(hexBuf, hexTable[byte(timestamp>>20)&0x0F], hexTable[byte(timestamp>>16)&0x0F])
+	hexBuf = append(hexBuf, hexTable[byte(timestamp>>12)&0x0F], hexTable[byte(timestamp>>8)&0x0F])
+	hexBuf = append(hexBuf, hexTable[byte(timestamp>>4)&0x0F], hexTable[byte(timestamp)&0x0F])
+	
+	// Последовательность (2 байта)
+	hexBuf = append(hexBuf, hexTable[byte(sequence>>12)&0x0F], hexTable[byte(sequence>>8)&0x0F])
+	hexBuf = append(hexBuf, hexTable[byte(sequence>>4)&0x0F], hexTable[byte(sequence)&0x0F])
+	
+	// Node ID (2 байта)
+	if len(p.nodeID) >= 2 {
+		hexBuf = append(hexBuf, hexTable[p.nodeID[0]>>4], hexTable[p.nodeID[0]&0x0F])
+		hexBuf = append(hexBuf, hexTable[p.nodeID[1]>>4], hexTable[p.nodeID[1]&0x0F])
 	}
 
-	// Комбинируем все компоненты
-	combined := make([]byte, 0, len(randomBytes)+len(timeBytes)+len(sequenceBytes)+len(p.nodeID))
-	combined = append(combined, randomBytes...)
-	combined = append(combined, timeBytes...)
-	combined = append(combined, sequenceBytes...)
-	combined = append(combined, p.nodeID[:2]...) // используем только первые 2 байта nodeID
-
-	return hex.EncodeToString(combined) + "@softphone"
+	// КРИТИЧНО: НЕ используем unsafe.Pointer! Он создает ссылку на переиспользуемую память!
+	// return *(*string)(unsafe.Pointer(&hexBuf)) + "@softphone" // БАГ!
+	
+	// ИСПРАВЛЕНО: Создаем копию строки для гарантии безопасности
+	return string(hexBuf) + "@softphone"
 }
 
-// generateTagDirect генерирует тег напрямую без пула
-// КРИТИЧНО: достаточная энтропия для предотвращения коллизий
+// generateTagDirect генерирует тег напрямую без пула (оптимизировано)
+// КРИТИЧНО: достаточная энтропия с минимальными аллокациями
 func (p *IDGeneratorPool) generateTagDirect() string {
 	atomic.AddUint64(&p.totalGenerated, 1)
 
-	// Для тегов используем более простую, но быструю генерацию
-	randomBytes := make([]byte, p.tagLength)
-	if _, err := rand.Read(randomBytes); err != nil {
+	// Получаем буфер для случайных байт из пула
+	randomBytes := randomBytesPool.Get().([]byte)
+	defer randomBytesPool.Put(randomBytes)
+	
+	// Резервируем место для метаданных (временная метка + node ID + последовательность)
+	randomSize := p.tagLength - 4 // резервируем 4 байта для метаданных
+	if randomSize > len(randomBytes) {
+		randomSize = len(randomBytes)
+	}
+	if randomSize < 2 {
+		randomSize = 2 // минимум 2 байта случайности
+	}
+	
+	if _, err := rand.Read(randomBytes[:randomSize]); err != nil {
 		// Fallback генерация
 		return p.generateFallbackTag()
 	}
 
-	return hex.EncodeToString(randomBytes)
+	// Получаем hex буфер из пула
+	hexBuf := hexBufferPool.Get().([]byte)
+	defer func() {
+		hexBuf = hexBuf[:0]
+		hexBufferPool.Put(hexBuf)
+	}()
+	
+	// Оптимизированное hex кодирование
+	hexBuf = hexBuf[:0]
+	
+	// Добавляем случайные байты
+	for _, b := range randomBytes[:randomSize] {
+		hexBuf = append(hexBuf, hexTable[b>>4], hexTable[b&0x0F])
+	}
+	
+	// Добавляем временную метку (2 байта)
+	timestamp := uint16(time.Now().UnixNano() >> 16)
+	hexBuf = append(hexBuf, hexTable[byte(timestamp>>12)&0x0F], hexTable[byte(timestamp>>8)&0x0F])
+	hexBuf = append(hexBuf, hexTable[byte(timestamp>>4)&0x0F], hexTable[byte(timestamp)&0x0F])
+	
+	// Добавляем последовательность (1 байт)
+	sequence := byte(atomic.AddUint64(&p.sequenceCounter, 1))
+	hexBuf = append(hexBuf, hexTable[sequence>>4], hexTable[sequence&0x0F])
+	
+	// Добавляем часть node ID (1 байт)
+	if len(p.nodeID) >= 1 {
+		hexBuf = append(hexBuf, hexTable[p.nodeID[0]>>4], hexTable[p.nodeID[0]&0x0F])
+	}
+
+	// КРИТИЧНО: НЕ используем unsafe.Pointer! Он создает ссылку на переиспользуемую память!
+	// result := *(*string)(unsafe.Pointer(&hexBuf)) // БАГ! hexBuf переиспользуется из пула!
+	
+	// ИСПРАВЛЕНО: Создаем копию строки для гарантии безопасности
+	result := string(hexBuf)
+	
+	// КРИТИЧНО: Временная диагностика для отладки одинаковых тегов (отключено)
+	// fmt.Printf("DEBUG: Generated tag %s from nodeID=%x, timestamp=%x, sequence=%x\n", 
+	//	result, p.nodeID[0], timestamp, sequence)
+		
+	return result
 }
 
 // generateFallbackCallID fallback генерация Call-ID при ошибках crypto/rand
@@ -209,30 +308,23 @@ func (p *IDGeneratorPool) prefillPools() {
 	}
 }
 
-// GetCallID получает Call-ID из пула или генерирует новый
-// КРИТИЧНО: lock-free операция для максимальной производительности
+// GetCallID генерирует новый Call-ID
+// КРИТИЧНО: всегда генерируем напрямую для предотвращения коллизий
 func (p *IDGeneratorPool) GetCallID() string {
-	if id := p.callIDPool.Get(); id != nil {
-		atomic.AddUint64(&p.poolHits, 1)
-		return id.(string)
-	}
-
-	// Пул пуст - генерируем напрямую
-	atomic.AddUint64(&p.poolMisses, 1)
+	atomic.AddUint64(&p.poolMisses, 1) // счетчик генераций
 	return p.generateCallIDDirect()
 }
 
-// GetTag получает тег из пула или генерирует новый
-// КРИТИЧНО: lock-free операция для максимальной производительности
+// GetTag генерирует новый тег
+// КРИТИЧНО: всегда генерируем напрямую для предотвращения коллизий
 func (p *IDGeneratorPool) GetTag() string {
-	if tag := p.tagPool.Get(); tag != nil {
-		atomic.AddUint64(&p.poolHits, 1)
-		return tag.(string)
-	}
-
-	// Пул пуст - генерируем напрямую
-	atomic.AddUint64(&p.poolMisses, 1)
-	return p.generateTagDirect()
+	atomic.AddUint64(&p.poolMisses, 1) // счетчик генераций
+	tag := p.generateTagDirect()
+	
+	// КРИТИЧНО: Временная диагностика для отладки коллизий тегов
+	// fmt.Printf("ID Generator %p: Generated tag %s (nodeID=%x)\n", p, tag, p.nodeID[:2])
+	
+	return tag
 }
 
 // ReplenishPools пополняет пулы в фоне

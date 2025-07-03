@@ -1,0 +1,198 @@
+--- FAIL: TestHighLoadConcurrentDialogs (16.35s)
+    concurrent_load_test.go:238: Client 0: Successfully sent BYE for dialog 0 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog af3a30a4c9cc659a0000138800012fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog af3a30a4c9cc659a0000138800012fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 1: Successfully sent BYE for dialog 0 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog 86e07dbec2f21e1d00001b5800022fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 86e07dbec2f21e1d00001b5800022fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 2: Successfully sent BYE for dialog 0 on attempt 1
+    concurrent_load_test.go:238: Client 0: Successfully sent BYE for dialog 1 on attempt 1
+    concurrent_load_test.go:238: Client 3: Successfully sent BYE for dialog 0 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog 9e82eec2a1846823000036b000042fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 9e82eec2a1846823000036b000042fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog 9b1ab09089454deb000032c800032fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 9b1ab09089454deb000032c800032fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 1: Successfully sent BYE for dialog 1 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog 8474e95707a2e5a5000036b000052fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 8474e95707a2e5a5000036b000052fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog 278035b7945f877600003a9800062fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 278035b7945f877600003a9800062fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 4: Successfully sent BYE for dialog 0 on attempt 1
+    concurrent_load_test.go:238: Client 2: Successfully sent BYE for dialog 1 on attempt 1
+    concurrent_load_test.go:238: Client 0: Successfully sent BYE for dialog 2 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog 18a110c6993285b200003e8000082fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 18a110c6993285b200003e8000082fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog 0c625e517cb5730100003e8000072fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 0c625e517cb5730100003e8000072fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog 5e761835434663fa0001637800642fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 5e761835434663fa0001637800642fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 3: Successfully sent BYE for dialog 1 on attempt 1
+    concurrent_load_test.go:238: Client 1: Successfully sent BYE for dialog 2 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog 86221d8f042941cb0000426800092fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 86221d8f042941cb0000426800092fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog bf2066fa996afd9d00004650000a2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog bf2066fa996afd9d00004650000a2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 4: Successfully sent BYE for dialog 1 on attempt 1
+    concurrent_load_test.go:238: Client 2: Successfully sent BYE for dialog 2 on attempt 1
+    concurrent_load_test.go:238: Client 0: Successfully sent BYE for dialog 3 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog 8fd1561d6ae35a4000005dc0000b2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 8fd1561d6ae35a4000005dc0000b2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog 9941b41bd4249156000061a8000d2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 9941b41bd4249156000061a8000d2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog 2330d1b40df70dc400005dc0000c2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 2330d1b40df70dc400005dc0000c2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 3: Successfully sent BYE for dialog 2 on attempt 1
+    concurrent_load_test.go:238: Client 1: Successfully sent BYE for dialog 3 on attempt 1
+    concurrent_load_test.go:282: Progress: Created=21, Accepted=21, Terminated=14, Errors=0, ServerActive=7, ShardedMapCount=5
+    concurrent_load_test.go:101: Server: Dialog 44f7d6e437cde41d00006590000e2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 44f7d6e437cde41d00006590000e2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog 6b9196e02417dc4200006590000f2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 6b9196e02417dc4200006590000f2fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 4: Successfully sent BYE for dialog 2 on attempt 1
+    concurrent_load_test.go:238: Client 2: Successfully sent BYE for dialog 3 on attempt 1
+    concurrent_load_test.go:238: Client 0: Successfully sent BYE for dialog 4 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog 812921269d4ce08700006d6000122fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:101: Server: Dialog cf45c203033252800000697800102fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog cf45c203033252800000697800102fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:85: Server: Dialog 812921269d4ce08700006d6000122fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog bfff7d64ed008ee30000697800112fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog bfff7d64ed008ee30000697800112fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 3: Successfully sent BYE for dialog 3 on attempt 1
+    concurrent_load_test.go:238: Client 1: Successfully sent BYE for dialog 4 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog 125b262ae6ad39010000714800142fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 125b262ae6ad39010000714800142fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog 202830c692bebc820000714800132fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 202830c692bebc820000714800132fbc@softphone:0971b6e821520bf6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:238: Client 4: Successfully sent BYE for dialog 3 on attempt 1
+    concurrent_load_test.go:238: Client 2: Successfully sent BYE for dialog 4 on attempt 1
+    concurrent_load_test.go:101: Server: Dialog 47071cb2da0a37b10000753000162fbc@softphone:72ee8ff4c9658cc6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog 47071cb2da0a37b10000753000162fbc@softphone:72ee8ff4c9658cc6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:101: Server: Dialog c1792937c979e04e0000753000152fbc@softphone:72ee8ff4c9658cc6:0971b6e821520bf6 terminated normally (state=Terminated)
+    concurrent_load_test.go:85: Server: Dialog c1792937c979e04e0000753000152fbc@softphone:72ee8ff4c9658cc6:0971b6e821520bf6 cleanup completed
+    concurrent_load_test.go:232: Client 3: Dialog 4 already terminated (481), considering success
+    concurrent_load_test.go:232: Client 4: Dialog 4 already terminated (481), considering success
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:282: Progress: Created=25, Accepted=25, Terminated=23, Errors=0, ServerActive=3, ShardedMapCount=3
+    concurrent_load_test.go:318: Still active: c1792937c979e04e0000753000152fbc@softphone:72ee8ff4c9658cc6:0971b6e821520bf6
+    concurrent_load_test.go:318: Still active: d016215fe2d0689226e1144800652fbc@softphone:aa0d62ba94fee6f4:6882df02a4e62312
+    concurrent_load_test.go:318: Still active: 7b072efc6c80138f29dd0a8000662fbc@softphone:aa0d62ba94fee6f4:64fa94919afe420c
+    concurrent_load_test.go:322: Timeout waiting for server cleanup, 3 dialogs still active
+    concurrent_load_test.go:336: === FINAL RESULTS ===
+    concurrent_load_test.go:337: Total dialogs created: 25
+    concurrent_load_test.go:338: Total dialogs accepted: 25
+    concurrent_load_test.go:339: Total dialogs terminated: 23
+    concurrent_load_test.go:340: Total errors: 0
+    concurrent_load_test.go:341: Server active dialogs: 3
+    concurrent_load_test.go:342: Expected dialogs: 25
+    concurrent_load_test.go:364: WARNING: 3 dialogs remaining in server (will be cleaned up by context cancellation)
+    concurrent_load_test.go:113: Server: Dialog 7b072efc6c80138f29dd0a8000662fbc@softphone:aa0d62ba94fee6f4:64fa94919afe420c context cancelled
+    concurrent_load_test.go:85: Server: Dialog 7b072efc6c80138f29dd0a8000662fbc@softphone:aa0d62ba94fee6f4:64fa94919afe420c cleanup completed
+    concurrent_load_test.go:113: Server: Dialog d016215fe2d0689226e1144800652fbc@softphone:aa0d62ba94fee6f4:6882df02a4e62312 context cancelled
+    concurrent_load_test.go:85: Server: Dialog d016215fe2d0689226e1144800652fbc@softphone:aa0d62ba94fee6f4:6882df02a4e62312 cleanup completed
+    concurrent_load_test.go:375: === SHARD DISTRIBUTION ===
+    concurrent_load_test.go:378: Shard 29: 1 dialogs
+    concurrent_load_test.go:378: Shard 3: 1 dialogs
+    concurrent_load_test.go:378: Shard 9: 1 dialogs
+[Alice] 2025/07/03 14:29:44 Starting SIP server on udp/127.0.0.1:5060
+[Bob] 2025/07/03 14:29:44 Starting SIP server on udp/127.0.0.1:5061
+[Bob] 2025/07/03 14:29:44 Global ACK handler: received ACK for Call-ID e523cb70f5b897d8d5cbb8c000672fbc@softphone
+[Alice] 2025/07/03 14:29:45 Sending BYE for dialog e523cb70f5b897d8d5cbb8c000672fbc@softphone:64d468ef04b91302:3a4fd92862ebc0ed
+[Bob] 2025/07/03 14:29:45 BYE dialog not found: CallID=e523cb70f5b897d8d5cbb8c000672fbc@softphone, From-tag=64d468ef04b91302, To-tag=3a4fd92862ebc0ed
+[Bob] 2025/07/03 14:29:45 Active dialogs count: 1
+[Bob] 2025/07/03 14:29:45   Active dialog: CallID=e523cb70f5b897d8d5cbb8c000672fbc@softphone, Local=3a4fd92862ebc0ed, Remote=bb80420edf699f12, State=Established
+[Bob] 2025/07/03 14:29:45 Dialog e523cb70f5b897d8d5cbb8c000672fbc@softphone: cancelled 1 timeouts during Close()
+[Alice] 2025/07/03 14:29:45 Dialog e523cb70f5b897d8d5cbb8c000672fbc@softphone: cancelled 2 timeouts during Close()
+--- FAIL: TestBasicCall (1.20s)
+    dialog_test.go:57: Bob: Incoming call
+    dialog_test.go:72: Bob accepted call
+    dialog_test.go:135: Bob received incoming dialog
+    dialog_test.go:165: Alice failed to send BYE: BYE отклонен: 481 Call/Transaction Does Not Exist
+--- FAIL: TestMultipleConcurrentCalls (8.01s)
+    dialog_test.go:375: Client 0: Created INVITE to sip:user0@127.0.0.1:5064
+    dialog_test.go:279: Server: Incoming dialog from 53a76d5496a1903e770f6da800692fbc@softphone
+    dialog_test.go:289: Server: Accepted dialog 53a76d5496a1903e770f6da800692fbc@softphone
+    dialog_test.go:384: Client 0: Received answer, dialog state: Established
+    dialog_test.go:393: Client 0: Dialog established successfully
+    dialog_test.go:375: Client 1: Created INVITE to sip:user1@127.0.0.1:5064
+    dialog_test.go:279: Server: Incoming dialog from b1e41182784a99c794e3b078006a2fbc@softphone
+    dialog_test.go:289: Server: Accepted dialog b1e41182784a99c794e3b078006a2fbc@softphone
+    dialog_test.go:384: Client 1: Received answer, dialog state: Established
+    dialog_test.go:393: Client 1: Dialog established successfully
+    dialog_test.go:399: Client 0: Sending BYE
+    dialog_test.go:401: Client 0: Failed to send BYE: BYE отклонен: 481 Call/Transaction Does Not Exist
+    dialog_test.go:399: Client 1: Sending BYE
+    dialog_test.go:401: Client 1: Failed to send BYE: BYE отклонен: 481 Call/Transaction Does Not Exist
+    dialog_test.go:417: All client goroutines completed
+    dialog_test.go:434: Timeout waiting for server dialogs to complete
+--- FAIL: TestREFERTransfer (2.10s)
+    dialog_test.go:533: Bob didn't receive REFER
+--- FAIL: TestAttendedTransfer (2.10s)
+    dialog_test.go:666: Bob didn't receive REFER with Replaces
+{"timestamp":"2025-07-03T14:29:57.672739+03:00","level":"DEBUG","message":"Debug message","component":"","file":"testing/testing.go","line":1792,"function":"tRunner","fields":{"number":42}}
+{"timestamp":"2025-07-03T14:29:57.67313+03:00","level":"INFO","message":"Info message","component":"","file":"testing/testing.go","line":1792,"function":"tRunner","fields":{"flag":true}}
+{"timestamp":"2025-07-03T14:29:57.673176+03:00","level":"WARN","message":"Warning message","component":"","file":"testing/testing.go","line":1792,"function":"tRunner","fields":{"timeout":5000000000}}
+{"timestamp":"2025-07-03T14:29:57.673194+03:00","level":"ERROR","message":"Error message","component":"","file":"testing/testing.go","line":1792,"function":"tRunner","fields":{"error":{"code":"DIALOG_NOT_FOUND","message":"Диалог не найден","category":"DIALOG","severity":"ERROR","timestamp":"2025-07-03T14:29:57.673192+03:00","fields":{"call_id":"call1","local_tag":"tag1","remote_tag":"tag2"},"retryable":false,"user_visible":true}}}
+{"timestamp":"2025-07-03T14:29:57.673287+03:00","level":"INFO","message":"Component message","component":"test-component","file":"testing/testing.go","line":1792,"function":"tRunner"}
+{"timestamp":"2025-07-03T14:29:57.673308+03:00","level":"INFO","message":"Fields message","component":"","file":"testing/testing.go","line":1792,"function":"tRunner","fields":{"service":"sip-stack","version":"1.0.0"}}
+{"timestamp":"2025-07-03T14:29:57.673334+03:00","level":"ERROR","message":"Произошла тестовая ошибка","component":"","file":"testing/testing.go","line":1792,"function":"tRunner","fields":{"component":"test","context":"test","error":{"code":"TEST_LOG_ERROR","message":"Ошибка для тестирования логирования","category":"SYSTEM","severity":"CRITICAL","timestamp":"2025-07-03T14:29:57.67333+03:00","fields":{"component":"test","retry_count":3},"retryable":false,"user_visible":true},"error_category":"SYSTEM","error_code":"TEST_LOG_ERROR","error_severity":"CRITICAL","line":123,"retry_count":3,"retryable":false},"error":"[SYSTEM:TEST_LOG_ERROR] Ошибка для тестирования логирования","error_code":"TEST_LOG_ERROR","error_category":"SYSTEM","stack_trace":["testing/testing.go:1792 tRunner","runtime/asm_amd64.s:1700 goexit"]}
+{"timestamp":"2025-07-03T14:29:57.673389+03:00","level":"ERROR","message":"Ошибка со стеком","component":"","file":"dialog/error_handling_test.go","line":157,"function":"func3","fields":{"component":"test","error":{"code":"TEST_LOG_ERROR","message":"Ошибка для тестирования логирования","category":"SYSTEM","severity":"CRITICAL","timestamp":"2025-07-03T14:29:57.67333+03:00","fields":{"component":"test","retry_count":3},"retryable":false,"user_visible":true},"error_category":"SYSTEM","error_code":"TEST_LOG_ERROR","error_severity":"CRITICAL","retry_count":3,"retryable":false},"error":"[SYSTEM:TEST_LOG_ERROR] Ошибка для тестирования логирования","error_code":"TEST_LOG_ERROR","error_category":"SYSTEM","stack_trace":["dialog/error_handling_test.go:157 func3","testing/testing.go:1792 tRunner","runtime/asm_amd64.s:1700 goexit"]}
+{"timestamp":"2025-07-03T14:29:57.673536+03:00","level":"ERROR","message":"PANIC в test-panic восстановлен","component":"","file":"runtime/panic.go","line":792,"function":"gopanic","fields":{"component":"test-panic","panic_value":"test panic","stack_trace":"goroutine 846 [running]:\nruntime/debug.Stack()\n\t/usr/local/go/src/runtime/debug/stack.go:26 +0x5e\ngithub.com/arzzra/soft_phone/pkg/dialog.TestRecoveryMechanisms.func1.SafeExecute.4.1()\n\t/Users/arz/work/soft_phone/pkg/dialog/recovery.go:306 +0x90\npanic({0x4be9480?, 0x4c63c90?})\n\t/usr/local/go/src/runtime/panic.go:792 +0x132\ngithub.com/arzzra/soft_phone/pkg/dialog.TestRecoveryMechanisms.func1.2()\n\t/Users/arz/work/soft_phone/pkg/dialog/error_handling_test.go:178 +0x25\ngithub.com/arzzra/soft_phone/pkg/dialog.TestRecoveryMechanisms.func1.SafeExecute.4({0x4c6bd80?, 0xc000733180?}, {0x4c68a58?, 0x4ef4420?}, {0x4b33398?, 0xec2b74b423db?}, 0xc0006c3f30, 0xc0006c3f40?)\n\t/Users/arz/work/soft_phone/pkg/dialog/recovery.go:326 +0xa2\ngithub.com/arzzra/soft_phone/pkg/dialog.SafeExecute(...)\n\t/Users/arz/work/soft_phone/pkg/dialog/recovery.go:327\ngithub.com/arzzra/soft_phone/pkg/dialog.TestRecoveryMechanisms.func1(0xc00078ae00)\n\t/Users/arz/work/soft_phone/pkg/dialog/error_handling_test.go:177 +0xf3\ntesting.tRunner(0xc00078ae00, 0xc000616ce0)\n\t/usr/local/go/src/testing/testing.go:1792 +0xf4\ncreated by testing.(*T).Run in goroutine 845\n\t/usr/local/go/src/testing/testing.go:1851 +0x413\n"}}
+{"timestamp":"2025-07-03T14:29:57.673596+03:00","level":"WARN","message":"Попытка 1/4 для test-retry не удалась","component":"","file":"dialog/error_handling_test.go","line":199,"function":"func2","fields":{"attempt":1,"component":"test-retry","error":{"code":"TRANSACTION_TIMEOUT","message":"Таймаут транзакции через 1s","category":"TIMEOUT","severity":"ERROR","timestamp":"2025-07-03T14:29:57.673594+03:00","fields":{"timeout":1000000000,"transaction_id":"tx1"},"retryable":true,"user_visible":true},"max_attempts":4}}
+{"timestamp":"2025-07-03T14:29:57.684011+03:00","level":"INFO","message":"Операция test-retry успешна после 2 попыток","component":"","file":"dialog/error_handling_test.go","line":199,"function":"func2","fields":{"attempts":2,"component":"test-retry"}}
+{"timestamp":"2025-07-03T14:29:57.684297+03:00","level":"ERROR","message":"PANIC восстановлен в компоненте test-dialog-handler","component":"","call_id":"test-call","dialog_id":"::","file":"dialog/recovery.go","line":440,"function":"1","fields":{"component":"test-dialog-handler","panic_count":1,"panic_time":"2025-07-03T14:29:57.684296+03:00","panic_value":"dialog handler panic","stack_trace":"goroutine 866 [running]:\nruntime/debug.Stack()\n\t/usr/local/go/src/runtime/debug/stack.go:26 +0x5e\ngithub.com/arzzra/soft_phone/pkg/dialog.TestRecoveryMechanisms.func4.(*RecoveryMiddleware).WrapDialogHandler.2.1()\n\t/Users/arz/work/soft_phone/pkg/dialog/recovery.go:431 +0x6f\npanic({0x4be9480?, 0x4c63ff0?})\n\t/usr/local/go/src/runtime/panic.go:792 +0x132\ngithub.com/arzzra/soft_phone/pkg/dialog.TestRecoveryMechanisms.func4.1(0x484a519?)\n\t/Users/arz/work/soft_phone/pkg/dialog/error_handling_test.go:260 +0x25\ngithub.com/arzzra/soft_phone/pkg/dialog.TestRecoveryMechanisms.func4.(*RecoveryMiddleware).WrapDialogHandler.2(0xc0006c3c88?)\n\t/Users/arz/work/soft_phone/pkg/dialog/recovery.go:444 +0x62\ngithub.com/arzzra/soft_phone/pkg/dialog.TestRecoveryMechanisms.func4(0xc00034a380?)\n\t/Users/arz/work/soft_phone/pkg/dialog/error_handling_test.go:269 +0xff\ntesting.tRunner(0xc00034a380, 0xc000240ab0)\n\t/usr/local/go/src/testing/testing.go:1792 +0xf4\ncreated by testing.(*T).Run in goroutine 845\n\t/usr/local/go/src/testing/testing.go:1851 +0x413\n"}}
+{"timestamp":"2025-07-03T14:29:57.684641+03:00","level":"ERROR","message":"Error occurred","component":"metrics","file":"dialog/metrics_test.go","line":84,"function":"TestMetricsCollector_Errors","fields":{"error":{"code":"INVALID_STATE_TRANSITION","message":"Невалидный переход состояния: Init -\u003e Terminated (Invalid transition)","category":"STATE","severity":"ERROR","timestamp":"2025-07-03T14:29:57.684637+03:00","fields":{"from_state":0,"reason":"Invalid transition","to_state":4},"retryable":false,"user_visible":true},"error_category":"STATE","error_code":"INVALID_STATE_TRANSITION","error_severity":"ERROR","from_state":0,"reason":"Invalid transition","retryable":false,"to_state":4,"total_errors":1},"error":"[STATE:INVALID_STATE_TRANSITION] Невалидный переход состояния: Init -\u003e Terminated (Invalid transition)","error_code":"INVALID_STATE_TRANSITION","error_category":"STATE","stack_trace":["dialog/metrics_test.go:84 TestMetricsCollector_Errors","testing/testing.go:1792 tRunner","runtime/asm_amd64.s:1700 goexit"]}
+{"timestamp":"2025-07-03T14:29:57.684789+03:00","level":"ERROR","message":"Panic recovery","component":"metrics","file":"dialog/metrics_test.go","line":97,"function":"TestMetricsCollector_Recovery","fields":{"component":"test_component","error":{"code":"SYSTEM_RECOVERY","message":"Recovered from panic in test_component: test panic","category":"SYSTEM","severity":"CRITICAL","timestamp":"2025-07-03T14:29:57.684773+03:00","fields":{"component":"test_component","panic_value":"test panic"},"retryable":false,"user_visible":true},"error_category":"SYSTEM","error_code":"SYSTEM_RECOVERY","error_severity":"CRITICAL","panic_value":"test panic","retryable":false,"total_recoveries":1},"error":"[SYSTEM:SYSTEM_RECOVERY] Recovered from panic in test_component: test panic","error_code":"SYSTEM_RECOVERY","error_category":"SYSTEM","stack_trace":["dialog/metrics_test.go:97 TestMetricsCollector_Recovery","testing/testing.go:1792 tRunner","runtime/asm_amd64.s:1700 goexit"]}
+{"timestamp":"2025-07-03T14:29:57.684894+03:00","level":"INFO","message":"Health check completed","component":"metrics","file":"dialog/metrics_test.go","line":123,"function":"TestMetricsCollector_HealthCheck","fields":{"components_count":3,"duration_ms":0,"errors_count":5,"status":"unhealthy"}}
+{"timestamp":"2025-07-03T14:29:57.787002+03:00","level":"INFO","message":"Health check completed","component":"metrics","file":"dialog/stack.go","line":723,"function":"RunHealthCheck","fields":{"components_count":8,"duration_ms":0,"errors_count":0,"status":"healthy"}}
+{"timestamp":"2025-07-03T14:29:57.787066+03:00","level":"INFO","message":"Health check completed","component":"metrics","file":"dialog/stack.go","line":723,"function":"RunHealthCheck","fields":{"components_count":8,"duration_ms":0,"errors_count":0,"status":"healthy"}}
+--- FAIL: TestMetricsCollector_Integration (0.20s)
+    metrics_test.go:236: Failed to send BYE: BYE отклонен: 481 Call/Transaction Does Not Exist
+    metrics_test.go:245: Client: Expected active_dialogs=0, got 1
+{"timestamp":"2025-07-03T14:29:57.90097+03:00","level":"ERROR","message":"Error occurred","component":"metrics","file":"dialog/metrics_test.go","line":286,"function":"TestMetricsCollector_PrometheusIntegration","fields":{"error":{"code":"TRANSACTION_TIMEOUT","message":"Таймаут транзакции через 30s","category":"TIMEOUT","severity":"ERROR","timestamp":"2025-07-03T14:29:57.900963+03:00","fields":{"timeout":30000000000,"transaction_id":"tx-1"},"retryable":true,"user_visible":true},"error_category":"TIMEOUT","error_code":"TRANSACTION_TIMEOUT","error_severity":"ERROR","retryable":true,"timeout":30000000000,"total_errors":1,"transaction_id":"tx-1"},"error":"[TIMEOUT:TRANSACTION_TIMEOUT] Таймаут транзакции через 30s","error_code":"TRANSACTION_TIMEOUT","error_category":"TIMEOUT","stack_trace":["dialog/metrics_test.go:286 TestMetricsCollector_PrometheusIntegration","testing/testing.go:1792 tRunner","runtime/asm_amd64.s:1700 goexit"]}
+{"timestamp":"2025-07-03T14:29:57.90104+03:00","level":"ERROR","message":"Error occurred","component":"metrics","file":"dialog/metrics_test.go","line":289,"function":"TestMetricsCollector_PrometheusIntegration","fields":{"error":{"code":"INVALID_STATE_TRANSITION","message":"Невалидный переход состояния: Terminated -\u003e Ringing (Invalid)","category":"STATE","severity":"ERROR","timestamp":"2025-07-03T14:29:57.901031+03:00","fields":{"from_state":4,"reason":"Invalid","to_state":2},"retryable":false,"user_visible":true},"error_category":"STATE","error_code":"INVALID_STATE_TRANSITION","error_severity":"ERROR","from_state":4,"reason":"Invalid","retryable":false,"to_state":2,"total_errors":2},"error":"[STATE:INVALID_STATE_TRANSITION] Невалидный переход состояния: Terminated -\u003e Ringing (Invalid)","error_code":"INVALID_STATE_TRANSITION","error_category":"STATE","stack_trace":["dialog/metrics_test.go:289 TestMetricsCollector_PrometheusIntegration","testing/testing.go:1792 tRunner","runtime/asm_amd64.s:1700 goexit"]}
+{"timestamp":"2025-07-03T14:29:57.901076+03:00","level":"ERROR","message":"Panic recovery","component":"metrics","file":"dialog/metrics_test.go","line":296,"function":"TestMetricsCollector_PrometheusIntegration","fields":{"component":"test_component","error":{"code":"SYSTEM_RECOVERY","message":"Recovered from panic in test_component: test panic","category":"SYSTEM","severity":"CRITICAL","timestamp":"2025-07-03T14:29:57.901074+03:00","fields":{"component":"test_component","panic_value":"test panic"},"retryable":false,"user_visible":true},"error_category":"SYSTEM","error_code":"SYSTEM_RECOVERY","error_severity":"CRITICAL","panic_value":"test panic","retryable":false,"total_recoveries":1},"error":"[SYSTEM:SYSTEM_RECOVERY] Recovered from panic in test_component: test panic","error_code":"SYSTEM_RECOVERY","error_category":"SYSTEM","stack_trace":["dialog/metrics_test.go:296 TestMetricsCollector_PrometheusIntegration","testing/testing.go:1792 tRunner","runtime/asm_amd64.s:1700 goexit"]}
+{"timestamp":"2025-07-03T14:29:57.901159+03:00","level":"ERROR","message":"Error occurred","component":"metrics","file":"dialog/metrics_test.go","line":326,"function":"TestMetricsCollector_Reset","fields":{"error":{"code":"TRANSACTION_TIMEOUT","message":"Таймаут транзакции через 30s","category":"TIMEOUT","severity":"ERROR","timestamp":"2025-07-03T14:29:57.901157+03:00","fields":{"timeout":30000000000,"transaction_id":"tx-1"},"retryable":true,"user_visible":true},"error_category":"TIMEOUT","error_code":"TRANSACTION_TIMEOUT","error_severity":"ERROR","retryable":true,"timeout":30000000000,"total_errors":1,"transaction_id":"tx-1"},"error":"[TIMEOUT:TRANSACTION_TIMEOUT] Таймаут транзакции через 30s","error_code":"TRANSACTION_TIMEOUT","error_category":"TIMEOUT","stack_trace":["dialog/metrics_test.go:326 TestMetricsCollector_Reset","testing/testing.go:1792 tRunner","runtime/asm_amd64.s:1700 goexit"]}
+--- FAIL: TestSendRefer (0.10s)
+    refer_test.go:233: Failed to wait for REFER response: REFER отклонен: 481 Call/Transaction Does Not Exist
+--- FAIL: TestSendReferWithReplaces (2.10s)
+    refer_test.go:372: Bob didn't receive REFER with Replaces
+--- FAIL: TestHandleIncomingRefer (0.00s)
+    refer_test.go:404: Failed to handle incoming REFER: failed to send initial NOTIFY: failed to build NOTIFY request: no remote target for request
+--- FAIL: TestReInviteOutgoing (0.10s)
+    reinvite_test.go:138: Failed to send re-INVITE: re-INVITE rejected: 481 Call/Transaction Does Not Exist
+--- FAIL: TestReInviteIncoming (0.10s)
+    reinvite_test.go:263: Failed to send re-INVITE: re-INVITE rejected: 481 Call/Transaction Does Not Exist
+--- FAIL: TestReInviteHold (0.10s)
+    reinvite_test.go:411: Failed to send hold re-INVITE: re-INVITE rejected: 481 Call/Transaction Does Not Exist
+FAIL
+exit status 1
+FAIL	github.com/arzzra/soft_phone/pkg/dialog	42.716s
+FAIL

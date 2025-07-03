@@ -2,6 +2,7 @@ package dialog
 
 import (
 	"context"
+	"fmt"
 	"github.com/emiago/sipgo/sip"
 )
 
@@ -84,6 +85,11 @@ type IDialog interface {
 	Key() DialogKey
 	State() DialogState
 
+	// LocalTag возвращает локальный тег диалога
+	LocalTag() string
+	// RemoteTag возвращает удаленный тег диалога
+	RemoteTag() string
+
 	// Accept подтверждает входящий INVITE (200 OK).
 	// Параметры ответа задаются через opts (тело, заголовки).
 	Accept(ctx context.Context, opts ...ResponseOpt) error
@@ -139,6 +145,11 @@ type DialogKey struct {
 	LocalTag string
 	// RemoteTag удаленный тег от партнера
 	RemoteTag string
+}
+
+// String возвращает строковое представление ключа диалога
+func (dk DialogKey) String() string {
+	return fmt.Sprintf("%s:%s:%s", dk.CallID, dk.LocalTag, dk.RemoteTag)
 }
 
 // Body представляет интерфейс для тела SIP сообщения.

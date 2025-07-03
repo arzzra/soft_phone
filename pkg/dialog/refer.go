@@ -19,8 +19,9 @@ type ReferSubscription struct {
 	// ID подписки (CSeq для multiple REFER)
 	ID string
 
-	// Диалог, в котором была создана подписка
-	dialog *Dialog
+	// ИЗМЕНЕНО: Слабая ссылка на диалог для предотвращения циклов
+	dialogID string  // НОВОЕ: только ID вместо прямой ссылки
+	dialog   *Dialog // Может быть nil для слабых ссылок
 
 	// URI, на который был сделан REFER
 	referToURI sip.Uri
@@ -29,7 +30,8 @@ type ReferSubscription struct {
 	replacesInfo *ReplacesInfo
 
 	// Статус подписки
-	active bool
+	active    bool
+	createdAt time.Time // НОВОЕ: время создания для автоочистки
 
 	// Мьютекс для синхронизации
 	mutex sync.RWMutex
@@ -177,15 +179,32 @@ func (d *Dialog) SendRefer(ctx context.Context, referTo sip.Uri, opts *ReferOpts
 		}
 	}
 
-	// Отправляем через транзакцию
-	tx, err := d.stack.client.TransactionRequest(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to send REFER: %w", err)
-	}
+	// НОВОЕ: Создаем REFER transaction через TransactionManager если доступен
+	if d.stack.transactionMgr != nil {
+		// Используем новый Transaction Manager
+		txAdapter, err := d.stack.transactionMgr.CreateClientTransaction(ctx, req)
+		if err != nil {
+			return fmt.Errorf("failed to create REFER transaction: %w", err)
+		}
+		
+		// Сохраняем адаптер и запрос для WaitRefer
+		d.mutex.Lock()
+		d.referTxAdapter = txAdapter
+		d.referReq = req
+		d.mutex.Unlock()
+	} else {
+		// Fallback: используем старый способ
+		tx, err := d.stack.client.TransactionRequest(ctx, req)
+		if err != nil {
+			return fmt.Errorf("failed to send REFER: %w", err)
+		}
 
-	// Сохраняем транзакцию и запрос для WaitRefer
-	d.referTx = tx
-	d.referReq = req
+		// Сохраняем транзакцию и запрос для WaitRefer
+		d.mutex.Lock()
+		d.referTx = tx
+		d.referReq = req
+		d.mutex.Unlock()
+	}
 
 	return nil
 }
@@ -269,15 +288,32 @@ func (d *Dialog) SendReferWithReplaces(ctx context.Context, targetURI sip.Uri, r
 	eventHeader := sip.NewHeader("Event", "refer")
 	req.AppendHeader(eventHeader)
 
-	// Отправляем через транзакцию
-	tx, err := d.stack.client.TransactionRequest(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to send REFER with Replaces: %w", err)
-	}
+	// НОВОЕ: Создаем REFER transaction через TransactionManager если доступен
+	if d.stack.transactionMgr != nil {
+		// Используем новый Transaction Manager
+		txAdapter, err := d.stack.transactionMgr.CreateClientTransaction(ctx, req)
+		if err != nil {
+			return fmt.Errorf("failed to create REFER transaction: %w", err)
+		}
+		
+		// Сохраняем адаптер и запрос для WaitRefer
+		d.mutex.Lock()
+		d.referTxAdapter = txAdapter
+		d.referReq = req
+		d.mutex.Unlock()
+	} else {
+		// Fallback: используем старый способ
+		tx, err := d.stack.client.TransactionRequest(ctx, req)
+		if err != nil {
+			return fmt.Errorf("failed to send REFER with Replaces: %w", err)
+		}
 
-	// Сохраняем транзакцию и запрос для WaitRefer
-	d.referTx = tx
-	d.referReq = req
+		// Сохраняем транзакцию и запрос для WaitRefer
+		d.mutex.Lock()
+		d.referTx = tx
+		d.referReq = req
+		d.mutex.Unlock()
+	}
 
 	return nil
 }
@@ -342,13 +378,15 @@ func (d *Dialog) HandleIncomingRefer(req *sip.Request, referTo sip.Uri, replaces
 	}
 	subscriptionID := cseqHeader.Value()
 
-	// Создаем подписку
+	// Создаем подписку с автоочисткой
 	subscription := &ReferSubscription{
 		ID:           subscriptionID,
-		dialog:       d,
+		dialogID:     d.callID,        // НОВОЕ: слабая ссылка
+		dialog:       d,               // Прямая ссылка может быть очищена позже
 		referToURI:   referTo,
 		replacesInfo: replaces,
 		active:       true,
+		createdAt:    time.Now(),      // НОВОЕ: время для автоочистки
 	}
 
 	// КРИТИЧНО: thread-safe добавление подписки под полной блокировкой
@@ -356,6 +394,9 @@ func (d *Dialog) HandleIncomingRefer(req *sip.Request, referTo sip.Uri, replaces
 	if d.referSubscriptions == nil {
 		d.referSubscriptions = make(map[string]*ReferSubscription)
 	}
+
+	// НОВОЕ: Автоочистка старых подписок перед добавлением новой
+	d.cleanupOldReferSubscriptions()
 
 	// Проверяем на дублирование ID во избежание перезаписи
 	if existingSub, exists := d.referSubscriptions[subscriptionID]; exists {
@@ -487,97 +528,188 @@ func (d *Dialog) HandleIncomingRefer(req *sip.Request, referTo sip.Uri, replaces
 //	log.Printf("Transfer accepted, monitoring progress...")
 //	// subscription теперь можно использовать для получения NOTIFY сообщений
 func (d *Dialog) WaitRefer(ctx context.Context) (*ReferSubscription, error) {
-	if d.referTx == nil || d.referReq == nil {
+	d.mutex.RLock()
+	referTx := d.referTx
+	referTxAdapter := d.referTxAdapter // НОВОЕ: проверяем адаптер
+	referReq := d.referReq
+	d.mutex.RUnlock()
+
+	// НОВОЕ: Используем адаптер если доступен, иначе старую транзакцию
+	if referTxAdapter == nil && referTx == nil {
 		return nil, fmt.Errorf("нет активной REFER транзакции")
 	}
+	
+	if referReq == nil {
+		return nil, fmt.Errorf("нет активного REFER запроса")
+	}
 
+	// НОВОЕ: Выбираем стратегию обработки в зависимости от доступного типа транзакции
+	if referTxAdapter != nil {
+		// Используем новый Transaction Adapter
+		return d.waitReferViaAdapter(ctx, referTxAdapter, referReq)
+	} else {
+		// Используем legacy sipgo транзакцию
+		return d.waitReferViaLegacyTx(ctx, referTx, referReq)
+	}
+}
+
+// waitReferViaAdapter обрабатывает REFER ответы через TransactionAdapter
+func (d *Dialog) waitReferViaAdapter(ctx context.Context, adapter *TransactionAdapter, referReq *sip.Request) (*ReferSubscription, error) {
+	for {
+		select {
+		case resp := <-adapter.Responses():
+			if resp == nil {
+				return nil, fmt.Errorf("transaction terminated")
+			}
+			
+			// Обрабатываем ответ в зависимости от кода
+			subscription, err := d.processReferResponse(resp, referReq)
+			if err != nil {
+				// Очищаем адаптер при ошибке
+				d.mutex.Lock()
+				d.referTxAdapter = nil
+				d.referReq = nil
+				d.mutex.Unlock()
+				return nil, err
+			}
+			if subscription != nil {
+				// Успешно создана подписка
+				d.mutex.Lock()
+				d.referTxAdapter = nil
+				d.referReq = nil
+				d.mutex.Unlock()
+				return subscription, nil
+			}
+			// Если subscription == nil, продолжаем ждать (provisional response)
+			
+		case <-adapter.Done():
+			// Транзакция завершена без финального ответа
+			d.mutex.Lock()
+			d.referTxAdapter = nil
+			d.referReq = nil
+			d.mutex.Unlock()
+			return nil, fmt.Errorf("REFER транзакция завершена без ответа")
+			
+		case <-ctx.Done():
+			// Контекст отменен
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// waitReferViaLegacyTx обрабатывает REFER ответы через legacy sipgo транзакцию  
+func (d *Dialog) waitReferViaLegacyTx(ctx context.Context, referTx sip.ClientTransaction, referReq *sip.Request) (*ReferSubscription, error) {
 	// Ожидаем ответы через каналы транзакции
 	for {
 		select {
-		case resp := <-d.referTx.Responses():
+		case resp := <-referTx.Responses():
 			// Обрабатываем ответ в зависимости от кода
-			switch {
-			case resp.StatusCode >= 100 && resp.StatusCode < 200:
-				// Provisional responses - продолжаем ждать
-				continue
-			case resp.StatusCode >= 200 && resp.StatusCode < 300:
-				// Success - создаем подписку
-				cseqHeader := d.referReq.GetHeader("CSeq")
-				if cseqHeader == nil {
-					return nil, fmt.Errorf("отсутствует CSeq заголовок в REFER запросе")
-				}
-
-				// Получаем Refer-To URI из исходного запроса
-				referToHeader := d.referReq.GetHeader("Refer-To")
-				if referToHeader == nil {
-					return nil, fmt.Errorf("отсутствует Refer-To заголовок в REFER запросе")
-				}
-
-				// Парсим Refer-To URI
-				referToStr := referToHeader.Value()
-				// Убираем < > если есть
-				if strings.HasPrefix(referToStr, "<") && strings.HasSuffix(referToStr, ">") {
-					referToStr = strings.TrimPrefix(referToStr, "<")
-					referToStr = strings.TrimSuffix(referToStr, ">")
-				}
-
-				var referToURI sip.Uri
-				if err := sip.ParseUri(referToStr, &referToURI); err != nil {
-					return nil, fmt.Errorf("ошибка парсинга Refer-To URI: %w", err)
-				}
-
-				// Получаем ID подписки
-				subscriptionID := cseqHeader.Value()
-
-				// Создаем подписку
-				subscription := &ReferSubscription{
-					ID:         subscriptionID,
-					dialog:     d,
-					referToURI: referToURI,
-					active:     true,
-				}
-
-				// КРИТИЧНО: thread-safe сохранение подписки с проверкой дублирования
+			subscription, err := d.processReferResponse(resp, referReq)
+			if err != nil {
+				// Очищаем транзакцию при ошибке
 				d.mutex.Lock()
-				if d.referSubscriptions == nil {
-					d.referSubscriptions = make(map[string]*ReferSubscription)
-				}
-
-				// Проверяем на дублирование ID (теоретически возможно при race condition)
-				if _, exists := d.referSubscriptions[subscriptionID]; exists {
-					d.mutex.Unlock()
-					// Очищаем транзакцию при ошибке
-					d.referTx = nil
-					d.referReq = nil
-					return nil, fmt.Errorf("REFER subscription with ID %s already exists", subscriptionID)
-				}
-
-				// Атомарно добавляем подписку
-				d.referSubscriptions[subscriptionID] = subscription
-
-				// Очищаем транзакцию и запрос под тем же мьютексом для атомарности
 				d.referTx = nil
 				d.referReq = nil
 				d.mutex.Unlock()
-
-				return subscription, nil
-			default:
-				// Failure - REFER отклонен
+				return nil, err
+			}
+			if subscription != nil {
+				// Успешно создана подписка
+				d.mutex.Lock()
 				d.referTx = nil
 				d.referReq = nil
-				return nil, fmt.Errorf("REFER отклонен: %d %s", resp.StatusCode, resp.Reason)
+				d.mutex.Unlock()
+				return subscription, nil
 			}
+			// Если subscription == nil, продолжаем ждать (provisional response)
 
-		case <-d.referTx.Done():
+		case <-referTx.Done():
 			// Транзакция завершена без финального ответа
+			d.mutex.Lock()
 			d.referTx = nil
 			d.referReq = nil
+			d.mutex.Unlock()
 			return nil, fmt.Errorf("REFER транзакция завершена без ответа")
 
 		case <-ctx.Done():
 			// Контекст отменен
 			return nil, ctx.Err()
 		}
+	}
+}
+
+// processReferResponse обрабатывает ответ на REFER запрос
+// Возвращает:
+//   - nil, nil для provisional responses (продолжить ожидание)
+//   - subscription, nil для успешного ответа
+//   - nil, error для ошибки
+func (d *Dialog) processReferResponse(resp *sip.Response, referReq *sip.Request) (*ReferSubscription, error) {
+	switch {
+	case resp.StatusCode >= 100 && resp.StatusCode < 200:
+		// Provisional responses - продолжаем ждать
+		return nil, nil
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		// Success - создаем подписку
+		cseqHeader := referReq.GetHeader("CSeq")
+		if cseqHeader == nil {
+			return nil, fmt.Errorf("отсутствует CSeq заголовок в REFER запросе")
+		}
+
+		// Получаем Refer-To URI из исходного запроса
+		referToHeader := referReq.GetHeader("Refer-To")
+		if referToHeader == nil {
+			return nil, fmt.Errorf("отсутствует Refer-To заголовок в REFER запросе")
+		}
+
+		// Парсим Refer-To URI
+		referToStr := referToHeader.Value()
+		// Убираем < > если есть
+		if strings.HasPrefix(referToStr, "<") && strings.HasSuffix(referToStr, ">") {
+			referToStr = strings.TrimPrefix(referToStr, "<")
+			referToStr = strings.TrimSuffix(referToStr, ">")
+		}
+
+		var referToURI sip.Uri
+		if err := sip.ParseUri(referToStr, &referToURI); err != nil {
+			return nil, fmt.Errorf("ошибка парсинга Refer-To URI: %w", err)
+		}
+
+		// Получаем ID подписки
+		subscriptionID := cseqHeader.Value()
+
+		// Создаем подписку с автоочисткой
+		subscription := &ReferSubscription{
+			ID:         subscriptionID,
+			dialogID:   d.callID,        // НОВОЕ: слабая ссылка
+			dialog:     d,               // Прямая ссылка может быть очищена позже
+			referToURI: referToURI,
+			active:     true,
+			createdAt:  time.Now(),      // НОВОЕ: время для автоочистки
+		}
+
+		// КРИТИЧНО: thread-safe сохранение подписки с проверкой дублирования
+		d.mutex.Lock()
+		if d.referSubscriptions == nil {
+			d.referSubscriptions = make(map[string]*ReferSubscription)
+		}
+
+		// НОВОЕ: Автоочистка старых подписок перед добавлением новой
+		d.cleanupOldReferSubscriptions()
+
+		// Проверяем на дублирование ID (теоретически возможно при race condition)
+		if _, exists := d.referSubscriptions[subscriptionID]; exists {
+			d.mutex.Unlock()
+			return nil, fmt.Errorf("REFER subscription with ID %s already exists", subscriptionID)
+		}
+
+		// Атомарно добавляем подписку
+		d.referSubscriptions[subscriptionID] = subscription
+		d.mutex.Unlock()
+
+		return subscription, nil
+	default:
+		// Failure - REFER отклонен
+		return nil, fmt.Errorf("REFER отклонен: %d %s", resp.StatusCode, resp.Reason)
 	}
 }
 

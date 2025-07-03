@@ -1,8 +1,10 @@
 package dialog
 
 import (
+	"hash"
 	"hash/fnv"
 	"sync"
+	"unsafe"
 )
 
 // ShardCount количество шардов для распределения нагрузки
@@ -16,6 +18,13 @@ type DialogShard struct {
 	mutex   sync.RWMutex
 }
 
+// hasherPool пул хэшеров для избежания аллокаций
+var hasherPool = sync.Pool{
+	New: func() interface{} {
+		return fnv.New32a()
+	},
+}
+
 // ShardedDialogMap представляет thread-safe карту диалогов с sharding
 // для высокой производительности в многопоточной среде
 //
@@ -24,6 +33,7 @@ type DialogShard struct {
 //   - Масштабируется с количеством CPU cores
 //   - Минимизирует lock contention между горутинами
 //   - Обеспечивает равномерное распределение нагрузки
+//   - Оптимизированное хэширование с пулом хэшеров
 //
 // Принцип работы:
 //   - Диалоги распределяются по шардам на основе хэша ключа
@@ -49,14 +59,26 @@ func NewShardedDialogMap() *ShardedDialogMap {
 }
 
 // hashKey вычисляет хэш ключа диалога для определения шарда
-// КРИТИЧНО: использует быстрый FNV hash для равномерного распределения
+// КРИТИЧНО: оптимизированная версия с пулом хэшеров и unsafe string->[]byte
 func (m *ShardedDialogMap) hashKey(key DialogKey) uint32 {
-	hasher := fnv.New32a()
+	// Получаем хэшер из пула
+	hasher := hasherPool.Get().(hash.Hash32)
+	defer func() {
+		hasher.Reset() // Очищаем для повторного использования
+		hasherPool.Put(hasher)
+	}()
 
-	// Комбинируем все части ключа для максимальной энтропии
-	hasher.Write([]byte(key.CallID))
-	hasher.Write([]byte(key.LocalTag))
-	hasher.Write([]byte(key.RemoteTag))
+	// Оптимизированная конвертация string->[]byte без аллокации
+	// КРИТИЧНО: используем unsafe для избежания копирования
+	if len(key.CallID) > 0 {
+		hasher.Write(*(*[]byte)(unsafe.Pointer(&key.CallID)))
+	}
+	if len(key.LocalTag) > 0 {
+		hasher.Write(*(*[]byte)(unsafe.Pointer(&key.LocalTag)))
+	}
+	if len(key.RemoteTag) > 0 {
+		hasher.Write(*(*[]byte)(unsafe.Pointer(&key.RemoteTag)))
+	}
 
 	return hasher.Sum32()
 }

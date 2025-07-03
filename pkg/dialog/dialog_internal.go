@@ -36,6 +36,12 @@ func (d *Dialog) buildRequest(method sip.RequestMethod) (*sip.Request, error) {
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
 
+	// КРИТИЧНО: Диагностика для отладки проблемы с тегами
+	if d.stack != nil && d.stack.config.Logger != nil && method == sip.BYE {
+		d.stack.config.Logger.Printf("Building %s request for dialog %s: isUAC=%v, localTag=%s, remoteTag=%s", 
+			method, d.callID, d.isUAC, d.localTag, d.remoteTag)
+	}
+
 	// Определяем Request-URI
 	reqURI := d.remoteTarget
 	if reqURI.Host == "" {
@@ -70,6 +76,14 @@ func (d *Dialog) buildRequest(method sip.RequestMethod) (*sip.Request, error) {
 		if d.inviteReq != nil {
 			fromURI = d.inviteReq.To().Address
 			toURI = d.inviteReq.From().Address
+		}
+	}
+
+	// КРИТИЧНО: Дополнительная диагностика для BYE запросов
+	if d.stack != nil && d.stack.config.Logger != nil && method == sip.BYE {
+		d.stack.config.Logger.Printf("BYE request tags: From-tag=%s, To-tag=%s", fromTag, toTag)
+		if fromTag == toTag {
+			d.stack.config.Logger.Printf("WARNING: From and To tags are identical! This will cause 481 errors.")
 		}
 	}
 
@@ -127,19 +141,71 @@ func (d *Dialog) processResponse(resp *sip.Response) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
-	// Обновляем remote tag если его еще нет
+	// КРИТИЧНО: Сохраняем оригинальный localTag для валидации
+	originalLocalTag := d.localTag
+
+	// КРИТИЧНО: Диагностика processResponse
+	if d.stack != nil && d.stack.config.Logger != nil {
+		d.stack.config.Logger.Printf("Processing response %d for dialog %s: before update localTag=%s, remoteTag=%s (instance=%p)", 
+			resp.StatusCode, d.callID, d.localTag, d.remoteTag, d)
+	}
+
+	// КРИТИЧНО: Обновляем remote tag и ключ диалога thread-safe
+	needsKeyUpdate := false
+	var oldKey DialogKey
+	
 	if d.remoteTag == "" {
+		// Сохраняем старый ключ
+		oldKey = d.key
+		
 		if d.isUAC {
-			// Для UAC remote tag в To
+			// Для UAC remote tag приходит в To заголовке ответа
 			if toTag := resp.To().Params["tag"]; toTag != "" {
+				// КРИТИЧНО: Валидация что теги разные
+				if toTag == d.localTag {
+					if d.stack != nil && d.stack.config.Logger != nil {
+						d.stack.config.Logger.Printf("ERROR: Remote tag equals local tag (%s) for UAC dialog %s", toTag, d.callID)
+					}
+					return fmt.Errorf("remote tag cannot be the same as local tag")
+				}
 				d.remoteTag = toTag
 				d.key.RemoteTag = toTag
+				needsKeyUpdate = true
 			}
 		} else {
-			// Для UAS remote tag в From
-			if fromTag := resp.From().Params["tag"]; fromTag != "" {
+			// Для UAS remote tag должен быть уже установлен при создании диалога
+			// Это ситуация когда сервер отправляет ответ и получает на него ACK/другой запрос
+			if fromTag := resp.From().Params["tag"]; fromTag != "" && d.remoteTag == "" {
+				// КРИТИЧНО: Валидация что теги разные
+				if fromTag == d.localTag {
+					if d.stack != nil && d.stack.config.Logger != nil {
+						d.stack.config.Logger.Printf("ERROR: Remote tag equals local tag (%s) for UAS dialog %s", fromTag, d.callID)
+					}
+					return fmt.Errorf("remote tag cannot be the same as local tag")
+				}
 				d.remoteTag = fromTag
 				d.key.RemoteTag = fromTag
+				needsKeyUpdate = true
+			}
+		}
+	}
+	
+	// КРИТИЧНО: Диагностика после обновления тегов
+	if d.stack != nil && d.stack.config.Logger != nil && needsKeyUpdate {
+		d.stack.config.Logger.Printf("Updated dialog tags for %s: localTag=%s, remoteTag=%s, newKey=%s", 
+			d.callID, d.localTag, d.remoteTag, d.key.String())
+	}
+	
+	// КРИТИЧНО: Атомарно обновляем диалог в карте стека
+	if needsKeyUpdate && d.stack != nil && d.stack.dialogs != nil {
+		// ВАЖНО: Делаем это под mutex'ом диалога для предотвращения race conditions
+		// Удаляем под старым ключом если он отличается
+		if oldKey.RemoteTag != d.key.RemoteTag {
+			// НОВОЕ: Проверяем что диалог еще существует под старым ключом
+			if existingDialog, exists := d.stack.findDialogByKey(oldKey); exists && existingDialog == d {
+				d.stack.removeDialog(oldKey)
+				// Добавляем под новым ключом
+				d.stack.addDialog(d.key, d)
 			}
 		}
 	}
@@ -218,6 +284,17 @@ func (d *Dialog) processResponse(resp *sip.Response) error {
 		d.inviteResp = resp
 	}
 
+	// КРИТИЧНО: Валидация что localTag не изменился
+	if d.localTag != originalLocalTag {
+		if d.stack != nil && d.stack.config.Logger != nil {
+			d.stack.config.Logger.Printf("FATAL ERROR: localTag was changed in processResponse! Original=%s, Current=%s, Dialog=%s", 
+				originalLocalTag, d.localTag, d.callID)
+		}
+		// Восстанавливаем оригинальный tag
+		d.localTag = originalLocalTag
+		return fmt.Errorf("internal error: localTag was corrupted during response processing")
+	}
+
 	return nil
 }
 
@@ -235,6 +312,12 @@ func (d *Dialog) createResponse(req *sip.Request, statusCode int, reason string)
 			to.Params = make(sip.HeaderParams)
 		}
 		to.Params["tag"] = d.localTag
+		
+		// КРИТИЧНО: Диагностика для отладки серверных тегов
+		if d.stack != nil && d.stack.config.Logger != nil && statusCode >= 200 {
+			d.stack.config.Logger.Printf("UAS created %d response for dialog %s: adding To-tag=%s", 
+				statusCode, d.callID, d.localTag)
+		}
 	}
 
 	// Contact

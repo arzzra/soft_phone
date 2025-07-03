@@ -1,0 +1,13 @@
+{"command": "/Users/arz/go/bin/godoc-mcp","args": [],"env": {"GOPATH": "/Users/arz/go","GOMODCACHE": "/Users/arz/go/pkg/mod"}}
+
+
+давай вместо этого костыля сделаем так                                                                                                                                                                          │
+   1 добавим метод в rtp сессию для регистрации handler входящего rtp                                                                                                                                              │
+   2 media session регистрировать свои handler в методе AddRTPSession                                                                                                                                              │
+   3 OnAudioReceived     func([]byte, PayloadType, time.Duration) // Callback для обработанных аудио данных (после аудио процессора)                                                                               │
+       OnRawAudioReceived  func([]byte, PayloadType, time.Duration) // Callback для сырых аудио данных (payload без обработки)                                                                                     │
+       OnRawPacketReceived func(*rtp.Packet)                        // Callback для сырых RTP пакетов (весь пакет без декодирования)                                                                               │
+       OnDTMFReceived      func(DTMFEvent)                                                                                                                                                                         │
+       OnMediaError        func(error) расширим эти методы добавим туда прокидывание id еще                                                                                                                        │
+                                                                                                                                                                                                                   │
+   если 22не понятно что то уточни пожалуйста, максимально декомпозируй задачи чтобы я мог отследить ход твоей работы

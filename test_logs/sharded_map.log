@@ -1,0 +1,157 @@
+=== RUN   TestShardedMapBasicOperations
+--- PASS: TestShardedMapBasicOperations (0.00s)
+=== RUN   TestShardedMapConcurrentAccess
+    sharded_map_test.go:114: Set operations: 10000
+    sharded_map_test.go:115: Get operations: 10000
+    sharded_map_test.go:116: Delete operations: 5000
+    sharded_map_test.go:117: Final count: 5000
+--- PASS: TestShardedMapConcurrentAccess (0.03s)
+=== RUN   TestShardedMapLoadDistribution
+    sharded_map_test.go:169: Used shards: 32/32
+    sharded_map_test.go:170: Total entries: 10000
+    sharded_map_test.go:171: Min entries per shard: 287
+    sharded_map_test.go:172: Max entries per shard: 342
+    sharded_map_test.go:173: Average entries per shard: 312.50
+--- PASS: TestShardedMapLoadDistribution (0.08s)
+=== RUN   TestShardedMapForEach
+--- PASS: TestShardedMapForEach (0.01s)
+=== RUN   TestShardedMapConcurrentForEach
+    sharded_map_test.go:305: Goroutine 1, iteration 0: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 0: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 0: found 997 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 0: found 996 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 0: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 0: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 0: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 0: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 0: found 996 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 0: found 997 dialogs
+    sharded_map_test.go:305: Goroutine 1, iteration 1: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 1: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 1: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 1: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 1: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 1: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 1: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 1: found 997 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 1: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 1, iteration 2: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 1: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 2: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 2: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 2: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 2: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 2: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 2: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 2: found 1002 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 3: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 1, iteration 3: found 1002 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 3: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 2: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 3: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 3: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 3: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 2: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 3: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 3: found 998 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 4: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 4: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 4: found 1002 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 4: found 1003 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 4: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 4: found 1003 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 4: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 1, iteration 4: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 3: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 5: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 5: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 3: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 5: found 1002 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 5: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 4: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 5: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 5: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 4: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 6: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 6: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 5: found 1002 dialogs
+    sharded_map_test.go:305: Goroutine 1, iteration 5: found 1002 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 6: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 5: found 1002 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 6: found 1002 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 6: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 1, iteration 6: found 999 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 6: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 5: found 1002 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 7: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 7: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 6: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 6: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 7: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 1, iteration 7: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 7: found 1001 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 7: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 7: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 6: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 1, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 7: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 7: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 7, iteration 9: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 0, iteration 9: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 7: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 8, iteration 9: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 4, iteration 9: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 1, iteration 9: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 8: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 3, iteration 9: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 2, iteration 9: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 9, iteration 9: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 6, iteration 9: found 1000 dialogs
+    sharded_map_test.go:305: Goroutine 5, iteration 9: found 1000 dialogs
+--- PASS: TestShardedMapConcurrentForEach (0.04s)
+=== RUN   TestShardedMapHashDistribution
+=== RUN   TestShardedMapHashDistribution/Sequential_CallIDs
+    sharded_map_test.go:420: Pattern: Sequential CallIDs
+    sharded_map_test.go:421: Total entries: 1000
+    sharded_map_test.go:422: Non-empty shards: 32/32
+    sharded_map_test.go:423: Min/Max entries: 23/38
+    sharded_map_test.go:424: Mean: 31.25, StdDev: 10.22
+=== RUN   TestShardedMapHashDistribution/Sequential_LocalTags
+    sharded_map_test.go:420: Pattern: Sequential LocalTags
+    sharded_map_test.go:421: Total entries: 1000
+    sharded_map_test.go:422: Non-empty shards: 32/32
+    sharded_map_test.go:423: Min/Max entries: 26/38
+    sharded_map_test.go:424: Mean: 31.25, StdDev: 5.59
+=== RUN   TestShardedMapHashDistribution/Sequential_RemoteTags
+    sharded_map_test.go:420: Pattern: Sequential RemoteTags
+    sharded_map_test.go:421: Total entries: 1000
+    sharded_map_test.go:422: Non-empty shards: 32/32
+    sharded_map_test.go:423: Min/Max entries: 27/37
+    sharded_map_test.go:424: Mean: 31.25, StdDev: 4.91
+=== RUN   TestShardedMapHashDistribution/Mixed_patterns
+    sharded_map_test.go:420: Pattern: Mixed patterns
+    sharded_map_test.go:421: Total entries: 1000
+    sharded_map_test.go:422: Non-empty shards: 32/32
+    sharded_map_test.go:423: Min/Max entries: 25/39
+    sharded_map_test.go:424: Mean: 31.25, StdDev: 8.84
+--- PASS: TestShardedMapHashDistribution (0.02s)
+    --- PASS: TestShardedMapHashDistribution/Sequential_CallIDs (0.00s)
+    --- PASS: TestShardedMapHashDistribution/Sequential_LocalTags (0.01s)
+    --- PASS: TestShardedMapHashDistribution/Sequential_RemoteTags (0.00s)
+    --- PASS: TestShardedMapHashDistribution/Mixed_patterns (0.01s)
+=== RUN   TestShardedMapMemoryUsage
+    sharded_map_test.go:589: Memory used: 9173472 bytes
+    sharded_map_test.go:590: Memory per entry: 917 bytes
+    sharded_map_test.go:591: Total entries: 10000
+    sharded_map_test.go:600: Memory after clear: -39096 bytes
+--- PASS: TestShardedMapMemoryUsage (0.09s)
+PASS
+ok  	github.com/arzzra/soft_phone/pkg/dialog	1.634s

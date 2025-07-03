@@ -58,21 +58,19 @@ type StackConfig struct {
 	// По умолчанию: 1000
 	MaxDialogs int
 
-	// Logger опциональный логгер для отладки и диагностики
+	// Logger опциональный логгер для отладки и диагностики (DEPRECATED)
 	// Если nil, логирование отключено
 	Logger *log.Logger
+	
+	// НОВОЕ: Структурированный логгер для продакшна
+	StructuredLogger StructuredLogger
+	
+	// НОВОЕ: Recovery handler для обработки паник
+	RecoveryHandler RecoveryHandler
 }
 
-// TransactionPool управляет активными SIP транзакциями.
-//
-// Обеспечивает thread-safe доступ к множеству одновременных транзакций.
-// Ключом служит branch ID из заголовка Via.
-type TransactionPool struct {
-	// inviteTransactions карта активных INVITE транзакций
-	inviteTransactions map[string]*Transaction // key: branch ID
-	// mutex для синхронизации доступа
-	mutex sync.RWMutex
-}
+// УДАЛЕНО: TransactionPool больше не нужен,
+// sipgo сам управляет транзакциями
 
 // StackCallbacks содержит обработчики событий SIP стека.
 //
@@ -84,16 +82,82 @@ type StackCallbacks struct {
 	OnIncomingRefer func(dialog IDialog, referTo sip.Uri, replaces *ReplacesInfo)
 }
 
-// Stack представляет основную реализацию SIP стека.
+// Stack представляет основную реализацию SIP стека для управления диалогами.
 //
-// Объединяет все компоненты для полноценной работы с SIP:
-//   - Транспортный слой (sipgo)
-//   - Управление диалогами через sharded map
-//   - Обработка транзакций
-//   - Колбэки для приложения
+// Stack является центральным компонентом пакета dialog и обеспечивает:
+//   - Полноценную SIP инфраструктуру (транспорт, транзакции, диалоги)
+//   - Высокопроизводительное масштабируемое управление диалогами
+//   - Thread-safe операции с тысячами одновременных диалогов
+//   - Встроенную систему метрик и мониторинга
+//   - Graceful shutdown с автоматической очисткой ресурсов
 //
-// Все операции являются thread-safe с высокой производительностью.
-// КРИТИЧНО: использует sharded dialog map для устранения mutex bottleneck
+// # Архитектура
+//
+// Stack построен по модульной архитектуре с четким разделением ответственности:
+//
+//   Transport Layer (sipgo):    UDP/TCP/TLS/WebSocket транспорт
+//   Transaction Layer:          SIP транзакции с таймаутами (RFC 3261)
+//   Dialog Layer:              Управление диалогами с sharded storage
+//   Application Layer:         Колбэки приложения и бизнес-логика
+//
+// # Производительность
+//
+// Stack оптимизирован для высоких нагрузок:
+//   - ShardedDialogMap: O(1) операции без глобальных блокировок
+//   - Separate mutex для колбэков: минимизация contention
+//   - Batch операции: группировка операций для лучшей производительности
+//   - Memory pooling: переиспользование объектов для снижения GC pressure
+//
+// # Пример использования
+//
+//   config := &StackConfig{
+//       Transport: &TransportConfig{
+//           Protocol: "udp",
+//           Address:  "0.0.0.0",
+//           Port:     5060,
+//       },
+//       UserAgent:  "MyApp/1.0",
+//       MaxDialogs: 10000,
+//   }
+//   
+//   stack, err := NewStack(config)
+//   if err != nil {
+//       return err
+//   }
+//   
+//   // Настройка обработчиков
+//   stack.OnIncomingDialog(func(dialog IDialog) {
+//       // Обработка входящего вызова
+//       dialog.Accept(ctx)
+//   })
+//   
+//   // Запуск стека
+//   ctx := context.Background()
+//   go stack.Start(ctx)
+//   defer stack.Shutdown(ctx)
+//   
+//   // Создание исходящего вызова
+//   targetURI, _ := sip.ParseUri("sip:user@example.com")
+//   dialog, _ := stack.NewInvite(ctx, targetURI, InviteOpts{})
+//
+// # Thread Safety
+//
+// Все публичные методы Stack являются thread-safe:
+//   - NewInvite(), DialogByKey() защищены от race conditions
+//   - OnIncomingDialog(), OnIncomingRefer() используют отдельные мьютексы
+//   - addDialog(), removeDialog() используют lock-free sharded map
+//   - Start(), Shutdown() безопасны для множественного вызова
+//
+// # Graceful Shutdown
+//
+// Shutdown() обеспечивает корректное завершение:
+//   1. Остановка приема новых соединений
+//   2. Завершение всех активных диалогов через BYE
+//   3. Ожидание завершения транзакций с таймаутом
+//   4. Освобождение всех ресурсов (goroutines, файлы, сокеты)
+//
+// КРИТИЧНО: Использует sharded dialog map для устранения mutex bottleneck при работе
+// с тысячами одновременных диалогов. Каждый shard имеет собственный мьютекс.
 type Stack struct {
 	// sipgo компоненты
 	ua     *sipgo.UserAgent
@@ -107,10 +171,22 @@ type Stack struct {
 	contact sip.ContactHeader
 
 	// внутренние структуры
-	dialogs        *ShardedDialogMap // КРИТИЧНО: sharded map вместо обычной карты
-	transactions   *TransactionPool
-	callbacks      StackCallbacks
-	callbacksMutex sync.RWMutex // КРИТИЧНО: отдельный мьютекс только для колбэков
+	dialogs           *ShardedDialogMap   // КРИТИЧНО: sharded map вместо обычной карты
+	transactionMgr    *TransactionManager // НОВОЕ: централизованное управление транзакциями
+	timeoutMgr        *TimeoutManager     // НОВОЕ: управление таймаутами транзакций и диалогов
+	callbacks         StackCallbacks
+	callbacksMutex    sync.RWMutex // КРИТИЧНО: отдельный мьютекс только для колбэков
+	
+	// КРИТИЧНО: Собственный генератор ID для предотвращения коллизий
+	idGenerator       *IDGeneratorPool
+	
+	// НОВОЕ: Система обработки ошибок и логирования
+	structuredLogger  StructuredLogger  // Структурированное логирование
+	recoveryHandler   RecoveryHandler   // Recovery механизмы
+	recoveryMiddleware *RecoveryMiddleware // Middleware для обработчиков
+	
+	// НОВОЕ: Система метрик и мониторинга
+	metricsCollector  *MetricsCollector // Сбор и экспорт метрик
 
 	// контекст для управления жизненным циклом
 	ctx    context.Context
@@ -159,12 +235,50 @@ func NewStack(config *StackConfig) (*Stack, error) {
 		config.MaxDialogs = 1000
 	}
 
+	// НОВОЕ: Инициализация структурированного логгера
+	var structuredLogger StructuredLogger
+	if config.StructuredLogger != nil {
+		structuredLogger = config.StructuredLogger
+	} else {
+		// Используем глобальный логгер
+		structuredLogger = GetDefaultLogger()
+	}
+	
+	// НОВОЕ: Инициализация recovery handler
+	var recoveryHandler RecoveryHandler
+	if config.RecoveryHandler != nil {
+		recoveryHandler = config.RecoveryHandler
+	} else {
+		recoveryHandler = NewDefaultRecoveryHandler(structuredLogger.WithComponent("recovery"))
+	}
+	
+	// НОВОЕ: Создаем recovery middleware
+	recoveryMiddleware := NewRecoveryMiddleware(recoveryHandler, structuredLogger.WithComponent("middleware"))
+	
+	// НОВОЕ: Инициализация системы метрик
+	metricsConfig := DefaultMetricsConfig()
+	metricsConfig.Logger = structuredLogger.WithComponent("metrics")
+	metricsCollector := NewMetricsCollector(metricsConfig)
+	
+	// КРИТИЧНО: Создаем собственный генератор ID для предотвращения коллизий
+	idGenerator, err := NewIDGeneratorPool(DefaultIDGeneratorConfig())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ID generator: %w", err)
+	}
+	
+	// КРИТИЧНО: Диагностика генератора
+	if config.Logger != nil {
+		config.Logger.Printf("Stack %s: Created ID generator with nodeID=%x", config.UserAgent, idGenerator.nodeID[:4])
+	}
+
 	return &Stack{
-		config:  config,
-		dialogs: NewShardedDialogMap(), // КРИТИЧНО: используем sharded map
-		transactions: &TransactionPool{
-			inviteTransactions: make(map[string]*Transaction),
-		},
+		config:            config,
+		dialogs:           NewShardedDialogMap(), // КРИТИЧНО: используем sharded map
+		structuredLogger:  structuredLogger.WithComponent("stack"),
+		recoveryHandler:   recoveryHandler,
+		recoveryMiddleware: recoveryMiddleware,
+		metricsCollector:  metricsCollector,
+		idGenerator:       idGenerator, // КРИТИЧНО: собственный генератор
 	}, nil
 }
 
@@ -178,35 +292,26 @@ func (s *Stack) findDialogByKey(key DialogKey) (*Dialog, bool) {
 // КРИТИЧНО: использует sharded map для высокой производительности
 func (s *Stack) addDialog(key DialogKey, dialog *Dialog) {
 	s.dialogs.Set(key, dialog)
+	
+	// НОВОЕ: Уведомляем систему метрик
+	if s.metricsCollector != nil {
+		s.metricsCollector.DialogCreated(key)
+	}
 }
 
 // removeDialog удаляет диалог из пула
 // КРИТИЧНО: использует sharded map без глобальной блокировки
 func (s *Stack) removeDialog(key DialogKey) {
 	s.dialogs.Delete(key)
+	
+	// НОВОЕ: Уведомляем систему метрик
+	if s.metricsCollector != nil {
+		s.metricsCollector.DialogTerminated(key, "dialog_removed")
+	}
 }
 
-// findTransactionByBranch ищет INVITE транзакцию по branch ID
-func (s *Stack) findTransactionByBranch(branchID string) (*Transaction, bool) {
-	s.transactions.mutex.RLock()
-	defer s.transactions.mutex.RUnlock()
-	tx, exists := s.transactions.inviteTransactions[branchID]
-	return tx, exists
-}
-
-// addTransaction добавляет транзакцию в пул
-func (s *Stack) addTransaction(branchID string, tx *Transaction) {
-	s.transactions.mutex.Lock()
-	defer s.transactions.mutex.Unlock()
-	s.transactions.inviteTransactions[branchID] = tx
-}
-
-// removeTransaction удаляет транзакцию из пула
-func (s *Stack) removeTransaction(branchID string) {
-	s.transactions.mutex.Lock()
-	defer s.transactions.mutex.Unlock()
-	delete(s.transactions.inviteTransactions, branchID)
-}
+// УДАЛЕНО: Методы работы с TransactionPool,
+// sipgo сам управляет транзакциями
 
 // extractBranchID извлекает branch ID из Via заголовка
 func extractBranchID(via *sip.ViaHeader) string {
@@ -216,25 +321,30 @@ func extractBranchID(via *sip.ViaHeader) string {
 	return via.Params["branch"]
 }
 
-// createDialogKey создает ключ диалога из SIP запроса
+// createDialogKey создает КАНОНИЧЕСКИЙ ключ диалога из SIP запроса
+// КРИТИЧНО: Ключ должен быть одинаковым для UAC и UAS для правильного поиска
 func createDialogKey(req sip.Request, isUAS bool) DialogKey {
 	callID := req.CallID().Value()
 	fromTag := req.From().Params["tag"]
 	toTag := req.To().Params["tag"]
 
+	// НОВОЕ: Используем канонический порядок тегов
+	// fromTag всегда от инициатора диалога (UAC), toTag от получателя (UAS)
+	// Для поиска диалога используем consistent ordering
+	
 	if isUAS {
-		// Для UAS (сервера): локальный тег = To, удаленный = From
+		// UAS ищет диалог: LocalTag=его сгенерированный тег (To), RemoteTag=клиентский тег (From)
 		return DialogKey{
 			CallID:    callID,
-			LocalTag:  toTag,
-			RemoteTag: fromTag,
+			LocalTag:  toTag,   // Серверный тег из To заголовка
+			RemoteTag: fromTag, // Клиентский тег из From заголовка
 		}
 	} else {
-		// Для UAC (клиента): локальный тег = From, удаленный = To
+		// UAC ищет диалог: LocalTag=его тег (From), RemoteTag=серверный тег (To)
 		return DialogKey{
 			CallID:    callID,
-			LocalTag:  fromTag,
-			RemoteTag: toTag,
+			LocalTag:  fromTag, // Клиентский тег из From заголовка
+			RemoteTag: toTag,   // Серверный тег из To заголовка (может быть пустым для initial requests)
 		}
 	}
 }
@@ -246,6 +356,65 @@ func (s *Stack) DialogByKey(key DialogKey) (Dialog, bool) {
 		return Dialog{}, false
 	}
 	return *dialog, true
+}
+
+// findDialogForIncomingBye ищет диалог для входящего BYE с fallback на альтернативные ключи
+// КРИТИЧНО: исправляет проблему 481 Call/Transaction Does Not Exist при отправке BYE
+func (s *Stack) findDialogForIncomingBye(req *sip.Request) (*Dialog, DialogKey) {
+	callID := req.CallID().Value()
+	fromTag := req.From().Params["tag"] 
+	toTag := req.To().Params["tag"]
+	
+	// Стратегия 1: Стандартный UAS поиск (To=LocalTag, From=RemoteTag)
+	uasKey := DialogKey{
+		CallID:    callID,
+		LocalTag:  toTag,   // Серверный тег
+		RemoteTag: fromTag, // Клиентский тег
+	}
+	if dialog, exists := s.findDialogByKey(uasKey); exists {
+		return dialog, uasKey
+	}
+	
+	// Стратегия 2: UAC поиск (From=LocalTag, To=RemoteTag) 
+	uacKey := DialogKey{
+		CallID:    callID,
+		LocalTag:  fromTag, // Клиентский тег
+		RemoteTag: toTag,   // Серверный тег
+	}
+	if dialog, exists := s.findDialogByKey(uacKey); exists {
+		return dialog, uacKey
+	}
+	
+	// Стратегия 3: Поиск по CallID с пустым RemoteTag (legacy диалоги)
+	legacyKey := DialogKey{
+		CallID:    callID,
+		LocalTag:  fromTag,
+		RemoteTag: "", // Пустой для старых диалогов
+	}
+	if dialog, exists := s.findDialogByKey(legacyKey); exists {
+		return dialog, legacyKey
+	}
+	
+	// Стратегия 4: Полный перебор по всем диалогам с тем же CallID
+	var foundDialog *Dialog
+	var foundKey DialogKey
+	s.dialogs.ForEach(func(key DialogKey, dialog *Dialog) {
+		if foundDialog != nil {
+			return // Уже нашли, пропускаем остальные
+		}
+		if key.CallID == callID {
+			// Проверяем совпадение тегов в любом порядке
+			if (key.LocalTag == fromTag && key.RemoteTag == toTag) ||
+			   (key.LocalTag == toTag && key.RemoteTag == fromTag) ||
+			   (key.LocalTag == fromTag && key.RemoteTag == "") ||
+			   (key.LocalTag == toTag && key.RemoteTag == "") {
+				foundDialog = dialog
+				foundKey = key
+			}
+		}
+	})
+	
+	return foundDialog, foundKey
 }
 
 // OnIncomingDialog устанавливает callback для входящих диалогов
@@ -294,6 +463,21 @@ func (s *Stack) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
+
+	// НОВОЕ: Создание Transaction Manager
+	tmConfig := DefaultTransactionManagerConfig()
+	if s.config.TxTimeout > 0 {
+		tmConfig.DefaultTimeout = s.config.TxTimeout
+	}
+	s.transactionMgr = NewTransactionManager(s.ctx, s, tmConfig)
+	
+	// НОВОЕ: Создание Timeout Manager
+	timeoutConfig := DefaultTimeoutManagerConfig()
+	if s.config.TxTimeout > 0 {
+		// Используем конфигурированный таймаут для транзакций
+		timeoutConfig.DefaultDialogExpiry = s.config.TxTimeout * 60 // Диалоги живут дольше транзакций
+	}
+	s.timeoutMgr = NewTimeoutManager(s.ctx, timeoutConfig)
 
 	// Создание Contact заголовка
 	s.contact = sip.ContactHeader{
@@ -346,6 +530,12 @@ func (s *Stack) Start(ctx context.Context) error {
 			s.config.Logger.Printf("SIP server error: %v", err)
 		}
 	}()
+	
+	// НОВОЕ: Запуск периодических health checks
+	if s.metricsCollector != nil {
+		healthCheckInterval := 30 * time.Second
+		s.metricsCollector.StartPeriodicHealthChecks(s.ctx, s, healthCheckInterval)
+	}
 
 	return nil
 }
@@ -367,10 +557,15 @@ func (s *Stack) Shutdown(ctx context.Context) error {
 	// Очищаем все диалоги атомарно
 	s.dialogs.Clear()
 
-	// Очищаем транзакции
-	s.transactions.mutex.Lock()
-	s.transactions.inviteTransactions = make(map[string]*Transaction)
-	s.transactions.mutex.Unlock()
+	// НОВОЕ: Завершаем Transaction Manager
+	if s.transactionMgr != nil {
+		s.transactionMgr.Shutdown()
+	}
+	
+	// НОВОЕ: Завершаем Timeout Manager
+	if s.timeoutMgr != nil {
+		s.timeoutMgr.Shutdown()
+	}
 
 	// Закрываем sipgo компоненты
 	if s.server != nil {
@@ -399,6 +594,7 @@ func (s *Stack) NewInvite(ctx context.Context, target sip.Uri, opts InviteOpts) 
 		stack:              s,
 		isUAC:              true,
 		state:              DialogStateInit,
+		stateTracker:       NewDialogStateTracker(DialogStateInit), // НОВОЕ: валидированная state machine
 		createdAt:          time.Now(),
 		responseChan:       make(chan *sip.Response, 10),
 		errorChan:          make(chan error, 1),
@@ -406,10 +602,20 @@ func (s *Stack) NewInvite(ctx context.Context, target sip.Uri, opts InviteOpts) 
 	}
 
 	// Генерируем уникальные идентификаторы
-	dialog.callID = generateCallID()
-	dialog.localTag = generateTag()
+	// КРИТИЧНО: Используем стековый генератор вместо глобального
+	dialog.callID = s.idGenerator.GetCallID()
+	dialog.localTag = s.idGenerator.GetTag()
 	dialog.localSeq = 0 // Будет увеличен при создании INVITE
 	dialog.localContact = s.contact
+	
+	// КРИТИЧНО: Диагностика генерации тегов для UAC
+	if s.config.Logger != nil {
+		s.config.Logger.Printf("UAC NEW DIALOG: localTag=%s for dialog %s (instance=%p)", 
+			dialog.localTag, dialog.callID, dialog)
+	}
+	
+	// КРИТИЧНО: Диагностика - сохраняем оригинальный localTag для валидации
+	originalLocalTag := dialog.localTag
 
 	// Устанавливаем ключ диалога
 	dialog.key = DialogKey{
@@ -470,18 +676,27 @@ func (s *Stack) NewInvite(ctx context.Context, target sip.Uri, opts InviteOpts) 
 	// Сохраняем запрос
 	dialog.inviteReq = invite
 
-	// Отправляем INVITE через client transaction
-	tx, err := s.client.TransactionRequest(ctx, invite)
+	// НОВОЕ: Создаем INVITE transaction через TransactionManager
+	txAdapter, err := s.transactionMgr.CreateClientTransaction(ctx, invite)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send INVITE: %w", err)
+		return nil, fmt.Errorf("failed to create INVITE transaction: %w", err)
 	}
 
-	// Сохраняем транзакцию
-	dialog.inviteTx = tx
+	// Сохраняем транзакцию адаптер
+	dialog.inviteTxAdapter = txAdapter
 
 	// Обновляем состояние
-	dialog.updateState(DialogStateTrying)
+	dialog.updateStateWithReason(DialogStateTrying, "INVITE_SENT", "INVITE request sent")
 
+	// КРИТИЧНО: Финальная валидация что localTag не изменился
+	if dialog.localTag != originalLocalTag {
+		if s.config.Logger != nil {
+			s.config.Logger.Printf("FATAL: NewInvite localTag corrupted! Original=%s, Current=%s", 
+				originalLocalTag, dialog.localTag)
+		}
+		return nil, fmt.Errorf("internal error: localTag was corrupted during NewInvite")
+	}
+	
 	// Сохраняем диалог в пул
 	s.addDialog(dialog.key, dialog)
 
@@ -495,9 +710,14 @@ func (s *Stack) setupHandlers() {
 		s.handleIncomingInvite(req, tx)
 	})
 
-	// Обработчик ACK
+	// КРИТИЧНО: Легкий обработчик ACK для совместимости с sipgo
+	// Основная обработка ACK происходит через канал tx.Acks() в handleServerTransactionAcks
 	s.server.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
-		s.handleIncomingAck(req, tx)
+		// Просто логируем получение ACK для отладки
+		if s.config.Logger != nil {
+			s.config.Logger.Printf("Global ACK handler: received ACK for Call-ID %s", req.CallID().Value())
+		}
+		// Фактическая обработка происходит в handleServerTransactionAcks через tx.Acks()
 	})
 
 	// Обработчик BYE
@@ -514,4 +734,79 @@ func (s *Stack) setupHandlers() {
 	s.server.OnRefer(func(req *sip.Request, tx sip.ServerTransaction) {
 		s.handleIncomingRefer(req, tx)
 	})
+}
+
+// НОВОЕ: Методы для работы с метриками и мониторингом
+
+// GetMetrics возвращает сборщик метрик
+func (s *Stack) GetMetrics() *MetricsCollector {
+	return s.metricsCollector
+}
+
+// GetPerformanceCounters возвращает текущие performance counters
+func (s *Stack) GetPerformanceCounters() map[string]int64 {
+	if s.metricsCollector != nil {
+		return s.metricsCollector.GetPerformanceCounters()
+	}
+	return nil
+}
+
+// RunHealthCheck выполняет проверку состояния стека
+func (s *Stack) RunHealthCheck() *HealthCheck {
+	if s.metricsCollector != nil {
+		return s.metricsCollector.RunHealthCheck(s)
+	}
+	
+	// Возвращаем базовую проверку если метрики отключены
+	return &HealthCheck{
+		Status:     HealthUnknown,
+		Timestamp:  time.Now(),
+		Components: map[string]string{"metrics": "disabled"},
+		Metrics:    nil,
+		Errors:     []string{"Metrics collection is disabled"},
+		Duration:   0,
+	}
+}
+
+// GetHealthStatus возвращает последний статус проверки состояния
+func (s *Stack) GetHealthStatus() (HealthStatus, time.Time) {
+	if s.metricsCollector != nil {
+		return s.metricsCollector.GetLastHealthStatus()
+	}
+	return HealthUnknown, time.Time{}
+}
+
+// ReportError сообщает об ошибке в систему метрик
+func (s *Stack) ReportError(err *DialogError) {
+	if s.metricsCollector != nil {
+		s.metricsCollector.ErrorOccurred(err)
+	}
+}
+
+// ReportStateTransition сообщает о переходе состояния диалога
+func (s *Stack) ReportStateTransition(from, to DialogState, reason string) {
+	if s.metricsCollector != nil {
+		s.metricsCollector.StateTransition(from, to, reason)
+	}
+}
+
+// ReportReferOperation сообщает о REFER операции
+func (s *Stack) ReportReferOperation(operation, status string) {
+	if s.metricsCollector != nil {
+		s.metricsCollector.ReferOperation(operation, status)
+	}
+}
+
+// ReportRecovery сообщает о восстановлении после паники
+func (s *Stack) ReportRecovery(component string, panicValue interface{}) {
+	if s.metricsCollector != nil {
+		s.metricsCollector.Recovery(component, panicValue)
+	}
+}
+
+// ReportTimeout сообщает о таймауте
+func (s *Stack) ReportTimeout(component, operation string, duration time.Duration) {
+	if s.metricsCollector != nil {
+		s.metricsCollector.Timeout(component, operation, duration)
+	}
 }

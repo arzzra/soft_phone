@@ -1,0 +1,13 @@
+=== RUN   TestThreadSafeUpdateState
+    thread_safety_test.go:101: State changes triggered: 4340
+    thread_safety_test.go:102: Total state updates: 5000
+--- PASS: TestThreadSafeUpdateState (0.02s)
+=== RUN   TestThreadSafeReferSubscriptions
+    thread_safety_test.go:186: Add operations: 5000
+    thread_safety_test.go:187: Remove operations: 5000
+    thread_safety_test.go:188: Read operations: 5000
+--- PASS: TestThreadSafeReferSubscriptions (0.04s)
+=== RUN   TestThreadSafeClose
+--- PASS: TestThreadSafeClose (0.00s)
+PASS
+ok  	github.com/arzzra/soft_phone/pkg/dialog	1.748s

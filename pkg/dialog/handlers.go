@@ -41,26 +41,38 @@ func (s *Stack) handleIncomingInvite(req *sip.Request, tx sip.ServerTransaction)
 			}
 		}
 
+		// НОВОЕ: Создаем server transaction адаптер
+		serverTxAdapter := s.transactionMgr.CreateServerTransaction(context.Background(), tx, sip.INVITE)
+
 		// Создаем новый диалог
 		dialog := &Dialog{
-			stack:              s,
-			serverTx:           tx,
-			inviteReq:          req,
-			isUAC:              false, // UAS
-			state:              DialogStateRinging,
-			createdAt:          time.Now(),
-			responseChan:       make(chan *sip.Response, 10),
-			errorChan:          make(chan error, 1),
-			referSubscriptions: make(map[string]*ReferSubscription),
+			stack:               s,
+			serverTx:            tx,              // DEPRECATED: сохраняем для совместимости
+			serverTxAdapter:     serverTxAdapter, // НОВОЕ: используем адаптер
+			inviteReq:           req,
+			isUAC:               false, // UAS
+			state:               DialogStateRinging,
+			stateTracker:        NewDialogStateTracker(DialogStateRinging), // НОВОЕ: валидированная state machine
+			createdAt:           time.Now(),
+			responseChan:        make(chan *sip.Response, 10),
+			errorChan:           make(chan error, 1),
+			referSubscriptions:  make(map[string]*ReferSubscription),
 		}
 
 		// Извлекаем информацию из запроса
 		dialog.callID = req.CallID().Value()
 		dialog.remoteTag = req.From().Params["tag"]
-		dialog.localTag = generateTag()
+		// КРИТИЧНО: Используем стековый генератор вместо глобального
+		dialog.localTag = s.idGenerator.GetTag()
 		dialog.localSeq = 0
 		dialog.remoteSeq = req.CSeq().SeqNo
 		dialog.localContact = s.contact
+		
+		// КРИТИЧНО: Диагностика генерации тегов для UAS
+		if s.config.Logger != nil {
+			s.config.Logger.Printf("UAS generated localTag=%s for dialog %s (remoteTag from request=%s)", 
+				dialog.localTag, dialog.callID, dialog.remoteTag)
+		}
 
 		// Сохраняем remote target из Contact заголовка
 		if contact := req.GetHeader("Contact"); contact != nil {
@@ -96,12 +108,9 @@ func (s *Stack) handleIncomingInvite(req *sip.Request, tx sip.ServerTransaction)
 		// Сохраняем диалог
 		s.addDialog(dialog.key, dialog)
 
-		// Отправляем 180 Ringing с нашим tag
-		ringing := dialog.createResponse(req, 180, "Ringing")
-		if err := tx.Respond(ringing); err != nil {
-			s.removeDialog(dialog.key)
-			return
-		}
+		// КРИТИЧНО: НЕ отправляем 180 Ringing автоматически
+		// Позволяем приложению контролировать когда отправлять промежуточные ответы
+		// 180 Ringing будет отправлен в методе Accept() если нужно
 
 		// Проверяем наличие тела (SDP)
 		if req.Body() != nil {
@@ -116,13 +125,24 @@ func (s *Stack) handleIncomingInvite(req *sip.Request, tx sip.ServerTransaction)
 			dialog.notifyBody(body)
 		}
 
-		// Уведомляем приложение о входящем диалоге
+		// КРИТИЧНО: Уведомляем приложение о входящем диалоге
+		// Используем синхронный вызов но с защитой от паник
 		s.callbacksMutex.RLock()
 		onIncomingDialog := s.callbacks.OnIncomingDialog
 		s.callbacksMutex.RUnlock()
 
 		if onIncomingDialog != nil {
-			onIncomingDialog(dialog)
+			func() {
+				defer func() {
+					// Защита от паник в пользовательском колбэке
+					if r := recover(); r != nil {
+						if s.config.Logger != nil {
+							s.config.Logger.Printf("Panic in OnIncomingDialog callback: %v", r)
+						}
+					}
+				}()
+				onIncomingDialog(dialog)
+			}()
 		}
 	} else {
 		// re-INVITE - ищем существующий диалог
@@ -145,25 +165,8 @@ func (s *Stack) handleIncomingInvite(req *sip.Request, tx sip.ServerTransaction)
 	}
 }
 
-// handleIncomingAck обрабатывает ACK запрос
-func (s *Stack) handleIncomingAck(req *sip.Request, tx sip.ServerTransaction) {
-	// ACK не имеет транзакции в 2xx случае
-	// Ищем диалог
-	dialogKey := DialogKey{
-		CallID:    req.CallID().Value(),
-		LocalTag:  req.To().Params["tag"],
-		RemoteTag: req.From().Params["tag"],
-	}
-
-	dialog, exists := s.findDialogByKey(dialogKey)
-	if !exists {
-		// ACK для несуществующего диалога - игнорируем
-		return
-	}
-
-	// Обновляем CSeq удаленной стороны
-	dialog.remoteSeq = req.CSeq().SeqNo
-}
+// УДАЛЕНО: handleIncomingAck - заменен на handleServerTransactionAcks
+// который правильно слушает канал tx.Acks() у server transaction
 
 // handleIncomingCancel обрабатывает CANCEL запрос
 func (s *Stack) handleIncomingCancel(req *sip.Request, tx sip.ServerTransaction) {
@@ -179,24 +182,53 @@ func (s *Stack) handleIncomingCancel(req *sip.Request, tx sip.ServerTransaction)
 	// Отправляем 200 OK на CANCEL
 	okResp := sip.NewResponseFromRequest(req, 200, "OK", nil)
 	if err := tx.Respond(okResp); err != nil {
+		if s.config.Logger != nil {
+			s.config.Logger.Printf("Failed to respond to CANCEL: %v", err)
+		}
 		return
 	}
 
-	// TODO: sipgo должен сам обрабатывать CANCEL и отправлять 487
-	// Нам нужно только очистить диалоги если нужно
+	// Ищем соответствующий INVITE transaction для отправки 487
+	// sipgo должен автоматически обрабатывать CANCEL и отправлять 487,
+	// но мы можем дополнительно обновить состояние диалога
+	
+	// Попытка найти диалог по Via branch (если есть активный INVITE)
+	branch := via.Params["branch"]
+	if branch != "" {
+		// Поиск активных диалогов и их завершение
+		s.dialogs.ForEach(func(key DialogKey, dialog *Dialog) {
+			if dialog.state == DialogStateRinging || dialog.state == DialogStateTrying {
+				// Завершаем диалог как отмененный
+				dialog.updateStateWithReason(DialogStateTerminated, "CANCEL", "CANCEL received")
+			}
+		})
+	}
 }
 
 // handleIncomingBye обрабатывает BYE запрос
 func (s *Stack) handleIncomingBye(req *sip.Request, tx sip.ServerTransaction) {
-	// Ищем диалог
-	dialogKey := DialogKey{
-		CallID:    req.CallID().Value(),
-		LocalTag:  req.To().Params["tag"],
-		RemoteTag: req.From().Params["tag"],
-	}
-
-	dialog, exists := s.findDialogByKey(dialogKey)
-	if !exists {
+	// КРИТИЧНО: Ищем диалог с fallback на альтернативные ключи
+	dialog, dialogKey := s.findDialogForIncomingBye(req)
+	if dialog == nil {
+		// Подробная диагностика для отладки
+		callID := req.CallID().Value()
+		fromTag := req.From().Params["tag"]
+		toTag := req.To().Params["tag"]
+		if s.config.Logger != nil {
+			s.config.Logger.Printf("BYE dialog not found: CallID=%s, From-tag=%s, To-tag=%s", callID, fromTag, toTag)
+			s.config.Logger.Printf("Active dialogs count: %d", s.dialogs.Count())
+			
+			// Показываем первые несколько активных диалогов для отладки
+			dialogCount := 0
+			s.dialogs.ForEach(func(key DialogKey, d *Dialog) {
+				if dialogCount < 3 { // Показываем только первые 3
+					s.config.Logger.Printf("  Active dialog: CallID=%s, Local=%s, Remote=%s, State=%s", 
+						key.CallID, key.LocalTag, key.RemoteTag, d.State())
+					dialogCount++
+				}
+			})
+		}
+		
 		// Диалог не найден
 		notFound := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
 		tx.Respond(notFound)
@@ -209,8 +241,8 @@ func (s *Stack) handleIncomingBye(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	// Обновляем состояние и удаляем диалог
-	dialog.updateState(DialogStateTerminated)
+	// Обновляем состояние и удаляем диалог  
+	dialog.updateStateWithReason(DialogStateTerminated, "BYE", "BYE received")
 	s.removeDialog(dialogKey)
 }
 
@@ -224,12 +256,8 @@ func (s *Stack) handleIncomingRefer(req *sip.Request, tx sip.ServerTransaction) 
 		return
 	}
 
-	// Ищем диалог
-	dialogKey := DialogKey{
-		CallID:    req.CallID().Value(),
-		LocalTag:  req.To().Params["tag"],
-		RemoteTag: req.From().Params["tag"],
-	}
+	// Ищем диалог - используем правильную логику создания ключа для UAS
+	dialogKey := createDialogKey(*req, true) // true = isUAS (сервер)
 
 	dialog, exists := s.findDialogByKey(dialogKey)
 	if !exists {
@@ -346,5 +374,79 @@ func (s *Stack) handleReInvite(req *sip.Request, tx sip.ServerTransaction, dialo
 	// Отправляем 200 OK
 	if err := tx.Respond(ok); err != nil {
 		s.config.Logger.Printf("Failed to send 200 OK for re-INVITE: %v", err)
+	}
+}
+
+// handleServerTransactionAcks обрабатывает ACK запросы для server transaction
+// КРИТИЧНО: Это исправляет проблему "ACK missed" путем правильного прослушивания
+// канала Acks() у sipgo server transaction вместо глобального обработчика
+func (s *Stack) handleServerTransactionAcks(dialog *Dialog, tx sip.ServerTransaction) {
+	defer func() {
+		// Защита от паник в горутине
+		if r := recover(); r != nil {
+			if s.config.Logger != nil {
+				s.config.Logger.Printf("Panic in handleServerTransactionAcks: %v", r)
+			}
+		}
+	}()
+
+	if s.config.Logger != nil {
+		s.config.Logger.Printf("Started ACK listener for dialog %s", dialog.callID)
+	}
+
+	for {
+		select {
+		case ackReq := <-tx.Acks():
+			if ackReq == nil {
+				// Канал закрыт, завершаем
+				if s.config.Logger != nil {
+					s.config.Logger.Printf("ACK channel closed for dialog %s", dialog.callID)
+				}
+				return
+			}
+
+			if s.config.Logger != nil {
+				s.config.Logger.Printf("Received ACK via tx.Acks() for dialog %s", dialog.callID)
+			}
+
+			// Обрабатываем ACK запрос
+			s.processIncomingAck(dialog, ackReq)
+
+		case <-tx.Done():
+			// Транзакция завершена, завершаем горутину
+			if s.config.Logger != nil {
+				s.config.Logger.Printf("Server transaction done for dialog %s", dialog.callID)
+			}
+			return
+
+		case <-dialog.ctx.Done():
+			// Диалог закрыт, завершаем горутину
+			if s.config.Logger != nil {
+				s.config.Logger.Printf("Dialog context cancelled for dialog %s", dialog.callID)
+			}
+			return
+		}
+	}
+}
+
+// processIncomingAck обрабатывает полученный ACK запрос
+func (s *Stack) processIncomingAck(dialog *Dialog, req *sip.Request) {
+	dialog.mutex.Lock()
+	dialog.remoteSeq = req.CSeq().SeqNo
+	
+	// Переходим в состояние Established если получили ACK
+	if dialog.state == DialogStateRinging {
+		dialog.mutex.Unlock()
+		dialog.updateStateWithReason(DialogStateEstablished, "ACK", "ACK received")
+		
+		if s.config.Logger != nil {
+			s.config.Logger.Printf("Dialog %s: Received ACK, transitioned to Established", dialog.callID)
+		}
+	} else {
+		dialog.mutex.Unlock()
+		
+		if s.config.Logger != nil {
+			s.config.Logger.Printf("Dialog %s: Received ACK in state %s", dialog.callID, dialog.state)
+		}
 	}
 }
