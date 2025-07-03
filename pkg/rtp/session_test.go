@@ -15,7 +15,7 @@ import (
 
 // MockTransport имитирует RTP транспорт для unit тестов
 type MockTransport struct {
-	mutex           sync.Mutex       // Защита от race conditions
+	mutex           sync.Mutex // Защита от race conditions
 	sentPackets     []*rtp.Packet
 	receivedPackets chan *rtp.Packet
 	localAddr       *net.UDPAddr
@@ -29,14 +29,14 @@ func NewMockTransport() *MockTransport {
 		receivedPackets: make(chan *rtp.Packet, 100),
 		localAddr:       &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5004},
 		remoteAddr:      &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5006},
-		active:          false,
+		active:          true,
 	}
 }
 
 func (mt *MockTransport) Send(packet *rtp.Packet) error {
 	mt.mutex.Lock()
 	defer mt.mutex.Unlock()
-	
+
 	if !mt.active {
 		return fmt.Errorf("транспорт не активен")
 	}
@@ -49,7 +49,7 @@ func (mt *MockTransport) Receive(ctx context.Context) (*rtp.Packet, net.Addr, er
 	active := mt.active
 	remoteAddr := mt.remoteAddr
 	mt.mutex.Unlock()
-	
+
 	if !active {
 		return nil, nil, fmt.Errorf("транспорт не активен")
 	}
@@ -73,7 +73,7 @@ func (mt *MockTransport) RemoteAddr() net.Addr {
 func (mt *MockTransport) Close() error {
 	mt.mutex.Lock()
 	defer mt.mutex.Unlock()
-	
+
 	mt.active = false
 	close(mt.receivedPackets)
 	return nil
@@ -96,7 +96,7 @@ func (mt *MockTransport) SimulateReceive(packet *rtp.Packet) {
 	mt.mutex.Lock()
 	active := mt.active
 	mt.mutex.Unlock()
-	
+
 	if active {
 		select {
 		case mt.receivedPackets <- packet:
@@ -110,7 +110,7 @@ func (mt *MockTransport) SimulateReceive(packet *rtp.Packet) {
 func (mt *MockTransport) GetSentPackets() []*rtp.Packet {
 	mt.mutex.Lock()
 	defer mt.mutex.Unlock()
-	
+
 	// Возвращаем копию для thread safety
 	result := make([]*rtp.Packet, len(mt.sentPackets))
 	copy(result, mt.sentPackets)

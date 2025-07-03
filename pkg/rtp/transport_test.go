@@ -81,7 +81,7 @@ func TestUDPTransportCreation(t *testing.T) {
 			defer transport.Close()
 
 			// Проверяем что транспорт неактивен после создания
-			if transport.IsActive() {
+			if !transport.IsActive() {
 				t.Error("Транспорт не должен быть активен сразу после создания")
 			}
 

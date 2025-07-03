@@ -12,7 +12,7 @@
 //	│           Application Layer         │ ← Dialog Management, REFER
 //	│          (Stack, Dialog)            │   Call setup, teardown, transfer
 //	├─────────────────────────────────────┤
-//	│           Transaction Layer         │ ← SIP Transactions, Timeouts  
+//	│           Transaction Layer         │ ← SIP Transactions, Timeouts
 //	│      (TransactionManager)           │   RFC 3261 compliant FSMs
 //	├─────────────────────────────────────┤
 //	│           Transport Layer           │ ← UDP/TCP/TLS/WebSocket
@@ -199,7 +199,7 @@
 //		},
 //	}
 //	stack, _ := NewStack(config)
-//	
+//
 //	// Получение метрик
 //	metrics := stack.GetMetrics()
 //	log.Printf("Active dialogs: %d", metrics.ActiveDialogs)
@@ -283,14 +283,16 @@ import (
 // # Переходы состояний по ролям
 //
 // UAC (User Agent Client - исходящий вызов):
-//   Init → Trying → Ringing → Established → Terminated
-//   Init → Trying → Established → Terminated (fast answer)
-//   Init → Trying → Terminated (reject/error)
+//
+//	Init → Trying → Ringing → Established → Terminated
+//	Init → Trying → Established → Terminated (fast answer)
+//	Init → Trying → Terminated (reject/error)
 //
 // UAS (User Agent Server - входящий вызов):
-//   Init → Ringing → Established → Terminated (accept)
-//   Init → Ringing → Terminated (reject)
-//   Init → Terminated (immediate reject)
+//
+//	Init → Ringing → Established → Terminated (accept)
+//	Init → Ringing → Terminated (reject)
+//	Init → Terminated (immediate reject)
 //
 // # Thread Safety
 //
@@ -308,19 +310,19 @@ import (
 //
 // # Пример использования
 //
-//   // Чтение состояния (lock-free)
-//   currentState := DialogState(atomic.LoadInt64(&dialog.stateAtomic))
-//   
-//   // Переход состояния (с валидацией)
-//   err := dialog.stateTracker.TransitionTo(DialogStateEstablished, "200_OK", "Call answered")
-//   if err != nil {
-//       return fmt.Errorf("invalid state transition: %w", err)
-//   }
-//   
-//   // Проверка возможности перехода
-//   if !dialog.stateTracker.CanTransitionTo(DialogStateTerminated) {
-//       return errors.New("cannot terminate dialog in current state")
-//   }
+//	// Чтение состояния (lock-free)
+//	currentState := DialogState(atomic.LoadInt64(&dialog.stateAtomic))
+//
+//	// Переход состояния (с валидацией)
+//	err := dialog.stateTracker.TransitionTo(DialogStateEstablished, "200_OK", "Call answered")
+//	if err != nil {
+//	    return fmt.Errorf("invalid state transition: %w", err)
+//	}
+//
+//	// Проверка возможности перехода
+//	if !dialog.stateTracker.CanTransitionTo(DialogStateTerminated) {
+//	    return errors.New("cannot terminate dialog in current state")
+//	}
 type DialogState int
 
 const (
@@ -393,7 +395,8 @@ func (b *SimpleBody) Data() []byte {
 // # Жизненный цикл диалога
 //
 // Диалог проходит через четко определенные состояния (FSM):
-//   Init → Trying → Ringing → Established → Terminated
+//
+//	Init → Trying → Ringing → Established → Terminated
 //
 // Переходы состояний строго контролируются и логируются для отладки.
 //
@@ -438,35 +441,35 @@ func (b *SimpleBody) Data() []byte {
 //
 // # Пример использования (UAC)
 //
-//   dialog, err := stack.NewInvite(ctx, targetURI, InviteOpts{})
-//   if err != nil {
-//       return err
-//   }
-//   
-//   // Ожидание ответа
-//   err = dialog.WaitAnswer(ctx)
-//   if err != nil {
-//       return err
-//   }
-//   
-//   // Диалог установлен
-//   log.Printf("Call established with %s", dialog.RemoteURI())
-//   
-//   // Завершение вызова
-//   dialog.Bye(ctx, "Normal termination")
+//	dialog, err := stack.NewInvite(ctx, targetURI, InviteOpts{})
+//	if err != nil {
+//	    return err
+//	}
+//
+//	// Ожидание ответа
+//	err = dialog.WaitAnswer(ctx)
+//	if err != nil {
+//	    return err
+//	}
+//
+//	// Диалог установлен
+//	log.Printf("Call established with %s", dialog.RemoteURI())
+//
+//	// Завершение вызова
+//	dialog.Bye(ctx, "Normal termination")
 //
 // # Пример использования (UAS)
 //
-//   stack.OnIncomingDialog(func(dialog IDialog) {
-//       // Автоматическое принятие
-//       err := dialog.Accept(ctx, func(resp *sip.Response) {
-//           resp.SetBody([]byte(sdpAnswer))
-//           resp.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
-//       })
-//       if err != nil {
-//           dialog.Reject(ctx, 500, "Internal Server Error")
-//       }
-//   })
+//	stack.OnIncomingDialog(func(dialog IDialog) {
+//	    // Автоматическое принятие
+//	    err := dialog.Accept(ctx, func(resp *sip.Response) {
+//	        resp.SetBody([]byte(sdpAnswer))
+//	        resp.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
+//	    })
+//	    if err != nil {
+//	        dialog.Reject(ctx, 500, "Internal Server Error")
+//	    }
+//	})
 //
 // # Обработка ошибок
 //
@@ -494,15 +497,15 @@ type Dialog struct {
 	localContact sip.ContactHeader
 
 	// Транзакции и запросы
-	inviteTx        sip.ClientTransaction  // для UAC (DEPRECATED: используем TransactionAdapter)
-	serverTx        sip.ServerTransaction  // для UAS (DEPRECATED: используем TransactionAdapter)
-	referTx         sip.ClientTransaction  // для отслеживания REFER транзакции (DEPRECATED)
-	inviteTxAdapter *TransactionAdapter    // НОВОЕ: для UAC через TransactionManager
-	serverTxAdapter *TransactionAdapter    // НОВОЕ: для UAS через TransactionManager
-	referTxAdapter  *TransactionAdapter    // НОВОЕ: для REFER через TransactionManager
-	inviteReq       *sip.Request           // исходный INVITE
-	inviteResp      *sip.Response          // финальный ответ на INVITE
-	referReq        *sip.Request           // исходный REFER запрос
+	inviteTx        sip.ClientTransaction // для UAC (DEPRECATED: используем TransactionAdapter)
+	serverTx        sip.ServerTransaction // для UAS (DEPRECATED: используем TransactionAdapter)
+	referTx         sip.ClientTransaction // для отслеживания REFER транзакции (DEPRECATED)
+	inviteTxAdapter *TransactionAdapter   // НОВОЕ: для UAC через TransactionManager
+	serverTxAdapter *TransactionAdapter   // НОВОЕ: для UAS через TransactionManager
+	referTxAdapter  *TransactionAdapter   // НОВОЕ: для REFER через TransactionManager
+	inviteReq       *sip.Request          // исходный INVITE
+	inviteResp      *sip.Response         // финальный ответ на INVITE
+	referReq        *sip.Request          // исходный REFER запрос
 
 	// Каналы для ожидания ответов
 	responseChan chan *sip.Response
@@ -516,11 +519,11 @@ type Dialog struct {
 
 	// Текущее состояние (DEPRECATED: используется для совместимости)
 	state DialogState
-	
+
 	// НОВОЕ: Атомарный счетчик состояния для быстрого чтения в hot path
 	// Используется только для чтения состояния без блокировок
 	stateAtomic int64
-	
+
 	// НОВОЕ: Улучшенный трекер состояний с валидацией
 	stateTracker *DialogStateTracker
 
@@ -536,10 +539,10 @@ type Dialog struct {
 
 	// Время создания
 	createdAt time.Time
-	
+
 	// НОВОЕ: Управление таймаутами
-	expiryTime    time.Time // Время истечения диалога
-	sessionTimer  time.Duration // Session Timer (RFC 4028)
+	expiryTime   time.Time     // Время истечения диалога
+	sessionTimer time.Duration // Session Timer (RFC 4028)
 
 	// Контекст диалога
 	ctx    context.Context
@@ -550,7 +553,7 @@ type Dialog struct {
 
 	// Для предотвращения множественного вызова Close()
 	closeOnce sync.Once
-	
+
 	// КРИТИЧНО: Отдельные sync.Once для каждого канала для предотвращения
 	// "close of closed channel" паники
 	responseCloseOnce sync.Once
@@ -585,12 +588,12 @@ func (d *Dialog) State() DialogState {
 	if atomicState != 0 {
 		return DialogState(atomicState - 1) // -1 потому что 0 зарезервирован для "не установлено"
 	}
-	
+
 	// Fallback: используем stateTracker если доступен
 	if d.stateTracker != nil {
 		return d.stateTracker.GetState()
 	}
-	
+
 	// Fallback для legacy совместимости
 	d.mutex.RLock()
 	defer d.mutex.RUnlock()
@@ -603,7 +606,6 @@ func (d *Dialog) LocalTag() string {
 	defer d.mutex.RUnlock()
 	return d.localTag
 }
-
 
 // RemoteTag возвращает удаленный тег диалога thread-safe
 func (d *Dialog) RemoteTag() string {
@@ -643,11 +645,11 @@ func (d *Dialog) SetDialogExpiry(duration time.Duration) error {
 	if d.stack == nil || d.stack.timeoutMgr == nil {
 		return fmt.Errorf("timeout manager not available")
 	}
-	
+
 	d.mutex.Lock()
 	d.expiryTime = time.Now().Add(duration)
 	d.mutex.Unlock()
-	
+
 	// Устанавливаем таймер истечения
 	return d.stack.timeoutMgr.SetDialogExpiry(d.callID, duration, func(event TimeoutEvent) {
 		// Callback при истечении диалога
@@ -660,11 +662,11 @@ func (d *Dialog) SetSessionTimer(interval time.Duration) error {
 	if d.stack == nil || d.stack.timeoutMgr == nil {
 		return fmt.Errorf("timeout manager not available")
 	}
-	
+
 	d.mutex.Lock()
 	d.sessionTimer = interval
 	d.mutex.Unlock()
-	
+
 	// Устанавливаем Session Timer
 	return d.stack.timeoutMgr.SetSessionTimer(d.callID, func(event TimeoutEvent) {
 		// Callback при истечении Session Timer
@@ -677,7 +679,7 @@ func (d *Dialog) RefreshSessionTimer() error {
 	if d.stack == nil || d.stack.timeoutMgr == nil {
 		return fmt.Errorf("timeout manager not available")
 	}
-	
+
 	return d.stack.timeoutMgr.RefreshSessionTimer(d.callID, func(event TimeoutEvent) {
 		d.handleSessionTimeout(event)
 	})
@@ -702,13 +704,13 @@ func (d *Dialog) handleDialogExpiry(event TimeoutEvent) {
 	if d.stack != nil && d.stack.config.Logger != nil {
 		d.stack.config.Logger.Printf("Dialog %s expired", d.callID)
 	}
-	
+
 	// Переводим в состояние Terminated
 	d.updateStateWithReason(DialogStateTerminated, "TIMEOUT", "Dialog expired")
-	
+
 	// Закрываем диалог
 	d.Close()
-	
+
 	// Удаляем из стека
 	if d.stack != nil {
 		d.stack.removeDialog(d.key)
@@ -720,14 +722,14 @@ func (d *Dialog) handleSessionTimeout(event TimeoutEvent) {
 	if d.stack != nil && d.stack.config.Logger != nil {
 		d.stack.config.Logger.Printf("Session Timer expired for dialog %s", d.callID)
 	}
-	
+
 	// RFC 4028: при истечении Session Timer нужно отправить BYE
 	// если мы являемся refresher, или re-INVITE если нет
-	
+
 	// Простая реализация: отправляем BYE
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	err := d.Bye(ctx, "Session expired")
 	if err != nil && d.stack != nil && d.stack.config.Logger != nil {
 		d.stack.config.Logger.Printf("Failed to send BYE on session timeout: %v", err)
@@ -825,7 +827,7 @@ func (d *Dialog) Accept(ctx context.Context, opts ...ResponseOpt) error {
 
 	// Обновляем состояние
 	d.updateStateWithReason(DialogStateEstablished, "ACCEPT", "200 OK sent")
-	
+
 	// НОВОЕ: Устанавливаем таймер истечения диалога когда переходим в Established
 	if d.stack != nil && d.stack.timeoutMgr != nil {
 		// Устанавливаем таймер истечения диалога (30 минут по умолчанию)
@@ -961,17 +963,17 @@ func (d *Dialog) Bye(ctx context.Context, reason string) error {
 	hasRemoteTag := d.remoteTag != ""
 	currentKey := d.key
 	d.mutex.RUnlock()
-	
+
 	// Проверяем, что диалог в состоянии Established
 	if currentState != DialogStateEstablished {
 		return fmt.Errorf("нельзя завершить вызов в состоянии %s", currentState.String())
 	}
-	
+
 	// КРИТИЧНО: Убеждаемся что диалог полностью переиндексирован
 	if !hasRemoteTag {
 		return fmt.Errorf("диалог не готов для BYE: remoteTag не установлен")
 	}
-	
+
 	// Логируем BYE для отладки
 	if d.stack != nil && d.stack.config.Logger != nil {
 		d.stack.config.Logger.Printf("Sending BYE for dialog %s", currentKey.String())
@@ -1154,7 +1156,7 @@ func (d *Dialog) Close() error {
 		// КРИТИЧНО: Отменяем все таймеры с proper ordering
 		if d.stack != nil && d.stack.timeoutMgr != nil {
 			var totalCancelled int
-			
+
 			// 1. Сначала отменяем таймеры транзакций (более приоритетные)
 			if d.inviteTxAdapter != nil {
 				txID := fmt.Sprintf("tx_%s", d.inviteTxAdapter.ID())
@@ -1162,11 +1164,11 @@ func (d *Dialog) Close() error {
 					totalCancelled++
 				}
 			}
-			
+
 			// 2. Затем отменяем диалоговые таймеры
 			dialogCancelled := d.stack.timeoutMgr.CancelDialogTimeouts(d.callID)
 			totalCancelled += dialogCancelled
-			
+
 			// 3. Логируем только если действительно что-то отменили
 			if totalCancelled > 0 && d.stack.config.Logger != nil {
 				d.stack.config.Logger.Printf("Dialog %s: cancelled %d timeouts during Close()", d.callID, totalCancelled)
@@ -1183,11 +1185,11 @@ func (d *Dialog) Close() error {
 		d.mutex.Lock()
 		responseChan := d.responseChan
 		errorChan := d.errorChan
-		
+
 		// Сразу очищаем ссылки для предотвращения новых операций
 		d.responseChan = nil
 		d.errorChan = nil
-		
+
 		// НОВОЕ: Принудительно завершаем все транзакции для освобождения ресурсов
 		if d.inviteTxAdapter != nil {
 			d.inviteTxAdapter.Terminate()
@@ -1201,7 +1203,7 @@ func (d *Dialog) Close() error {
 			d.referTxAdapter.Terminate()
 			d.referTxAdapter = nil
 		}
-		
+
 		// Очищаем ссылки на legacy транзакции
 		d.inviteTx = nil
 		d.serverTx = nil
@@ -1248,23 +1250,23 @@ func (d *Dialog) cleanupOldReferSubscriptions() {
 	if d.referSubscriptions == nil {
 		return
 	}
-	
+
 	now := time.Now()
 	maxAge := 10 * time.Minute // Подписки старше 10 минут удаляем
 	toDelete := make([]string, 0)
-	
+
 	// Находим старые или неактивные подписки
 	for id, sub := range d.referSubscriptions {
 		sub.mutex.RLock()
 		isOld := now.Sub(sub.createdAt) > maxAge
 		isInactive := !sub.active
 		sub.mutex.RUnlock()
-		
+
 		if isOld || isInactive {
 			toDelete = append(toDelete, id)
 		}
 	}
-	
+
 	// Удаляем старые подписки с разрывом циклических ссылок
 	for _, id := range toDelete {
 		if sub, exists := d.referSubscriptions[id]; exists {
@@ -1275,7 +1277,7 @@ func (d *Dialog) cleanupOldReferSubscriptions() {
 			delete(d.referSubscriptions, id)
 		}
 	}
-	
+
 	// Принудительная очистка если подписок слишком много
 	if len(d.referSubscriptions) > 100 {
 		// Оставляем только 50 самых новых
@@ -1285,7 +1287,7 @@ func (d *Dialog) cleanupOldReferSubscriptions() {
 				oldest = append(oldest, id)
 			}
 		}
-		
+
 		for _, id := range oldest {
 			if sub, exists := d.referSubscriptions[id]; exists {
 				sub.mutex.Lock()
@@ -1337,7 +1339,7 @@ func (d *Dialog) updateState(newState DialogState) {
 func (d *Dialog) updateStateWithReason(newState DialogState, event, reason string) {
 	// Сохраняем старое состояние для метрик
 	oldState := d.State()
-	
+
 	// НОВОЕ: Используем stateTracker если доступен
 	if d.stateTracker != nil {
 		// Пытаемся выполнить валидированный переход
@@ -1346,24 +1348,24 @@ func (d *Dialog) updateStateWithReason(newState DialogState, event, reason strin
 			if d.stack != nil && d.stack.config.Logger != nil {
 				d.stack.config.Logger.Printf("State transition validation failed: %v", err)
 			}
-			
+
 			// В продакшене можем принудительно выполнить переход
 			// или вернуть ошибку в зависимости от политики
 			d.stateTracker.ForceTransition(newState, fmt.Sprintf("FORCED after validation error: %v", err))
 		}
-		
+
 		// Обновляем legacy поле и атомарный счетчик для совместимости
 		d.mutex.Lock()
 		d.state = newState
 		// НОВОЕ: Обновляем атомарный счетчик для быстрого чтения
 		atomic.StoreInt64(&d.stateAtomic, int64(newState)+1) // +1 чтобы 0 осталось "не установлено"
 		d.mutex.Unlock()
-		
+
 		// НОВОЕ: Уведомляем систему метрик о переходе состояния
 		if d.stack != nil {
 			d.stack.ReportStateTransition(oldState, newState, reason)
 		}
-		
+
 		// Вызываем колбэки
 		d.notifyStateChange(newState)
 		return
@@ -1451,29 +1453,29 @@ func (d *Dialog) updateRemoteTagAndReindex(resp *sip.Response) error {
 	if d.stack == nil {
 		return fmt.Errorf("нет ссылки на stack")
 	}
-	
+
 	// Извлекаем To тег из ответа (это будет remoteTag для UAC)
 	toHeader := resp.To()
 	if toHeader == nil {
 		return fmt.Errorf("отсутствует To заголовок в ответе")
 	}
-	
+
 	newRemoteTag := toHeader.Params["tag"]
 	if newRemoteTag == "" {
 		return fmt.Errorf("отсутствует To tag в ответе")
 	}
-	
+
 	// КРИТИЧНО: Используем двойной мьютекс для atomic переиндексации
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	
+
 	// КРИТИЧНО: Диагностика перед обновлением
 	originalLocalTag := d.localTag
 	if d.stack != nil && d.stack.config.Logger != nil {
-		d.stack.config.Logger.Printf("updateRemoteTagAndReindex for dialog %s: BEFORE localTag=%s, remoteTag=%s, newRemoteTag=%s (instance=%p)", 
+		d.stack.config.Logger.Printf("updateRemoteTagAndReindex for dialog %s: BEFORE localTag=%s, remoteTag=%s, newRemoteTag=%s (instance=%p)",
 			d.callID, d.localTag, d.remoteTag, newRemoteTag, d)
 	}
-	
+
 	// Если remoteTag уже установлен и совпадает, ничего не делаем
 	if d.remoteTag == newRemoteTag {
 		if d.stack != nil && d.stack.config.Logger != nil {
@@ -1481,15 +1483,15 @@ func (d *Dialog) updateRemoteTagAndReindex(resp *sip.Response) error {
 		}
 		return nil
 	}
-	
+
 	// Проверяем что диалог еще активен
 	if d.State() == DialogStateTerminated {
 		return fmt.Errorf("диалог уже завершен, переиндексация невозможна")
 	}
-	
+
 	// Сохраняем старый ключ для удаления
 	oldKey := d.key
-	
+
 	// ATOMIC: Обновляем remoteTag и ключ диалога одной операцией
 	d.remoteTag = newRemoteTag
 	newKey := DialogKey{
@@ -1498,27 +1500,27 @@ func (d *Dialog) updateRemoteTagAndReindex(resp *sip.Response) error {
 		RemoteTag: d.remoteTag,
 	}
 	d.key = newKey
-	
+
 	// КРИТИЧНО: Валидация что localTag не изменился
 	if d.localTag != originalLocalTag {
 		if d.stack != nil && d.stack.config.Logger != nil {
-			d.stack.config.Logger.Printf("FATAL: updateRemoteTagAndReindex corrupted localTag! Original=%s, Current=%s", 
+			d.stack.config.Logger.Printf("FATAL: updateRemoteTagAndReindex corrupted localTag! Original=%s, Current=%s",
 				originalLocalTag, d.localTag)
 		}
 		d.localTag = originalLocalTag // Восстанавливаем
 		return fmt.Errorf("internal error: localTag was corrupted in updateRemoteTagAndReindex")
 	}
-	
+
 	// КРИТИЧНО: Переиндексируем диалог в стеке атомарно
 	// Сначала добавляем по новому ключу, потом удаляем старый (безопасно для concurrent доступа)
 	d.stack.addDialog(newKey, d)
 	d.stack.removeDialog(oldKey)
-	
+
 	// Логируем успешную переиндексацию для отладки
 	if d.stack.config.Logger != nil {
 		d.stack.config.Logger.Printf("Dialog reindexed: %s → %s", oldKey.String(), newKey.String())
 	}
-	
+
 	return nil
 }
 
@@ -1563,13 +1565,12 @@ func (d *Dialog) waitAnswerViaAdapter(ctx context.Context, adapter *TransactionA
 			if resp == nil {
 				return fmt.Errorf("transaction terminated")
 			}
-			
-			
+
 			// Обрабатываем ответ
 			if err := d.processResponse(resp); err != nil {
 				return fmt.Errorf("ошибка обработки ответа: %w", err)
 			}
-			
+
 			// Логика обработки ответа
 			switch {
 			case resp.StatusCode >= 100 && resp.StatusCode < 200:
@@ -1580,12 +1581,12 @@ func (d *Dialog) waitAnswerViaAdapter(ctx context.Context, adapter *TransactionA
 			case resp.StatusCode >= 200 && resp.StatusCode < 300:
 				// Success - отправляем ACK
 				d.updateStateWithReason(DialogStateEstablished, "2XX_RECEIVED", fmt.Sprintf("%d %s received", resp.StatusCode, resp.Reason))
-				
+
 				// КРИТИЧНО: ОТКЛЮЧЕНО - remoteTag уже обновлен в processResponse()
 				// if err := d.updateRemoteTagAndReindex(resp); err != nil {
 				//     return fmt.Errorf("ошибка обновления remoteTag: %w", err)
 				// }
-				
+
 				// НОВОЕ: Устанавливаем таймер истечения диалога
 				if d.stack != nil && d.stack.timeoutMgr != nil {
 					err := d.SetDialogExpiry(DefaultDialogExpiry)
@@ -1593,17 +1594,17 @@ func (d *Dialog) waitAnswerViaAdapter(ctx context.Context, adapter *TransactionA
 						d.stack.config.Logger.Printf("Failed to set dialog expiry: %v", err)
 					}
 				}
-				
+
 				// Отправляем ACK
 				ack, err := d.buildACK()
 				if err != nil {
 					return fmt.Errorf("ошибка создания ACK: %w", err)
 				}
-				
+
 				if err := d.stack.client.WriteRequest(ack); err != nil {
 					return fmt.Errorf("ошибка отправки ACK: %w", err)
 				}
-				
+
 				return nil // Успешно установлен диалог
 			default:
 				// Failure
@@ -1613,10 +1614,10 @@ func (d *Dialog) waitAnswerViaAdapter(ctx context.Context, adapter *TransactionA
 				}
 				return fmt.Errorf("вызов отклонен: %d %s", resp.StatusCode, resp.Reason)
 			}
-			
+
 		case <-adapter.Done():
 			return fmt.Errorf("transaction terminated")
-			
+
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -1643,12 +1644,12 @@ func (d *Dialog) waitAnswerViaLegacyTx(ctx context.Context, inviteTx sip.ClientT
 			case resp.StatusCode >= 200 && resp.StatusCode < 300:
 				// Success - отправляем ACK
 				d.updateStateWithReason(DialogStateEstablished, "2XX_RECEIVED", fmt.Sprintf("%d %s received", resp.StatusCode, resp.Reason))
-				
+
 				// КРИТИЧНО: ОТКЛЮЧЕНО - remoteTag уже обновлен в processResponse()
 				// if err := d.updateRemoteTagAndReindex(resp); err != nil {
 				//     return fmt.Errorf("ошибка обновления remoteTag: %w", err)
 				// }
-				
+
 				// НОВОЕ: Устанавливаем таймер истечения диалога
 				if d.stack != nil && d.stack.timeoutMgr != nil {
 					err := d.SetDialogExpiry(DefaultDialogExpiry)
