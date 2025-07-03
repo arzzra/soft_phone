@@ -663,7 +663,7 @@ func TestDTMFHandling(t *testing.T) {
 	}
 
 	var receivedDTMF []DTMFEvent
-	config.OnDTMFReceived = func(event DTMFEvent) {
+	config.OnDTMFReceived = func(event DTMFEvent, sessionID string) {
 		receivedDTMF = append(receivedDTMF, event)
 	}
 

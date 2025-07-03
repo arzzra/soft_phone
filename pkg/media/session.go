@@ -307,6 +307,18 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 		}
 	}
 
+	// Проверяем корректность ptime
+	if config.Ptime <= 0 {
+		return nil, &MediaError{
+			Code:      ErrorCodeAudioTimingInvalid,
+			Message:   "packet time должно быть положительным",
+			SessionID: config.SessionID,
+			Context: map[string]interface{}{
+				"ptime": config.Ptime,
+			},
+		}
+	}
+
 	// Устанавливаем значения по умолчанию
 	if config.Ptime == 0 {
 		config.Ptime = time.Millisecond * 20
@@ -1157,8 +1169,9 @@ func (ms *MediaSession) addToAudioBuffer(audioData []byte) error {
 func (ms *MediaSession) audioSendLoop() {
 	defer ms.wg.Done()
 
-	// Проверяем что ticker инициализирован
-	if ms.sendTicker == nil {
+	// Сохраняем локальную копию ticker'а чтобы избежать race condition
+	ticker := ms.sendTicker
+	if ticker == nil {
 		return
 	}
 
@@ -1168,7 +1181,7 @@ func (ms *MediaSession) audioSendLoop() {
 		case <-ms.stopChan:
 			slog.Debug("media.audioSendLoop Stopped")
 			return
-		case <-ms.sendTicker.C:
+		case <-ticker.C:
 			ms.sendBufferedAudio()
 		}
 	}

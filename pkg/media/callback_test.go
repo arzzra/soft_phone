@@ -3,6 +3,7 @@ package media
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,13 +43,13 @@ func TestCallbackSafety(t *testing.T) {
 				defer wg.Done()
 
 				if id%3 == 0 {
-					session.SetRawAudioHandler(func(data []byte, pt PayloadType, ptime time.Duration) {
+					session.SetRawAudioHandler(func(data []byte, pt PayloadType, ptime time.Duration, sessionID string) {
 						mutex.Lock()
 						rawAudioCallbackCount++
 						mutex.Unlock()
 					})
 				} else if id%3 == 1 {
-					session.SetRawPacketHandler(func(packet *rtp.Packet) {
+					session.SetRawPacketHandler(func(packet *rtp.Packet, sessionID string) {
 						mutex.Lock()
 						rawPacketCallbackCount++
 						mutex.Unlock()
@@ -73,35 +74,45 @@ func TestCallbackSafety(t *testing.T) {
 	})
 
 	t.Run("Callback вызовы под нагрузкой", func(t *testing.T) {
-		var callbackCount int32
-		var callbackMutex sync.Mutex
+		var callbackCount int64
 
-		// Устанавливаем стабильный callback
-		session.SetRawAudioHandler(func(data []byte, pt PayloadType, ptime time.Duration) {
-			callbackMutex.Lock()
-			callbackCount++
-			callbackMutex.Unlock()
+		// Устанавливаем стабильный callback для ВХОДЯЩИХ аудио данных
+		session.SetRawAudioHandler(func(data []byte, pt PayloadType, ptime time.Duration, sessionID string) {
+			atomic.AddInt64(&callbackCount, 1)
 		})
 
-		// Генерируем нагрузку
+		// Генерируем ВХОДЯЩИЕ пакеты для тестирования callback'ов
 		const numPackets = 100
 		audioData := generateTestAudioData(StandardPCMSamples20ms)
 
 		for i := 0; i < numPackets; i++ {
-			err = session.SendAudio(audioData)
-			if err != nil {
-				t.Errorf("Ошибка отправки пакета %d: %v", i, err)
+			// Создаем RTP пакет как будто он пришел извне
+			packet := &rtp.Packet{
+				Header: rtp.Header{
+					Version:        2,
+					PayloadType:    uint8(PayloadTypePCMU),
+					SequenceNumber: uint16(1000 + i),
+					Timestamp:      uint32(8000 + i*160),
+					SSRC:           0x12345678,
+				},
+				Payload: audioData,
 			}
+
+			// Симулируем входящий пакет
+			session.HandleIncomingRTPPacket(packet)
 		}
 
 		// Даем время для обработки callback-ов
 		time.Sleep(time.Millisecond * 100)
 
-		callbackMutex.Lock()
-		finalCount := callbackCount
-		callbackMutex.Unlock()
+		finalCount := atomic.LoadInt64(&callbackCount)
 
-		t.Logf("Callback вызван %d раз для %d пакетов", finalCount, numPackets)
+		t.Logf("Callback вызван %d раз для %d входящих пакетов", finalCount, numPackets)
+
+		// Теперь callback должен вызываться для входящих пакетов
+		if finalCount == 0 {
+			t.Error("Callback не был вызван ни разу для входящих пакетов")
+		}
 	})
 }
 
@@ -124,7 +135,7 @@ func TestRawPacketHandling(t *testing.T) {
 		var receivedPackets []*rtp.Packet
 		var packetMutex sync.Mutex
 
-		session.SetRawPacketHandler(func(packet *rtp.Packet) {
+		session.SetRawPacketHandler(func(packet *rtp.Packet, sessionID string) {
 			packetMutex.Lock()
 			// Создаем копию пакета для безопасности
 			packetCopy := &rtp.Packet{
@@ -201,7 +212,7 @@ func TestRawPacketHandling(t *testing.T) {
 		var receivedAudioData [][]byte
 		var audioMutex sync.Mutex
 
-		session.SetRawAudioHandler(func(data []byte, pt PayloadType, ptime time.Duration) {
+		session.SetRawAudioHandler(func(data []byte, pt PayloadType, ptime time.Duration, sessionID string) {
 			audioMutex.Lock()
 			// Создаем копию данных
 			dataCopy := make([]byte, len(data))
@@ -275,7 +286,7 @@ func TestDTMFCallbacks(t *testing.T) {
 		var dtmfMutex sync.Mutex
 
 		// Устанавливаем DTMF callback через конфигурацию
-		config.OnDTMFReceived = func(event DTMFEvent) {
+		config.OnDTMFReceived = func(event DTMFEvent, sessionID string) {
 			dtmfMutex.Lock()
 			receivedDTMFEvents = append(receivedDTMFEvents, event)
 			dtmfMutex.Unlock()
@@ -356,7 +367,7 @@ func TestErrorCallbacks(t *testing.T) {
 	var receivedErrors []error
 	var errorMutex sync.Mutex
 
-	config.OnMediaError = func(err error) {
+	config.OnMediaError = func(err error, sessionID string) {
 		errorMutex.Lock()
 		receivedErrors = append(receivedErrors, err)
 		errorMutex.Unlock()

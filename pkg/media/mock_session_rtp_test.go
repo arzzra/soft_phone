@@ -2,6 +2,7 @@ package media
 
 import (
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -35,8 +36,11 @@ type MockSessionRTP struct {
 	networkLatency  time.Duration
 
 	// Callback для перехвата операций
-	onSendAudio  func([]byte, time.Duration) error
-	onSendPacket func(*rtp.Packet) error
+	onSendAudio         func([]byte, time.Duration) error
+	onSendPacket        func(*rtp.Packet) error
+	onIncomingHandler   func(*rtp.Packet, net.Addr)
+	lastIncomingPacket  *rtp.Packet
+	lastIncomingAddress net.Addr
 }
 
 // NewMockSessionRTP создает новый mock с настройками по умолчанию
@@ -312,4 +316,34 @@ func (m *MockSessionRTP) Reset() {
 	m.networkLatency = 0
 	m.onSendAudio = nil
 	m.onSendPacket = nil
+	m.onIncomingHandler = nil
+	m.lastIncomingPacket = nil
+	m.lastIncomingAddress = nil
+}
+
+// RegisterIncomingHandler регистрирует обработчик входящих RTP пакетов
+func (m *MockSessionRTP) RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr)) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.onIncomingHandler = handler
+}
+
+// SimulateIncomingPacket симулирует получение входящего RTP пакета для тестирования
+func (m *MockSessionRTP) SimulateIncomingPacket(packet *rtp.Packet, addr net.Addr) {
+	m.mutex.Lock()
+	handler := m.onIncomingHandler
+	m.lastIncomingPacket = packet
+	m.lastIncomingAddress = addr
+	m.mutex.Unlock()
+
+	if handler != nil {
+		handler(packet, addr)
+	}
+}
+
+// GetLastIncomingPacket возвращает последний симулированный входящий пакет (для тестирования)
+func (m *MockSessionRTP) GetLastIncomingPacket() (*rtp.Packet, net.Addr) {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return m.lastIncomingPacket, m.lastIncomingAddress
 }
