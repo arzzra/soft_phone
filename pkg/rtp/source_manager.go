@@ -40,10 +40,15 @@ type SourceManager struct {
 	// Конфигурация
 	sourceTimeout time.Duration // Время неактивности для удаления источника
 
+	// Rate limiting configuration
+	maxPacketsPerSecond uint32        // Максимум пакетов в секунду per source
+	rateLimitWindow     time.Duration // Окно для rate limiting
+
 	// Обработчики событий
 	onSourceAdded   func(uint32, *RemoteSource) // Новый источник добавлен
 	onSourceRemoved func(uint32, *RemoteSource) // Источник удален
 	onSourceUpdated func(uint32, *RemoteSource) // Источник обновлен
+	onRateLimited   func(uint32, *RemoteSource) // Источник заблокирован из-за rate limit
 
 	// Управление очисткой
 	stopCleanup chan struct{}
@@ -86,6 +91,11 @@ type RemoteSource struct {
 	FirstSeen      time.Time // Время первого пакета от источника
 	ProbationCount int       // Счетчик для валидации новых источников
 	Validated      bool      // Прошел ли источник валидацию
+
+	// Rate limiting (DoS protection)
+	PacketCount     uint32    // Количество пакетов в текущем окне
+	RateWindowStart time.Time // Начало текущего окна rate limiting
+	RateLimited     bool      // Заблокирован ли источник из-за превышения лимита
 }
 
 // SourceManagerConfig конфигурация менеджера источников
@@ -93,10 +103,15 @@ type SourceManagerConfig struct {
 	SourceTimeout   time.Duration // Таймаут неактивных источников (по умолчанию 30с)
 	CleanupInterval time.Duration // Интервал очистки (по умолчанию 10с)
 
+	// Rate limiting configuration
+	MaxPacketsPerSecond uint32        // Максимум пакетов в секунду per source (0 = отключено)
+	RateLimitWindow     time.Duration // Окно для rate limiting (по умолчанию 1с)
+
 	// Обработчики событий
 	OnSourceAdded   func(uint32, *RemoteSource)
 	OnSourceRemoved func(uint32, *RemoteSource)
 	OnSourceUpdated func(uint32, *RemoteSource)
+	OnRateLimited   func(uint32, *RemoteSource) // Новый обработчик для rate limiting
 }
 
 // NewSourceManager создает новый менеджер источников с заданной конфигурацией
@@ -126,16 +141,30 @@ func NewSourceManager(config SourceManagerConfig) *SourceManager {
 		cleanupInterval = 10 * time.Second
 	}
 
+	// Rate limiting defaults
+	maxPacketsPerSecond := config.MaxPacketsPerSecond
+	// Если 0, то rate limiting отключен - не устанавливаем дефолтное значение
+
+	rateLimitWindow := config.RateLimitWindow
+	if rateLimitWindow == 0 {
+		rateLimitWindow = time.Second
+	}
+
 	sm := &SourceManager{
 		sources:       make(map[uint32]*RemoteSource),
 		sourceTimeout: sourceTimeout,
 		stopCleanup:   make(chan struct{}),
 		cleanupDone:   make(chan struct{}),
 
+		// Rate limiting
+		maxPacketsPerSecond: maxPacketsPerSecond,
+		rateLimitWindow:     rateLimitWindow,
+
 		// Обработчики
 		onSourceAdded:   config.OnSourceAdded,
 		onSourceRemoved: config.OnSourceRemoved,
 		onSourceUpdated: config.OnSourceUpdated,
+		onRateLimited:   config.OnRateLimited,
 	}
 
 	// Запускаем фоновую очистку неактивных источников
@@ -151,6 +180,7 @@ func (sm *SourceManager) Stop() {
 }
 
 // UpdateFromPacket обновляет информацию об источнике на основе RTP пакета
+// Возвращает nil если пакет заблокирован rate limiting
 func (sm *SourceManager) UpdateFromPacket(packet *rtp.Packet) *RemoteSource {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
@@ -158,6 +188,12 @@ func (sm *SourceManager) UpdateFromPacket(packet *rtp.Packet) *RemoteSource {
 	ssrc := packet.Header.SSRC
 	source, exists := sm.sources[ssrc]
 	now := time.Now()
+
+	// Проверяем rate limiting для существующих источников
+	if exists && sm.maxPacketsPerSecond > 0 && sm.isRateLimited(source, now) {
+		// Пакет заблокирован rate limiting
+		return nil
+	}
 
 	if !exists {
 		// Новый источник
@@ -172,6 +208,11 @@ func (sm *SourceManager) UpdateFromPacket(packet *rtp.Packet) *RemoteSource {
 			LastSeen:       now,
 			ProbationCount: 1, // Новые источники требуют валидации
 			Validated:      false,
+
+			// Rate limiting initialization
+			PacketCount:     1,
+			RateWindowStart: now,
+			RateLimited:     false,
 		}
 		sm.sources[ssrc] = source
 
@@ -213,6 +254,11 @@ func (sm *SourceManager) UpdateFromPacket(packet *rtp.Packet) *RemoteSource {
 		source.Statistics.PacketsReceived++
 		source.Statistics.BytesReceived += uint64(len(packet.Payload))
 		source.Statistics.LastActivity = now
+
+		// Обновляем rate limiting статистику только если включен
+		if sm.maxPacketsPerSecond > 0 {
+			sm.updateRateLimitStats(source, now)
+		}
 
 		// Уведомляем об обновлении или реактивации
 		if wasInactive && sm.onSourceAdded != nil {
@@ -445,4 +491,56 @@ func (sm *SourceManager) cleanupInactiveSources() {
 			go sm.onSourceRemoved(ssrc, source)
 		}
 	}
+}
+
+// isRateLimited проверяет превышен ли лимит пакетов для источника
+func (sm *SourceManager) isRateLimited(source *RemoteSource, now time.Time) bool {
+	// Проверяем нужно ли сбросить окно rate limiting
+	if now.Sub(source.RateWindowStart) >= sm.rateLimitWindow {
+		// Сбрасываем счетчик для нового окна
+		source.PacketCount = 0
+		source.RateWindowStart = now
+		source.RateLimited = false
+	}
+
+	// Увеличиваем счетчик пакетов
+	source.PacketCount++
+
+	// Проверяем превышение лимита
+	if source.PacketCount > sm.maxPacketsPerSecond {
+		if !source.RateLimited {
+			// Первое превышение - уведомляем
+			source.RateLimited = true
+			if sm.onRateLimited != nil {
+				go sm.onRateLimited(source.SSRC, source)
+			}
+		}
+		return true
+	}
+
+	return false
+}
+
+// updateRateLimitStats обновляет статистику rate limiting для источника
+// Примечание: основная логика уже выполнена в isRateLimited()
+func (sm *SourceManager) updateRateLimitStats(source *RemoteSource, now time.Time) {
+	// Эта функция сейчас не нужна, так как логика перенесена в isRateLimited
+	// Оставлена для совместимости и возможных будущих расширений
+}
+
+// GetRateLimitedSources возвращает список заблокированных источников
+func (sm *SourceManager) GetRateLimitedSources() map[uint32]*RemoteSource {
+	sm.mutex.RLock()
+	defer sm.mutex.RUnlock()
+
+	limited := make(map[uint32]*RemoteSource)
+	for ssrc, source := range sm.sources {
+		if source.RateLimited {
+			// Возвращаем копию для thread safety
+			sourceCopy := *source
+			limited[ssrc] = &sourceCopy
+		}
+	}
+
+	return limited
 }

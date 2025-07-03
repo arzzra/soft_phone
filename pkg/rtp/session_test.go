@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 // MockTransport имитирует RTP транспорт для unit тестов
 type MockTransport struct {
+	mutex           sync.Mutex       // Защита от race conditions
 	sentPackets     []*rtp.Packet
 	receivedPackets chan *rtp.Packet
 	localAddr       *net.UDPAddr
@@ -32,6 +34,9 @@ func NewMockTransport() *MockTransport {
 }
 
 func (mt *MockTransport) Send(packet *rtp.Packet) error {
+	mt.mutex.Lock()
+	defer mt.mutex.Unlock()
+	
 	if !mt.active {
 		return fmt.Errorf("транспорт не активен")
 	}
@@ -40,13 +45,18 @@ func (mt *MockTransport) Send(packet *rtp.Packet) error {
 }
 
 func (mt *MockTransport) Receive(ctx context.Context) (*rtp.Packet, net.Addr, error) {
-	if !mt.active {
+	mt.mutex.Lock()
+	active := mt.active
+	remoteAddr := mt.remoteAddr
+	mt.mutex.Unlock()
+	
+	if !active {
 		return nil, nil, fmt.Errorf("транспорт не активен")
 	}
 
 	select {
 	case packet := <-mt.receivedPackets:
-		return packet, mt.remoteAddr, nil
+		return packet, remoteAddr, nil
 	case <-ctx.Done():
 		return nil, nil, ctx.Err()
 	}
@@ -61,22 +71,33 @@ func (mt *MockTransport) RemoteAddr() net.Addr {
 }
 
 func (mt *MockTransport) Close() error {
+	mt.mutex.Lock()
+	defer mt.mutex.Unlock()
+	
 	mt.active = false
 	close(mt.receivedPackets)
 	return nil
 }
 
 func (mt *MockTransport) IsActive() bool {
+	mt.mutex.Lock()
+	defer mt.mutex.Unlock()
 	return mt.active
 }
 
 func (mt *MockTransport) SetActive(active bool) {
+	mt.mutex.Lock()
+	defer mt.mutex.Unlock()
 	mt.active = active
 }
 
 // Добавляем пакет в очередь для имитации получения
 func (mt *MockTransport) SimulateReceive(packet *rtp.Packet) {
-	if mt.active {
+	mt.mutex.Lock()
+	active := mt.active
+	mt.mutex.Unlock()
+	
+	if active {
 		select {
 		case mt.receivedPackets <- packet:
 		default:
@@ -87,10 +108,18 @@ func (mt *MockTransport) SimulateReceive(packet *rtp.Packet) {
 
 // Получаем отправленные пакеты для проверки
 func (mt *MockTransport) GetSentPackets() []*rtp.Packet {
-	return mt.sentPackets
+	mt.mutex.Lock()
+	defer mt.mutex.Unlock()
+	
+	// Возвращаем копию для thread safety
+	result := make([]*rtp.Packet, len(mt.sentPackets))
+	copy(result, mt.sentPackets)
+	return result
 }
 
 func (mt *MockTransport) ClearSentPackets() {
+	mt.mutex.Lock()
+	defer mt.mutex.Unlock()
 	mt.sentPackets = mt.sentPackets[:0]
 }
 

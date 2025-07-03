@@ -34,7 +34,8 @@ type RTPSession struct {
 	bytesReceived   uint64 // Получено байт (atomic)
 	lastActivity    int64  // Последняя активность (atomic UnixNano)
 
-	// Обработчики RTP событий
+	// Обработчики RTP событий (защищены мьютексом)
+	handlerMutex     sync.RWMutex                 // Защита обработчиков
 	onPacketReceived func(*rtp.Packet, net.Addr) // Обработчик входящих пакетов
 	onPacketSent     func(*rtp.Packet)           // Обработчик отправленных пакетов
 
@@ -180,9 +181,13 @@ func (rs *RTPSession) SendPacket(packet *rtp.Packet) error {
 	// Обновляем статистику
 	rs.updateSendStats(packet)
 
-	// Вызываем обработчик
-	if rs.onPacketSent != nil {
-		rs.onPacketSent(packet)
+	// Thread-safe вызов обработчика отправки
+	rs.handlerMutex.RLock()
+	sentHandler := rs.onPacketSent
+	rs.handlerMutex.RUnlock()
+
+	if sentHandler != nil {
+		sentHandler(packet)
 	}
 
 	return nil
@@ -215,9 +220,13 @@ func (rs *RTPSession) handleIncomingPacket(packet *rtp.Packet, addr net.Addr) {
 	// Обновляем статистику получения
 	rs.updateReceiveStats(packet)
 
-	// Вызываем обработчик если установлен
-	if rs.onPacketReceived != nil {
-		rs.onPacketReceived(packet, addr)
+	// Thread-safe вызов обработчика
+	rs.handlerMutex.RLock()
+	handler := rs.onPacketReceived
+	rs.handlerMutex.RUnlock()
+
+	if handler != nil {
+		handler(packet, addr)
 	}
 }
 
@@ -297,5 +306,15 @@ func (rs *RTPSession) GetLastActivity() time.Time {
 // RegisterIncomingHandler регистрирует обработчик входящих RTP пакетов
 // Thread-safe метод для обновления callback'а
 func (rs *RTPSession) RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr)) {
+	rs.handlerMutex.Lock()
+	defer rs.handlerMutex.Unlock()
 	rs.onPacketReceived = handler
+}
+
+// RegisterSentHandler регистрирует обработчик отправленных RTP пакетов
+// Thread-safe метод для обновления callback'а
+func (rs *RTPSession) RegisterSentHandler(handler func(*rtp.Packet)) {
+	rs.handlerMutex.Lock()
+	defer rs.handlerMutex.Unlock()
+	rs.onPacketSent = handler
 }
