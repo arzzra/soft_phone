@@ -8,12 +8,12 @@ import (
 	"github.com/arzzra/soft_phone/pkg/sip/core/types"
 )
 
-// Refer инициирует перевод вызова на указанный URI
+// SendRefer инициирует перевод вызова на указанный URI
 //
 // RFC 3515: SIP REFER Method
 // Метод REFER используется для перевода вызовов (call transfer).
 // Получатель REFER должен попытаться установить новый диалог с указанным URI.
-func (d *Dialog) Refer(ctx context.Context, target types.URI, opts ReferOpts) error {
+func (d *Dialog) SendRefer(ctx context.Context, targetURI string, opts *ReferOpts) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	
@@ -30,20 +30,28 @@ func (d *Dialog) Refer(ctx context.Context, target types.URI, opts ReferOpts) er
 	// Создаем REFER запрос
 	refer := d.createRequest("REFER")
 	
+	// Парсим целевой URI
+	target, err := types.ParseURI(targetURI)
+	if err != nil {
+		return fmt.Errorf("invalid target URI: %w", err)
+	}
+	
 	// Добавляем Refer-To заголовок
 	referTo := fmt.Sprintf("<%s>", target.String())
 	refer.SetHeader("Refer-To", referTo)
 	
 	// Обрабатываем опции
-	if opts.NoReferSub {
+	if opts != nil && opts.NoReferSub {
 		refer.SetHeader("Refer-Sub", "false")
-	} else if opts.ReferSub != nil {
+	} else if opts != nil && opts.ReferSub != nil {
 		refer.SetHeader("Refer-Sub", *opts.ReferSub)
 	}
 	
 	// Добавляем дополнительные заголовки
-	for name, value := range opts.Headers {
-		refer.SetHeader(name, value)
+	if opts != nil {
+		for name, value := range opts.Headers {
+			refer.SetHeader(name, value)
+		}
 	}
 	
 	// Создаем транзакцию
@@ -68,7 +76,7 @@ func (d *Dialog) Refer(ctx context.Context, target types.URI, opts ReferOpts) er
 //
 // RFC 3891: The Session Initiation Protocol (SIP) "Replaces" Header
 // Используется для attended transfer - перевода с консультацией.
-func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts ReferOpts) error {
+func (d *Dialog) ReferReplace(ctx context.Context, targetURI string, replaceDialog IDialog, opts *ReferOpts) error {
 	if replaceDialog == nil {
 		return fmt.Errorf("replace dialog cannot be nil")
 	}
@@ -84,17 +92,17 @@ func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts R
 	)
 	
 	// Добавляем Replaces в заголовки
-	if opts.Headers == nil {
+	if opts == nil {
+		opts = &ReferOpts{
+			Headers: make(map[string]string),
+		}
+	} else if opts.Headers == nil {
 		opts.Headers = make(map[string]string)
 	}
 	opts.Headers["Replaces"] = replaces
 	
-	// Получаем target URI из заменяемого диалога
-	// Для упрощения используем remote URI исходного диалога
-	targetURI := d.remoteURI
-	
-	// Вызываем обычный Refer с Replaces
-	return d.Refer(ctx, targetURI, opts)
+	// Вызываем обычный SendRefer с Replaces
+	return d.SendRefer(ctx, targetURI, opts)
 }
 
 // WaitRefer ожидает ответ на REFER запрос

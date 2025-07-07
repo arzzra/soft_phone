@@ -46,7 +46,7 @@ func TestDialog_Refer(t *testing.T) {
 		},
 	}
 	
-	err := dlg.Refer(ctx, targetURI, opts)
+	err := dlg.SendRefer(ctx, targetURI.String(), &opts)
 	
 	if err != nil {
 		t.Fatalf("Refer() error = %v", err)
@@ -110,7 +110,7 @@ func TestDialog_Refer_NoReferSub(t *testing.T) {
 		NoReferSub: true,
 	}
 	
-	err := dlg.Refer(ctx, targetURI, opts)
+	err := dlg.SendRefer(ctx, targetURI.String(), &opts)
 	
 	if err != nil {
 		t.Fatalf("Refer() error = %v", err)
@@ -162,9 +162,10 @@ func TestDialog_ReferReplace(t *testing.T) {
 	
 	// ReferReplace
 	ctx := context.Background()
+	targetURI := "sip:target@example.com"
 	opts := ReferOpts{}
 	
-	err := dlg1.ReferReplace(ctx, dlg2, opts)
+	err := dlg1.ReferReplace(ctx, targetURI, dlg2, &opts)
 	
 	if err != nil {
 		t.Fatalf("ReferReplace() error = %v", err)
@@ -206,7 +207,8 @@ func TestDialog_WaitRefer(t *testing.T) {
 	
 	// Send REFER
 	ctx := context.Background()
-	err := dlg.Refer(ctx, targetURI, ReferOpts{})
+	opts := &ReferOpts{}
+	err := dlg.SendRefer(ctx, targetURI.String(), opts)
 	if err != nil {
 		t.Fatalf("Refer() error = %v", err)
 	}
@@ -280,7 +282,8 @@ func TestDialog_WaitRefer_Rejected(t *testing.T) {
 	
 	// Send REFER
 	ctx := context.Background()
-	err := dlg.Refer(ctx, targetURI, ReferOpts{})
+	opts := &ReferOpts{}
+	err := dlg.SendRefer(ctx, targetURI.String(), opts)
 	if err != nil {
 		t.Fatalf("Refer() error = %v", err)
 	}

@@ -113,3 +113,48 @@ type Body interface {
 	// Data возвращает байты содержимого
 	Data() []byte
 }
+
+// IDialog представляет интерфейс SIP диалога для управления одним вызовом.
+//
+// Диалог инкапсулирует состояние и операции одного SIP вызова, включая:
+//   - Управление состоянием (Init → Trying → Ringing → Established → Terminated)
+//   - Операции вызова (Accept, Reject, Bye)
+//   - Дополнительные функции (Refer для перевода, Re-INVITE)
+//   - Колбэки для отслеживания событий
+type IDialog interface {
+	// Key возвращает уникальный ключ диалога
+	Key() DialogKey
+	
+	// State возвращает текущее состояние диалога
+	State() DialogState
+	
+	// LocalTag возвращает локальный тег
+	LocalTag() string
+	
+	// RemoteTag возвращает удаленный тег
+	RemoteTag() string
+	
+	// Accept принимает входящий INVITE (отправляет 200 OK)
+	Accept(ctx context.Context, opts ...ResponseOpt) error
+	
+	// Reject отклоняет входящий INVITE
+	Reject(ctx context.Context, code int, reason string) error
+	
+	// Bye завершает диалог
+	Bye(ctx context.Context, reason string) error
+	
+	// SendRefer отправляет REFER запрос для перевода вызова
+	SendRefer(ctx context.Context, targetURI string, opts *ReferOpts) error
+	
+	// WaitRefer ожидает результат REFER запроса
+	WaitRefer(ctx context.Context) (*ReferSubscription, error)
+	
+	// OnStateChange регистрирует callback для изменения состояния
+	OnStateChange(fn func(DialogState))
+	
+	// OnBody регистрирует callback для получения тела сообщения
+	OnBody(fn func(Body))
+	
+	// Close закрывает диалог без отправки BYE
+	Close() error
+}
