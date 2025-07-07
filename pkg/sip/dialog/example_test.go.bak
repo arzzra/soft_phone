@@ -14,14 +14,14 @@ import (
 // ExampleStack demonstrates basic usage of SIP dialog stack
 func ExampleStack() {
 	// Create transport manager
-	transportMgr := transport.NewManager()
+	transportMgr := transport.NewTransportManager()
 	
 	// Create and start UDP transport
-	udpTransport, err := transport.NewUDPTransport("0.0.0.0:5060")
-	if err != nil {
+	udpTransport := transport.NewUDPTransport()
+	if err := udpTransport.Listen("0.0.0.0:5060"); err != nil {
 		log.Fatal(err)
 	}
-	transportMgr.AddTransport(udpTransport)
+	transportMgr.RegisterTransport(udpTransport)
 	
 	// Create stack
 	stack := dialog.NewStack(transportMgr, "192.168.1.100", 5060)
@@ -65,8 +65,8 @@ func ExampleStack() {
 	}
 	
 	// Monitor dialog state changes
-	dialog.OnStateChange(func(state dialog.DialogState) {
-		fmt.Printf("Dialog state changed to: %s\n", state)
+	dialog.OnStateChange(func(oldState, newState dialog.DialogState) {
+		fmt.Printf("Dialog state changed from %s to: %s\n", oldState, newState)
 	})
 	
 	// Output:
@@ -79,8 +79,9 @@ func ExampleDialog_Refer() {
 	var dialog dialog.IDialog
 	
 	// Transfer call to another party
-	transferTarget := types.NewSipURI("bob", "example.com")
-	err := dialog.Refer(context.Background(), transferTarget, dialog.ReferOpts{})
+	transferTarget, _ := types.ParseURI("sip:bob@example.com")
+	opts := dialog.ReferOpts{}
+	err := dialog.Refer(context.Background(), transferTarget, opts)
 	if err != nil {
 		log.Printf("Failed to send REFER: %v", err)
 		return

@@ -31,20 +31,27 @@ services:
   #   networks:
   #     - sip-test
 
-  # Optional: SIP client for testing
-  sipp:
+  # SIPp UAS for testing
+  sipp-uas:
     image: ctaloi/sipp
-    container_name: sipp-test
+    container_name: sipp-uas
     depends_on:
       - opensips
     networks:
       - sip-test
-    command: >
-      -sn uas
-      -p 5061
-      -rsa opensips:5060
+    command: -sn uas -p 5061
+    
+  # SIPp UAC for testing
+  sipp-uac:
+    image: ctaloi/sipp  
+    container_name: sipp-uac
+    depends_on:
+      - opensips
+    networks:
+      - sip-test
+    command: -sn uac -r 1 -l 1 -m 1 opensips:5060
     profiles:
-      - sipp
+      - test
 
 networks:
   sip-test:

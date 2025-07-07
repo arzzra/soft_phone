@@ -75,56 +75,6 @@ type ReferOpts struct {
 //   - Дополнительные функции (Refer для перевода, Re-INVITE)
 //   - Колбэки для отслеживания событий
 //
-// Интерфейс поддерживает как UAC (исходящие), так и UAS (входящие) диалоги.
-// Все операции являются thread-safe и могут вызываться из разных горутин.
-type IDialog interface {
-	Key() DialogKey
-	State() DialogState
-
-	// LocalTag возвращает локальный тег диалога
-	LocalTag() string
-	// RemoteTag возвращает удаленный тег диалога
-	RemoteTag() string
-
-	// Accept подтверждает входящий INVITE (200 OK).
-	// Параметры ответа задаются через opts (тело, заголовки).
-	Accept(ctx context.Context, opts ...ResponseOpt) error
-
-	// Reject отклоняет INVITE (4xx/5xx/6xx).
-	Reject(ctx context.Context, code int, reason string) error
-
-	// Refer перевод вызова
-	Refer(ctx context.Context, target URI, opts ReferOpts) error
-
-	// ReferReplace замена вызова
-	ReferReplace(ctx context.Context, replaceDialog IDialog, opts ReferOpts) error
-
-	// WaitRefer ожидает ответ на REFER запрос и создает подписку при успехе.
-	//
-	// Должна вызываться после SendRefer() или SendReferWithReplaces() для ожидания
-	// ответа удаленной стороны. При получении 2xx ответа автоматически создается
-	// ReferSubscription для отслеживания NOTIFY сообщений о прогрессе перевода.
-	//
-	// Поведение по кодам ответа:
-	//   - 1xx: игнорируются, ожидание продолжается
-	//   - 2xx: создается подписка, возвращается ReferSubscription
-	//   - 3xx/4xx/5xx/6xx: возвращается ошибка
-	//
-	// Функция thread-safe, но должна вызываться только один раз после SendRefer().
-	WaitRefer(ctx context.Context) (*ReferSubscription, error)
-
-	// Bye завершает диалог.
-	Bye(ctx context.Context, reason string) error
-
-	// OnStateChange подписка на изменения состояния.
-	OnStateChange(func(DialogState))
-
-	// OnBody вызывается когдв есть тело запросе или ответе
-	OnBody(func(Body))
-
-	// Close немедленно снимает все горутины и таймеры (без BYE).
-	Close() error
-}
 
 // DialogKey представляет уникальный ключ SIP диалога.
 //

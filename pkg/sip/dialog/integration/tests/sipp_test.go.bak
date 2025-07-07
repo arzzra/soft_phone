@@ -1,0 +1,210 @@
+package tests
+
+import (
+	"context"
+	"os/exec"
+	"testing"
+	"time"
+
+	"github.com/arzzra/soft_phone/pkg/sip/core/types"
+	"github.com/arzzra/soft_phone/pkg/sip/dialog"
+	"github.com/arzzra/soft_phone/pkg/sip/transaction"
+	"github.com/arzzra/soft_phone/pkg/sip/transport"
+)
+
+// TestSIPpIntegration tests dialog functionality with SIPp
+func TestSIPpIntegration(t *testing.T) {
+	// Skip if Docker is not available
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("Docker not available, skipping integration test")
+	}
+
+	// Start OpenSIPS container
+	t.Log("Starting OpenSIPS container...")
+	cmd := exec.Command("docker-compose", "-f", "../docker-compose.yml", "up", "-d", "opensips")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to start OpenSIPS: %v", err)
+	}
+	defer func() {
+		// Stop containers
+		stopCmd := exec.Command("docker-compose", "-f", "../docker-compose.yml", "down")
+		stopCmd.Run()
+	}()
+
+	// Wait for OpenSIPS to start
+	time.Sleep(5 * time.Second)
+
+	// Create transport manager
+	transportMgr := transport.NewTransportManager()
+	
+	// Create and start UDP transport
+	udpTransport := transport.NewUDPTransport()
+	if err := udpTransport.Listen("0.0.0.0:5070"); err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	if err := transportMgr.RegisterTransport(udpTransport); err != nil {
+		t.Fatalf("Failed to register transport: %v", err)
+	}
+
+	// Start transport manager
+	if err := transportMgr.Start(); err != nil {
+		t.Fatalf("Failed to start transport manager: %v", err)
+	}
+	defer transportMgr.Stop()
+
+	// Create transaction layer  
+	txLayer := transaction.NewLayer(transportMgr)
+	ctx := context.Background()
+	if err := txLayer.Start(ctx); err != nil {
+		t.Fatalf("Failed to start transaction layer: %v", err)
+	}
+	defer txLayer.Stop(ctx)
+
+	// Create dialog stack
+	stack := dialog.NewStack(transportMgr, "localhost", 5070)
+	if err := stack.Start(ctx); err != nil {
+		t.Fatalf("Failed to start dialog stack: %v", err)
+	}
+	defer stack.Shutdown(ctx)
+
+	// Set up handler for incoming dialogs
+	incomingDialogs := make(chan dialog.IDialog, 1)
+	stack.OnIncomingDialog(func(d dialog.IDialog) {
+		select {
+		case incomingDialogs <- d:
+		default:
+		}
+	})
+
+	// Start SIPp UAC to send INVITE
+	t.Log("Starting SIPp UAC...")
+	sippCmd := exec.Command("docker", "run", "--rm", "--network", "sip-test",
+		"ctaloi/sipp",
+		"-sn", "uac",
+		"-r", "1",
+		"-l", "1", 
+		"-m", "1",
+		"-d", "5000",
+		"opensips:5060",
+	)
+	
+	if err := sippCmd.Start(); err != nil {
+		t.Fatalf("Failed to start SIPp: %v", err)
+	}
+	defer sippCmd.Process.Kill()
+
+	// Wait for incoming INVITE
+	select {
+	case dialog := <-incomingDialogs:
+		t.Log("Received incoming dialog")
+		
+		// Accept the call
+		sdp := createTestSDP("localhost", 10000)
+		if err := dialog.Accept(ctx, sdp); err != nil {
+			t.Errorf("Failed to accept dialog: %v", err)
+		}
+		
+		// Wait a bit
+		time.Sleep(2 * time.Second)
+		
+		// End the call
+		if err := dialog.Bye(ctx); err != nil {
+			t.Errorf("Failed to send BYE: %v", err)
+		}
+		
+	case <-time.After(10 * time.Second):
+		t.Error("Timeout waiting for incoming dialog")
+	}
+}
+
+// TestDirectSIPCommunication tests direct SIP communication without call-api
+func TestDirectSIPCommunication(t *testing.T) {
+	// Create transport manager
+	transportMgr := transport.NewTransportManager()
+	
+	// Create UDP transport
+	udpTransport := transport.NewUDPTransport()
+	if err := udpTransport.Listen("0.0.0.0:5080"); err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	if err := transportMgr.RegisterTransport(udpTransport); err != nil {
+		t.Fatalf("Failed to register transport: %v", err)
+	}
+
+	// Start transport
+	if err := transportMgr.Start(); err != nil {
+		t.Fatalf("Failed to start transport: %v", err)
+	}
+	defer transportMgr.Stop()
+
+	// Create transaction layer
+	txLayer := transaction.NewLayer(transportMgr)
+	ctx := context.Background()
+	if err := txLayer.Start(ctx); err != nil {
+		t.Fatalf("Failed to start transaction layer: %v", err)
+	}
+	defer txLayer.Stop(ctx)
+
+	// Create dialog stack
+	stack := dialog.NewStack(transportMgr, "localhost", 5080)
+	if err := stack.Start(ctx); err != nil {
+		t.Fatalf("Failed to start stack: %v", err)
+	}
+	defer stack.Shutdown(ctx)
+
+	// Create outgoing INVITE
+	targetURI, err := types.ParseURI("sip:test@localhost:5090")
+	if err != nil {
+		t.Fatalf("Failed to parse URI: %v", err)
+	}
+
+	sdp := createTestSDP("localhost", 20000)
+	
+	// Start a simple UAS listener in background
+	go startSimpleUAS(t, 5090)
+	time.Sleep(1 * time.Second) // Give UAS time to start
+
+	// Send INVITE
+	dialog, err := stack.NewInvite(ctx, targetURI, sdp)
+	if err != nil {
+		t.Fatalf("Failed to create INVITE: %v", err)
+	}
+
+	// Wait for response
+	time.Sleep(2 * time.Second)
+
+	// Check dialog state
+	if dialog.State() != dialog.DialogStateEstablished {
+		t.Errorf("Expected dialog to be established, got %v", dialog.State())
+	}
+
+	// Send BYE
+	if err := dialog.Bye(ctx); err != nil {
+		t.Errorf("Failed to send BYE: %v", err)
+	}
+}
+
+func createTestSDP(host string, port int) interface{} {
+	// Return a simple SDP structure
+	// This should match whatever the dialog.Accept expects
+	return map[string]interface{}{
+		"version":     0,
+		"origin":      "test 123 456 IN IP4 " + host,
+		"sessionName": "Test Session",
+		"connection":  "IN IP4 " + host,
+		"media": []map[string]interface{}{
+			{
+				"type":     "audio",
+				"port":     port,
+				"protocol": "RTP/AVP", 
+				"formats":  []string{"0", "8", "101"},
+			},
+		},
+	}
+}
+
+func startSimpleUAS(t *testing.T, port int) {
+	// This would start a simple UAS that responds to INVITE
+	// For now, just a placeholder
+	t.Logf("Simple UAS would listen on port %d", port)
+}
