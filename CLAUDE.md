@@ -8,6 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - I need honest feedback on my code.
 - используй mcp godoc-mcp для просмотра api пакетов
 
+## SIP Protocol Implementation
+- Working directory: `pkg/sip/` - вся реализация SIP протокола здесь
+- Development approach: Test-first - сначала пишем тесты, потом реализацию
+- Use separate sub-agents for each layer implementation
+
 ## Project Overview
 This is a professional-grade Go softphone implementation with RTP/Media/SIP stack, focusing on proper RFC compliance and timing requirements for VoIP applications. The project implements a complete telephony stack from RTP packet handling up to SIP dialog management.
 

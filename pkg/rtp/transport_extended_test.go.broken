@@ -1,0 +1,526 @@
+package rtp
+
+import (
+	"context"
+	"errors"
+	"net"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// Extended RTP Transport Tests - обработка ошибок, платформенные оптимизации, RTCP
+
+func TestRTPTransportErrorHandling(t *testing.T) {
+	// Тестируем обработку различных сетевых ошибок
+	// Using standard testing instead of testutils
+	
+	testCases := []struct {
+		name          string
+		localAddr     string
+		remoteAddr    string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name:        "Valid addresses",
+			localAddr:   "127.0.0.1:0",
+			remoteAddr:  "127.0.0.1:5004",
+			expectError: false,
+		},
+		{
+			name:          "Invalid local address",
+			localAddr:     "999.999.999.999:0", 
+			remoteAddr:    "127.0.0.1:5004",
+			expectError:   true,
+			errorContains: "invalid",
+		},
+		{
+			name:          "Invalid remote address",
+			localAddr:     "127.0.0.1:0",
+			remoteAddr:    "999.999.999.999:5004",
+			expectError:   true,
+			errorContains: "invalid",
+		},
+		{
+			name:          "Port in use",
+			localAddr:     "127.0.0.1:1", // Restricted port
+			remoteAddr:    "127.0.0.1:5004",
+			expectError:   true,
+			errorContains: "permission denied",
+		},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			transport, err := NewUDPTransport(tc.localAddr, tc.remoteAddr)
+			
+			if tc.expectError {
+				if err == nil {
+				t.Errorf("Should return error for %s", tc.name)
+				return
+			}
+			if tc.errorContains != "" && !strings.Contains(err.Error(), tc.errorContains) {
+				t.Errorf("Error should contain '%s', got: %v", tc.errorContains, err)
+			}
+			return
+		}
+		
+		if err != nil {
+			t.Errorf("Should create transport successfully: %v", err)
+		}
+		if transport != nil {
+			transport.Close()
+		}
+		})
+	}
+}
+
+func TestRTPPacketValidation(t *testing.T) {
+	// Тестируем валидацию RTP пакетов при отправке
+	// Using standard testing instead of testutils
+	
+	transport, err := NewUDPTransport("127.0.0.1:0", "127.0.0.1:5004")
+	assert.NoError(err, "Should create transport")
+	defer transport.Close()
+	
+	testCases := []struct {
+		name        string
+		packet      []byte
+		shouldError bool
+		description string
+	}{
+		{
+			name:        "Valid RTP packet",
+			packet:      createValidRTPPacket(),
+			shouldError: false,
+			description: "Standard RTP packet should be accepted",
+		},
+		{
+			name:        "Empty packet", 
+			packet:      []byte{},
+			shouldError: true,
+			description: "Empty packet should be rejected",
+		},
+		{
+			name:        "Too short packet",
+			packet:      []byte{0x80, 0x00}, // Only 2 bytes
+			shouldError: true,
+			description: "Packet shorter than RTP header should be rejected",
+		},
+		{
+			name:        "Invalid version",
+			packet:      []byte{0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Version 1
+			shouldError: true,
+			description: "RTP version != 2 should be rejected",
+		},
+		{
+			name:        "Maximum size packet",
+			packet:      createLargeRTPPacket(65536),
+			shouldError: false,
+			description: "Large but valid packet should be accepted",
+		},
+		{
+			name:        "Oversized packet",
+			packet:      createLargeRTPPacket(100000),
+			shouldError: true,
+			description: "Extremely large packet should be rejected",
+		},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := transport.SendRTP(tc.packet)
+			
+			if tc.shouldError {
+				assert.Error(err, tc.description)
+			} else {
+				assert.NoError(err, tc.description)
+			}
+		})
+	}
+}
+
+func TestRTPTransportRecovery(t *testing.T) {
+	// Тестируем восстановление после сетевых ошибок
+	// Using standard testing instead of testutils
+	
+	// Создаем транспорт
+	transport, err := NewUDPTransport("127.0.0.1:0", "127.0.0.1:15004")
+	assert.NoError(err, "Should create transport")
+	defer transport.Close()
+	
+	// Создаем mock UDP сервер который временно недоступен
+	server := &MockUDPServer{
+		Address:      "127.0.0.1:15004",
+		DropDuration: 2 * time.Second,
+	}
+	
+	go server.Start()
+	defer server.Stop()
+	
+	packet := createValidRTPPacket()
+	
+	// Отправляем пакеты с интервалом
+	sentCount := 0
+	errorCount := 0
+	
+	for i := 0; i < 20; i++ {
+		err := transport.SendRTP(packet)
+		sentCount++
+		
+		if err != nil {
+			errorCount++
+			t.Logf("Send error (iteration %d): %v", i, err)
+		}
+		
+		time.Sleep(500 * time.Millisecond)
+	}
+	
+	// Должны быть некоторые ошибки в начале, но не все
+	assert.Greater(errorCount, 0, "Should have some errors during unavailability")
+	assert.Less(errorCount, sentCount, "Should recover and send some packets successfully")
+	
+	t.Logf("Sent: %d, Errors: %d, Success rate: %.1f%%",
+		sentCount, errorCount, float64(sentCount-errorCount)/float64(sentCount)*100)
+}
+
+func TestRTPConcurrentAccess(t *testing.T) {
+	// Тестируем параллельный доступ к RTP транспорту
+	// Using standard testing instead of testutils
+	
+	transport, err := NewUDPTransport("127.0.0.1:0", "127.0.0.1:5004")
+	assert.NoError(err, "Should create transport")
+	defer transport.Close()
+	
+	const numGoroutines = 10
+	const packetsPerGoroutine = 100
+	
+	var wg sync.WaitGroup
+	errors := make(chan error, numGoroutines*packetsPerGoroutine)
+	
+	// Запускаем горутины для параллельной отправки
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(routineID int) {
+			defer wg.Done()
+			
+			for j := 0; j < packetsPerGoroutine; j++ {
+				packet := createRTPPacketWithSequence(uint16(routineID*1000 + j))
+				err := transport.SendRTP(packet)
+				if err != nil {
+					errors <- err
+				}
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	close(errors)
+	
+	// Подсчитываем ошибки
+	errorCount := 0
+	for err := range errors {
+		errorCount++
+		if errorCount < 5 { // Логируем только первые несколько ошибок
+			t.Logf("Concurrent send error: %v", err)
+		}
+	}
+	
+	totalPackets := numGoroutines * packetsPerGoroutine
+	successRate := float64(totalPackets-errorCount) / float64(totalPackets) * 100
+	
+	// Ожидаем высокий успех при параллельной отправке
+	assert.Greater(successRate, 80.0, "Success rate should be > 80%% (got %.1f%%)", successRate)
+	
+	t.Logf("Concurrent test: %d packets, %d errors, %.1f%% success rate",
+		totalPackets, errorCount, successRate)
+}
+
+func TestPlatformSpecificOptimizations(t *testing.T) {
+	// Тестируем платформенные оптимизации сокетов
+	// Using standard testing instead of testutils
+	
+	transport, err := NewUDPTransport("127.0.0.1:0", "127.0.0.1:5004")
+	assert.NoError(err, "Should create transport")
+	defer transport.Close()
+	
+	// Получаем базовое соединение для проверки сокетных опций
+	udpTransport, ok := transport.(*UDPTransport)
+	assert.True(ok, "Should be UDP transport")
+	
+	conn := udpTransport.conn
+	assert.NotNil(conn, "Should have UDP connection")
+	
+	// Проверяем платформенные оптимизации
+	switch runtime.GOOS {
+	case "linux":
+		testLinuxSocketOptions(t, conn)
+	case "darwin":
+		testDarwinSocketOptions(t, conn)
+	case "windows":
+		testWindowsSocketOptions(t, conn)
+	default:
+		t.Logf("Platform-specific tests not available for %s", runtime.GOOS)
+	}
+}
+
+func TestRTPReceiveHandling(t *testing.T) {
+	// Тестируем обработку входящих RTP пакетов
+	// Using standard testing instead of testutils
+	
+	// Создаем два транспорта для тестирования передачи
+	sender, err := NewUDPTransport("127.0.0.1:0", "127.0.0.1:15005")
+	assert.NoError(err, "Should create sender")
+	defer sender.Close()
+	
+	receiver, err := NewUDPTransport("127.0.0.1:15005", "127.0.0.1:0")
+	assert.NoError(err, "Should create receiver")
+	defer receiver.Close()
+	
+	// Канал для получения пакетов
+	receivedPackets := make(chan []byte, 10)
+	
+	// Устанавливаем обработчик получения (если поддерживается)
+	if settable, ok := receiver.(interface{ SetReceiveHandler(func([]byte)) }); ok {
+		settable.SetReceiveHandler(func(data []byte) {
+			receivedPackets <- data
+		})
+	}
+	
+	// Отправляем тестовые пакеты
+	testPackets := [][]byte{
+		createRTPPacketWithSequence(1),
+		createRTPPacketWithSequence(2),
+		createRTPPacketWithSequence(3),
+	}
+	
+	for _, packet := range testPackets {
+		err := sender.SendRTP(packet)
+		assert.NoError(err, "Should send packet")
+		time.Sleep(10 * time.Millisecond) // Небольшая задержка
+	}
+	
+	// Проверяем получение пакетов
+	receivedCount := 0
+	timeout := time.After(1 * time.Second)
+	
+	for receivedCount < len(testPackets) {
+		select {
+		case packet := <-receivedPackets:
+			receivedCount++
+			assert.True(len(packet) >= 12, "Received packet should be valid RTP")
+			
+		case <-timeout:
+			break
+		}
+	}
+	
+	if receivedCount > 0 {
+		t.Logf("Successfully received %d/%d packets", receivedCount, len(testPackets))
+	} else {
+		t.Log("Note: Receive functionality may not be implemented yet")
+	}
+}
+
+func TestRTCPSupport(t *testing.T) {
+	// Тестируем поддержку RTCP (если реализована)
+	// Using standard testing instead of testutils
+	
+	transport, err := NewUDPTransport("127.0.0.1:0", "127.0.0.1:5005")
+	assert.NoError(err, "Should create transport")
+	defer transport.Close()
+	
+	// Проверяем, поддерживает ли транспорт RTCP
+	if rtcpTransport, ok := transport.(interface{ SendRTCP([]byte) error }); ok {
+		// Создаем простой RTCP пакет (Sender Report)
+		rtcpPacket := createRTCPSenderReport()
+		
+		err := rtcpTransport.SendRTCP(rtcpPacket)
+		assert.NoError(err, "Should send RTCP packet")
+		
+		t.Log("RTCP support confirmed")
+	} else {
+		t.Log("RTCP support not implemented yet")
+	}
+}
+
+func TestTransportResourceManagement(t *testing.T) {
+	// Тестируем управление ресурсами транспорта
+	// Using standard testing instead of testutils
+	
+	// Создаем множество транспортов для проверки утечек ресурсов
+	const numTransports = 100
+	transports := make([]Transport, numTransports)
+	
+	for i := 0; i < numTransports; i++ {
+		transport, err := NewUDPTransport("127.0.0.1:0", "127.0.0.1:5004")
+		assert.NoError(err, "Should create transport %d", i)
+		transports[i] = transport
+	}
+	
+	// Закрываем все транспорты
+	for i, transport := range transports {
+		err := transport.Close()
+		assert.NoError(err, "Should close transport %d", i)
+	}
+	
+	// Проверяем, что ресурсы действительно освобождены
+	// (попытка создать транспорт на том же порту)
+	transport, err := NewUDPTransport("127.0.0.1:0", "127.0.0.1:5004")
+	assert.NoError(err, "Should create transport after cleanup")
+	if transport != nil {
+		transport.Close()
+	}
+}
+
+// Вспомогательные функции и типы
+
+type MockUDPServer struct {
+	Address      string
+	DropDuration time.Duration
+	conn         *net.UDPConn
+	running      bool
+	startTime    time.Time
+}
+
+func (s *MockUDPServer) Start() error {
+	addr, err := net.ResolveUDPAddr("udp", s.Address)
+	if err != nil {
+		return err
+	}
+	
+	s.conn, err = net.ListenUDP("udp", addr)
+	if err != nil {
+		return err
+	}
+	
+	s.running = true
+	s.startTime = time.Now()
+	
+	buffer := make([]byte, 1500)
+	for s.running {
+		// Симулируем недоступность в начале
+		if time.Since(s.startTime) < s.DropDuration {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		
+		// Читаем и отвечаем
+		s.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		n, addr, err := s.conn.ReadFromUDP(buffer)
+		if err != nil {
+			continue
+		}
+		
+		// Эхо ответ
+		s.conn.WriteToUDP(buffer[:n], addr)
+	}
+	
+	return nil
+}
+
+func (s *MockUDPServer) Stop() {
+	s.running = false
+	if s.conn != nil {
+		s.conn.Close()
+	}
+}
+
+func createValidRTPPacket() []byte {
+	// Создаем минимальный валидный RTP пакет
+	// Version=2, Padding=0, Extension=0, CC=0, Marker=0, PT=0
+	return []byte{
+		0x80, 0x00, // V=2, P=0, X=0, CC=0, M=0, PT=0
+		0x00, 0x01, // Sequence number
+		0x00, 0x00, 0x00, 0x00, // Timestamp
+		0x00, 0x00, 0x00, 0x00, // SSRC
+		// Payload (empty)
+	}
+}
+
+func createRTPPacketWithSequence(seq uint16) []byte {
+	packet := createValidRTPPacket()
+	packet[2] = byte(seq >> 8)
+	packet[3] = byte(seq & 0xFF)
+	return packet
+}
+
+func createLargeRTPPacket(size int) []byte {
+	packet := createValidRTPPacket()
+	
+	if size > len(packet) {
+		// Добавляем payload для достижения нужного размера
+		payload := make([]byte, size-len(packet))
+		for i := range payload {
+			payload[i] = byte(i % 256)
+		}
+		packet = append(packet, payload...)
+	}
+	
+	return packet
+}
+
+func createRTCPSenderReport() []byte {
+	// Создаем простой RTCP Sender Report пакет
+	return []byte{
+		0x80, 0xC8, // V=2, P=0, RC=0, PT=200 (SR)
+		0x00, 0x06, // Length (6 words)
+		0x00, 0x00, 0x00, 0x00, // SSRC
+		0x00, 0x00, 0x00, 0x00, // NTP timestamp MSW
+		0x00, 0x00, 0x00, 0x00, // NTP timestamp LSW
+		0x00, 0x00, 0x00, 0x00, // RTP timestamp
+		0x00, 0x00, 0x00, 0x00, // Sender packet count
+		0x00, 0x00, 0x00, 0x00, // Sender octet count
+	}
+}
+
+// Платформенные тесты сокетных опций
+
+func testLinuxSocketOptions(t *testing.T, conn *net.UDPConn) {
+	// Тестируем Linux-специфичные опции
+	if runtime.GOOS != "linux" {
+		return
+	}
+	
+	// Получаем файловый дескриптор
+	file, err := conn.File()
+	if err != nil {
+		t.Logf("Cannot get file descriptor: %v", err)
+		return
+	}
+	defer file.Close()
+	
+	// Здесь можно проверить SO_REUSEPORT, SO_BINDTODEVICE и другие опции
+	// через syscall, но для простоты тестирования ограничимся базовой проверкой
+	t.Log("Linux socket optimizations available")
+}
+
+func testDarwinSocketOptions(t *testing.T, conn *net.UDPConn) {
+	// Тестируем macOS-специфичные опции
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	
+	// Проверяем, что можем получить файловый дескриптор
+	file, err := conn.File()
+	if err != nil {
+		t.Logf("Cannot get file descriptor: %v", err)
+		return
+	}
+	defer file.Close()
+	
+	t.Log("Darwin socket optimizations available")
+}
+
+func testWindowsSocketOptions(t *testing.T, conn *net.UDPConn) {
+	// Тестируем Windows-специфичные опции
+	if runtime.GOOS != "windows" {
+		return
+	}
+	
+	// На Windows можем проверить базовые опции
+	t.Log("Windows socket optimizations available")
+}

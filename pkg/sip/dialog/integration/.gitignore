@@ -1,0 +1,15 @@
+# Test artifacts
+*.test
+*.out
+coverage.html
+
+# Docker volumes
+.docker/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

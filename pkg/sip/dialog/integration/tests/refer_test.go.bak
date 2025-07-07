@@ -1,0 +1,402 @@
+package tests
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/arzzra/soft_phone/pkg/sip/core/types"
+	"github.com/arzzra/soft_phone/pkg/sip/dialog"
+)
+
+// TestBlindTransfer tests blind call transfer
+func TestBlindTransfer(t *testing.T) {
+	env, cleanup := SetupTestEnvironment(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	// Setup: Alice calls Bob, then transfers to Charlie
+	alice := fmt.Sprintf("sip:alice@%s", env.localAddr)
+	bob := "sip:bob@" + opensipsAddr
+	charlie := "sip:charlie@" + opensipsAddr
+
+	// Channels for incoming dialogs
+	incomingChan := make(chan dialog.IDialog, 2)
+	env.stack.OnIncomingDialog(func(d dialog.IDialog) {
+		select {
+		case incomingChan <- d:
+		default:
+		}
+	})
+
+	// Step 1: Alice calls Bob
+	callID1, err := env.callAPIClient.CallStart(ctx, alice, bob)
+	if err != nil {
+		t.Fatalf("Failed to start call Alice->Bob: %v", err)
+	}
+	t.Logf("Started call Alice->Bob with ID: %s", callID1)
+
+	// Wait for incoming INVITE from Alice
+	var aliceBobDialog dialog.IDialog
+	select {
+	case aliceBobDialog = <-incomingChan:
+		t.Log("Received incoming INVITE from Alice")
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for incoming INVITE")
+	}
+
+	// Accept the call
+	err = aliceBobDialog.Accept(ctx, &types.SDP{
+		Version:     0,
+		Origin:      "bob 123 456 IN IP4 " + env.localAddr,
+		SessionName: "Bob Session",
+		Connection:  "IN IP4 " + env.localAddr,
+		Media: []types.MediaDescription{
+			{
+				Type:     "audio",
+				Port:     20000,
+				Protocol: "RTP/AVP",
+				Formats:  []string{"0", "8"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to accept call: %v", err)
+	}
+
+	// Wait for establishment
+	time.Sleep(2 * time.Second)
+
+	if aliceBobDialog.State() != dialog.DialogStateEstablished {
+		t.Fatalf("Expected dialog state Established, got %v", aliceBobDialog.State())
+	}
+
+	// Step 2: Alice transfers Bob to Charlie (blind transfer)
+	t.Log("Initiating blind transfer from Bob to Charlie")
+	
+	// Initiate REFER via call-api
+	err = env.callAPIClient.CallBlindTransfer(ctx, callID1, "callee", charlie)
+	if err != nil {
+		t.Fatalf("Failed to initiate blind transfer: %v", err)
+	}
+
+	// Our dialog should receive REFER request
+	referReceived := make(chan bool, 1)
+	var referSubscription *dialog.ReferSubscription
+
+	// Set up REFER handler
+	aliceBobDialog.OnRequest(func(req *types.Request) *types.Response {
+		if req.Method == "REFER" {
+			t.Logf("Received REFER to: %s", req.GetHeader("Refer-To"))
+			referReceived <- true
+			
+			// Accept REFER
+			return &types.Response{
+				StatusCode: 202,
+				ReasonPhrase: "Accepted",
+			}
+		}
+		return nil
+	})
+
+	// Wait for REFER
+	select {
+	case <-referReceived:
+		t.Log("REFER received and accepted")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for REFER")
+	}
+
+	// Step 3: Bob calls Charlie (as a result of REFER)
+	// In real implementation, the dialog would initiate this call
+	// For testing, we simulate by having Bob initiate a new call
+
+	// Create a new dialog from Bob to Charlie
+	charlieURI, _ := types.ParseURI(charlie)
+	outgoingDialog, err := env.stack.NewInvite(ctx, charlieURI, &types.SDP{
+		Version:     0,
+		Origin:      "bob 789 012 IN IP4 " + env.localAddr,
+		SessionName: "Transfer Session",
+		Connection:  "IN IP4 " + env.localAddr,
+		Media: []types.MediaDescription{
+			{
+				Type:     "audio",
+				Port:     20002,
+				Protocol: "RTP/AVP",
+				Formats:  []string{"0", "8"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create outgoing dialog to Charlie: %v", err)
+	}
+
+	// Wait for Charlie to accept
+	time.Sleep(2 * time.Second)
+
+	// Send NOTIFY to report transfer progress
+	if referSubscription != nil {
+		// Send NOTIFY with transfer success
+		notifyBody := "SIP/2.0 200 OK"
+		err = aliceBobDialog.SendRequest(ctx, "NOTIFY", nil, []byte(notifyBody))
+		if err != nil {
+			t.Logf("Failed to send NOTIFY: %v", err)
+		}
+	}
+
+	// Step 4: Original call (Alice-Bob) should be terminated
+	time.Sleep(2 * time.Second)
+
+	// End the transferred call
+	if outgoingDialog != nil && outgoingDialog.State() == dialog.DialogStateEstablished {
+		err = outgoingDialog.Bye(ctx)
+		if err != nil {
+			t.Logf("Failed to end transferred call: %v", err)
+		}
+	}
+
+	// Cleanup
+	err = env.callAPIClient.CallEnd(ctx, callID1)
+	if err != nil {
+		t.Logf("Failed to end original call: %v", err)
+	}
+}
+
+// TestAttendedTransfer tests attended call transfer
+func TestAttendedTransfer(t *testing.T) {
+	env, cleanup := SetupTestEnvironment(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	// Setup: Alice calls Bob, Alice calls Charlie, then transfers Bob to Charlie
+	alice := fmt.Sprintf("sip:alice@%s", env.localAddr)
+	bob := "sip:bob@" + opensipsAddr
+	charlie := "sip:charlie@" + opensipsAddr
+
+	// Channels for incoming dialogs
+	dialogMap := make(map[string]dialog.IDialog)
+	var mapMutex sync.Mutex
+
+	env.stack.OnIncomingDialog(func(d dialog.IDialog) {
+		d.OnRequest(func(req *types.Request) *types.Response {
+			// Store dialog by From header for identification
+			from := req.GetHeader("From")
+			mapMutex.Lock()
+			dialogMap[from] = d
+			mapMutex.Unlock()
+			return nil
+		})
+	})
+
+	// Step 1: Alice calls Bob
+	callID1, err := env.callAPIClient.CallStart(ctx, alice, bob)
+	if err != nil {
+		t.Fatalf("Failed to start call Alice->Bob: %v", err)
+	}
+	t.Logf("Started call Alice->Bob with ID: %s", callID1)
+
+	// Step 2: Alice calls Charlie
+	time.Sleep(1 * time.Second)
+	callID2, err := env.callAPIClient.CallStart(ctx, alice, charlie)
+	if err != nil {
+		t.Fatalf("Failed to start call Alice->Charlie: %v", err)
+	}
+	t.Logf("Started call Alice->Charlie with ID: %s", callID2)
+
+	// Wait for dialogs to be established
+	time.Sleep(3 * time.Second)
+
+	// Step 3: Alice performs attended transfer
+	t.Log("Initiating attended transfer")
+	err = env.callAPIClient.CallAttendedTransfer(ctx, callID1, "callee", charlie)
+	if err != nil {
+		t.Fatalf("Failed to initiate attended transfer: %v", err)
+	}
+
+	// Wait for transfer to complete
+	time.Sleep(5 * time.Second)
+
+	// Verify transfer completed by checking events
+	// In a real test, we would verify:
+	// 1. Bob receives REFER with Replaces header
+	// 2. Bob calls Charlie with Replaces
+	// 3. Original calls are terminated
+	// 4. Bob and Charlie are connected
+
+	// Cleanup
+	env.callAPIClient.CallEnd(ctx, callID1)
+	env.callAPIClient.CallEnd(ctx, callID2)
+}
+
+// TestReferWithNotifications tests REFER with proper NOTIFY handling
+func TestReferWithNotifications(t *testing.T) {
+	env, cleanup := SetupTestEnvironment(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	alice := fmt.Sprintf("sip:alice@%s", env.localAddr)
+	bob := "sip:bob@" + opensipsAddr
+	charlie := "sip:charlie@" + opensipsAddr
+
+	// Channel for incoming dialog
+	incomingChan := make(chan dialog.IDialog, 1)
+	env.stack.OnIncomingDialog(func(d dialog.IDialog) {
+		select {
+		case incomingChan <- d:
+		default:
+		}
+	})
+
+	// Start call
+	callID, err := env.callAPIClient.CallStart(ctx, alice, bob)
+	if err != nil {
+		t.Fatalf("Failed to start call: %v", err)
+	}
+
+	// Get incoming dialog
+	var dialog dialog.IDialog
+	select {
+	case dialog = <-incomingChan:
+		t.Log("Received incoming dialog")
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for dialog")
+	}
+
+	// Accept call
+	err = dialog.Accept(ctx, &types.SDP{
+		Version:     0,
+		Origin:      "test 123 456 IN IP4 " + env.localAddr,
+		SessionName: "Test",
+		Connection:  "IN IP4 " + env.localAddr,
+		Media: []types.MediaDescription{
+			{Type: "audio", Port: 30000, Protocol: "RTP/AVP", Formats: []string{"0"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to accept call: %v", err)
+	}
+
+	// Wait for establishment
+	time.Sleep(2 * time.Second)
+
+	// Track NOTIFY messages
+	notifyCount := 0
+	dialog.OnRequest(func(req *types.Request) *types.Response {
+		if req.Method == "NOTIFY" {
+			notifyCount++
+			t.Logf("Received NOTIFY #%d: %s", notifyCount, string(req.Body))
+			
+			// Verify Event header
+			event := req.GetHeader("Event")
+			if event != "refer" {
+				t.Errorf("Expected Event: refer, got: %s", event)
+			}
+			
+			// Verify Subscription-State
+			subState := req.GetHeader("Subscription-State")
+			t.Logf("Subscription-State: %s", subState)
+			
+			return &types.Response{
+				StatusCode: 200,
+				ReasonPhrase: "OK",
+			}
+		}
+		return nil
+	})
+
+	// Initiate transfer
+	err = env.callAPIClient.CallBlindTransfer(ctx, callID, "callee", charlie)
+	if err != nil {
+		t.Fatalf("Failed to initiate transfer: %v", err)
+	}
+
+	// Wait for NOTIFY messages
+	time.Sleep(5 * time.Second)
+
+	// Verify we received NOTIFY messages
+	if notifyCount < 1 {
+		t.Errorf("Expected at least 1 NOTIFY message, received %d", notifyCount)
+	}
+
+	// Cleanup
+	env.callAPIClient.CallEnd(ctx, callID)
+}
+
+// TestReferRejection tests REFER rejection scenarios
+func TestReferRejection(t *testing.T) {
+	env, cleanup := SetupTestEnvironment(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	alice := fmt.Sprintf("sip:alice@%s", env.localAddr)
+	bob := "sip:bob@" + opensipsAddr
+
+	// Channel for incoming dialog
+	incomingChan := make(chan dialog.IDialog, 1)
+	env.stack.OnIncomingDialog(func(d dialog.IDialog) {
+		select {
+		case incomingChan <- d:
+		default:
+		}
+	})
+
+	// Start call
+	callID, err := env.callAPIClient.CallStart(ctx, alice, bob)
+	if err != nil {
+		t.Fatalf("Failed to start call: %v", err)
+	}
+
+	// Get and accept incoming dialog
+	var dialog dialog.IDialog
+	select {
+	case dialog = <-incomingChan:
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for dialog")
+	}
+
+	err = dialog.Accept(ctx, &types.SDP{
+		Version:     0,
+		Origin:      "test 123 456 IN IP4 " + env.localAddr,
+		SessionName: "Test",
+		Connection:  "IN IP4 " + env.localAddr,
+		Media: []types.MediaDescription{
+			{Type: "audio", Port: 30000, Protocol: "RTP/AVP", Formats: []string{"0"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to accept call: %v", err)
+	}
+
+	// Configure dialog to reject REFER
+	dialog.OnRequest(func(req *types.Request) *types.Response {
+		if req.Method == "REFER" {
+			t.Log("Rejecting REFER request")
+			return &types.Response{
+				StatusCode: 603,
+				ReasonPhrase: "Decline",
+			}
+		}
+		return nil
+	})
+
+	// Try to transfer - should fail
+	err = env.callAPIClient.CallBlindTransfer(ctx, callID, "callee", "sip:charlie@" + opensipsAddr)
+	if err == nil {
+		t.Error("Expected transfer to fail, but it succeeded")
+	} else {
+		t.Logf("Transfer rejected as expected: %v", err)
+	}
+
+	// Cleanup
+	env.callAPIClient.CallEnd(ctx, callID)
+}

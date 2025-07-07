@@ -1,0 +1,4 @@
+19:23:13.918           pjsua_core.c !.pjsua version 2.15-dev for Darwin-24.4/x86_64 initialized
+19:23:13.918           pjsua_core.c  bind() error: Address already in use [status=120048]
+19:23:14.937                timer.c  .Dumping timer heap:
+19:23:14.937                timer.c  .  Cur size: 0 entries, max: 3070

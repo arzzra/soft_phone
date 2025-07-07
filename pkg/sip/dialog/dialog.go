@@ -4,556 +4,581 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
+	"time"
 
 	"github.com/arzzra/soft_phone/pkg/sip/core/types"
 	"github.com/arzzra/soft_phone/pkg/sip/transaction"
 )
 
-// sipDialog реализация интерфейса Dialog
-type sipDialog struct {
-	// Идентификация
-	id        DialogID
-	direction DialogDirection
-
-	// Состояние
-	state   DialogState
-	stateMu sync.RWMutex
-
-	// URI и адреса
-	localURI     types.URI
-	remoteURI    types.URI
-	localTarget  types.URI // Contact URI локальной стороны
-	remoteTarget types.URI // Contact URI удаленной стороны
-
-	// Route set (из Record-Route заголовков)
-	routeSet []types.URI
-	routeMu  sync.RWMutex
-
-	// Sequence numbers
-	localCSeq  uint32 // CSeq для исходящих запросов
-	remoteCSeq uint32 // CSeq последнего входящего запроса
-	cseqMu     sync.Mutex
-
+// Dialog представляет SIP диалог согласно RFC 3261
+//
+// Dialog управляет:
+//   - Состоянием диалога (Init -> Trying -> Established -> Terminated)
+//   - CSeq номерами для упорядочивания запросов
+//   - Target URI и Route set для маршрутизации
+//   - Транзакциями внутри диалога
+type Dialog struct {
+	// Основные поля
+	mu               sync.RWMutex
+	key              DialogKey
+	isUAC            bool
+	localURI         types.URI
+	remoteURI        types.URI
+	
+	// Управление состоянием
+	stateMachine     *DialogStateMachine
+	sequenceManager  *SequenceManager
+	targetManager    *TargetManager
+	
 	// Транзакции
-	txManager DialogTransactionManager
-
-	// Обработчики событий
-	stateHandlers    []DialogStateHandler
-	requestHandlers  []DialogRequestHandler
-	responseHandlers []DialogResponseHandler
-	handlersMu       sync.RWMutex
-
-	// Контекст и данные
-	ctx    context.Context
-	cancel context.CancelFunc
-	values sync.Map // для хранения произвольных данных
-
-	// Флаги
-	secure bool // использовать SIPS
+	transactionMgr   transaction.TransactionManager
+	inviteTx         transaction.Transaction // Исходная INVITE транзакция
+	currentTx        transaction.Transaction // Текущая активная транзакция
+	
+	// Callback функции
+	stateCallbacks   []func(DialogState)
+	bodyCallbacks    []func(Body)
+	
+	// REFER подписки
+	referSubscriptions map[string]*ReferSubscription
+	referTx            transaction.Transaction // Активная REFER транзакция
+	
+	// Контекст и отмена
+	ctx              context.Context
+	cancel           context.CancelFunc
+	
+	// Параметры
+	sdp              []byte // SDP тело для ответов
+	transport        string // Транспорт (UDP, TCP, TLS)
 }
 
 // NewDialog создает новый диалог
-func NewDialog(id DialogID, direction DialogDirection, txManager DialogTransactionManager) *sipDialog {
+//
+// Параметры:
+//   - key: уникальный ключ диалога
+//   - isUAC: true если этот UA инициировал диалог
+//   - localURI: локальный URI (From для UAC, To для UAS)
+//   - remoteURI: удаленный URI (To для UAC, From для UAS)
+//   - txMgr: менеджер транзакций
+func NewDialog(key DialogKey, isUAC bool, localURI, remoteURI types.URI, txMgr transaction.TransactionManager) *Dialog {
 	ctx, cancel := context.WithCancel(context.Background())
-
-	return &sipDialog{
-		id:        id,
-		direction: direction,
-		state:     DialogStateNone,
-		txManager: txManager,
-		ctx:       ctx,
-		cancel:    cancel,
+	
+	// Начальный CSeq
+	initialCSeq := GenerateInitialCSeq()
+	if !isUAC {
+		initialCSeq = 0 // UAS начинает с 0
 	}
+	
+	d := &Dialog{
+		key:                key,
+		isUAC:              isUAC,
+		localURI:           localURI,
+		remoteURI:          remoteURI,
+		stateMachine:       NewDialogStateMachine(isUAC),
+		sequenceManager:    NewSequenceManager(initialCSeq, isUAC),
+		targetManager:      NewTargetManager(remoteURI, isUAC),
+		transactionMgr:     txMgr,
+		stateCallbacks:     make([]func(DialogState), 0),
+		bodyCallbacks:      make([]func(Body), 0),
+		referSubscriptions: make(map[string]*ReferSubscription),
+		ctx:                ctx,
+		cancel:             cancel,
+		transport:          "UDP",
+	}
+	
+	// Подписываемся на изменения состояния
+	d.stateMachine.OnStateChange(func(state DialogState) {
+		d.notifyStateChange(state)
+	})
+	
+	return d
 }
 
-// ID возвращает идентификатор диалога
-func (d *sipDialog) ID() DialogID {
-	return d.id
-}
-
-// CallID возвращает Call-ID диалога
-func (d *sipDialog) CallID() string {
-	return d.id.CallID
-}
-
-// LocalTag возвращает локальный tag
-func (d *sipDialog) LocalTag() string {
-	return d.id.LocalTag
-}
-
-// RemoteTag возвращает удаленный tag
-func (d *sipDialog) RemoteTag() string {
-	return d.id.RemoteTag
+// Key возвращает ключ диалога
+func (d *Dialog) Key() DialogKey {
+	return d.key
 }
 
 // State возвращает текущее состояние диалога
-func (d *sipDialog) State() DialogState {
-	d.stateMu.RLock()
-	defer d.stateMu.RUnlock()
-	return d.state
+func (d *Dialog) State() DialogState {
+	return d.stateMachine.GetState()
 }
 
-// Direction возвращает направление диалога (UAC/UAS)
-func (d *sipDialog) Direction() DialogDirection {
-	return d.direction
+// LocalTag возвращает локальный тег
+func (d *Dialog) LocalTag() string {
+	return d.key.LocalTag
 }
 
-// LocalURI возвращает локальный URI
-func (d *sipDialog) LocalURI() types.URI {
-	return d.localURI
+// RemoteTag возвращает удаленный тег
+func (d *Dialog) RemoteTag() string {
+	return d.key.RemoteTag
 }
 
-// RemoteURI возвращает удаленный URI
-func (d *sipDialog) RemoteURI() types.URI {
-	return d.remoteURI
+// Accept принимает входящий INVITE (отправляет 200 OK)
+func (d *Dialog) Accept(ctx context.Context, opts ...ResponseOpt) error {
+	d.mu.Lock()
+	
+	// Проверяем состояние
+	state := d.stateMachine.GetState()
+	if state != DialogStateTrying && state != DialogStateRinging {
+		d.mu.Unlock()
+		return fmt.Errorf("dialog must be in Trying or Ringing state, current: %s", state)
+	}
+	
+	// Проверяем наличие INVITE транзакции
+	if d.inviteTx == nil {
+		d.mu.Unlock()
+		return fmt.Errorf("no INVITE transaction found")
+	}
+	
+	// Создаем 200 OK ответ
+	resp := d.createResponse(200, "OK")
+	
+	// Применяем опции
+	for _, opt := range opts {
+		opt(resp)
+	}
+	
+	// Отправляем через транзакцию
+	if err := d.inviteTx.SendResponse(resp); err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("failed to send 200 OK: %w", err)
+	}
+	
+	// ВАЖНО: Освобождаем блокировку перед обновлением состояния
+	d.mu.Unlock()
+	
+	// Обновляем состояние (это может вызвать callback)
+	if err := d.stateMachine.ProcessResponse("INVITE", 200); err != nil {
+		return fmt.Errorf("failed to update state: %w", err)
+	}
+	
+	return nil
 }
 
-// LocalTarget возвращает локальный target (Contact)
-func (d *sipDialog) LocalTarget() types.URI {
-	return d.localTarget
+// Reject отклоняет входящий INVITE
+func (d *Dialog) Reject(ctx context.Context, code int, reason string) error {
+	d.mu.Lock()
+	
+	// Проверяем состояние
+	state := d.stateMachine.GetState()
+	if state != DialogStateTrying && state != DialogStateRinging {
+		d.mu.Unlock()
+		return fmt.Errorf("dialog must be in Trying or Ringing state, current: %s", state)
+	}
+	
+	// Проверяем код ответа
+	if code < 400 || code >= 700 {
+		d.mu.Unlock()
+		return fmt.Errorf("invalid rejection code: %d", code)
+	}
+	
+	// Проверяем наличие INVITE транзакции
+	if d.inviteTx == nil {
+		d.mu.Unlock()
+		return fmt.Errorf("no INVITE transaction found")
+	}
+	
+	// Создаем ответ
+	resp := d.createResponse(code, reason)
+	
+	// Отправляем через транзакцию
+	if err := d.inviteTx.SendResponse(resp); err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("failed to send response: %w", err)
+	}
+	
+	// ВАЖНО: Освобождаем блокировку перед обновлением состояния
+	d.mu.Unlock()
+	
+	// Обновляем состояние (это может вызвать callback)
+	if err := d.stateMachine.ProcessResponse("INVITE", code); err != nil {
+		return fmt.Errorf("failed to update state: %w", err)
+	}
+	
+	return nil
 }
 
-// RemoteTarget возвращает удаленный target (Contact)
-func (d *sipDialog) RemoteTarget() types.URI {
-	return d.remoteTarget
+// Bye завершает диалог
+func (d *Dialog) Bye(ctx context.Context, reason string) error {
+	d.mu.Lock()
+	
+	// Проверяем состояние
+	if !d.stateMachine.IsEstablished() {
+		d.mu.Unlock()
+		return fmt.Errorf("dialog must be in Established state")
+	}
+	
+	// Создаем BYE запрос
+	bye := d.createRequest("BYE")
+	if reason != "" {
+		bye.SetHeader("Reason", reason)
+	}
+	
+	// Создаем транзакцию
+	tx, err := d.transactionMgr.CreateClientTransaction(bye)
+	if err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("failed to create BYE transaction: %w", err)
+	}
+	
+	// Сохраняем текущую транзакцию
+	d.currentTx = tx
+	
+	// Отправляем запрос
+	if err := tx.SendRequest(bye); err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("failed to send BYE: %w", err)
+	}
+	
+	// ВАЖНО: Освобождаем блокировку перед обновлением состояния
+	d.mu.Unlock()
+	
+	// Обновляем состояние (это может вызвать callback)
+	if err := d.stateMachine.ProcessRequest("BYE", 0); err != nil {
+		return fmt.Errorf("failed to update state: %w", err)
+	}
+	
+	// Ждем ответа в отдельной горутине
+	go d.waitForByeResponse(ctx, tx)
+	
+	return nil
 }
 
-// RouteSet возвращает route set
-func (d *sipDialog) RouteSet() []types.URI {
-	d.routeMu.RLock()
-	defer d.routeMu.RUnlock()
-
-	// Возвращаем копию для безопасности
-	routes := make([]types.URI, len(d.routeSet))
-	copy(routes, d.routeSet)
-	return routes
+// OnStateChange регистрирует callback для изменения состояния
+func (d *Dialog) OnStateChange(fn func(DialogState)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.stateCallbacks = append(d.stateCallbacks, fn)
 }
 
-// LocalCSeq возвращает локальный CSeq
-func (d *sipDialog) LocalCSeq() uint32 {
-	return atomic.LoadUint32(&d.localCSeq)
+// OnBody регистрирует callback для получения тела сообщения
+func (d *Dialog) OnBody(fn func(Body)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.bodyCallbacks = append(d.bodyCallbacks, fn)
 }
 
-// RemoteCSeq возвращает удаленный CSeq
-func (d *sipDialog) RemoteCSeq() uint32 {
-	return atomic.LoadUint32(&d.remoteCSeq)
+// Close закрывает диалог без отправки BYE
+func (d *Dialog) Close() error {
+	d.cancel()
+	
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	
+	// Закрываем все REFER подписки
+	for _, sub := range d.referSubscriptions {
+		close(sub.Done)
+	}
+	
+	// Очищаем ресурсы
+	d.referSubscriptions = nil
+	d.stateCallbacks = nil
+	d.bodyCallbacks = nil
+	
+	return nil
 }
 
 // SendRequest отправляет запрос в рамках диалога
-func (d *sipDialog) SendRequest(method string) (transaction.Transaction, error) {
-	return d.SendRequestWithBody(method, nil, "")
-}
-
-// SendRequestWithBody отправляет запрос с телом в рамках диалога
-func (d *sipDialog) SendRequestWithBody(method string, body []byte, contentType string) (transaction.Transaction, error) {
-	// Проверяем состояние диалога
-	state := d.State()
-	if state == DialogStateTerminated {
-		return nil, ErrDialogTerminated
-	}
-
-	// Для некоторых методов требуется подтвержденный диалог
-	if state != DialogStateConfirmed {
-		switch method {
-		case "BYE", "UPDATE", "INFO", "NOTIFY":
-			return nil, &DialogError{
-				Code:    481,
-				Message: fmt.Sprintf("dialog must be confirmed for %s", method),
-			}
-		}
-	}
-
-	// Инкрементируем локальный CSeq
-	d.cseqMu.Lock()
-	d.localCSeq++
-	cseq := d.localCSeq
-	d.cseqMu.Unlock()
-
-	// Определяем Request-URI
-	// Если есть route set, используем первый элемент, иначе remote target
-	var requestURI types.URI
-	routes := d.RouteSet()
+func (d *Dialog) SendRequest(ctx context.Context, method string, body []byte) error {
+	d.mu.Lock()
 	
-	if len(routes) > 0 {
-		// Если первый route имеет lr параметр, используем remote target
-		firstRoute := routes[0]
-		if hasLRParam(firstRoute) {
-			requestURI = d.remoteTarget
-		} else {
-			// Strict routing - используем первый route как Request-URI
-			requestURI = firstRoute
-			// Удаляем первый route из списка для заголовков
-			routes = routes[1:]
-		}
-	} else {
-		// Нет route set - используем remote target
-		requestURI = d.remoteTarget
+	// Проверяем можно ли отправить запрос
+	if !d.stateMachine.CanSendRequest(method) {
+		d.mu.Unlock()
+		return fmt.Errorf("cannot send %s in state %s", method, d.stateMachine.GetState())
 	}
-
-	// Если remote target не установлен, используем remote URI
-	if requestURI == nil {
-		requestURI = d.remoteURI
-	}
-
-	// Проверяем, что есть необходимые URI
-	if requestURI == nil {
-		return nil, &DialogError{
-			Code:    500,
-			Message: "no valid request URI available",
-		}
-	}
-
+	
 	// Создаем запрос
-	req := types.NewRequest(method, requestURI)
-
-	// Устанавливаем обязательные заголовки
-	// From - всегда local URI с local tag
-	if d.localURI != nil {
-		fromAddr := types.NewAddress("", d.localURI)
-		fromAddr.SetParameter("tag", d.id.LocalTag)
-		req.SetHeader(types.HeaderFrom, fromAddr.String())
-	} else {
-		return nil, &DialogError{
-			Code:    500,
-			Message: "local URI not set",
-		}
-	}
-
-	// To - всегда remote URI с remote tag
-	if d.remoteURI != nil {
-		toAddr := types.NewAddress("", d.remoteURI)
-		toAddr.SetParameter("tag", d.id.RemoteTag)
-		req.SetHeader(types.HeaderTo, toAddr.String())
-	} else {
-		return nil, &DialogError{
-			Code:    500,
-			Message: "remote URI not set",
-		}
-	}
-
-	// Call-ID
-	req.SetHeader(types.HeaderCallID, d.id.CallID)
-
-	// CSeq
-	cseqValue := fmt.Sprintf("%d %s", cseq, method)
-	req.SetHeader(types.HeaderCSeq, cseqValue)
-
-	// Contact - local target
-	if d.localTarget != nil {
-		contactAddr := types.NewAddress("", d.localTarget)
-		req.SetHeader(types.HeaderContact, contactAddr.String())
-	}
-
-	// Route заголовки
-	for _, route := range routes {
-		routeAddr := types.NewAddress("", route)
-		req.AddHeader(types.HeaderRoute, routeAddr.String())
-	}
-
-	// Max-Forwards
-	req.SetHeader(types.HeaderMaxForwards, "70")
-
-	// Тело сообщения
-	if body != nil && len(body) > 0 {
+	req := d.createRequest(method)
+	if body != nil {
 		req.SetBody(body)
-		if contentType != "" {
-			req.SetHeader(types.HeaderContentType, contentType)
-		}
-		req.SetHeader(types.HeaderContentLength, fmt.Sprintf("%d", len(body)))
-	} else {
-		req.SetHeader(types.HeaderContentLength, "0")
 	}
-
+	
 	// Создаем транзакцию
-	tx, err := d.txManager.CreateClientTransaction(req)
+	tx, err := d.transactionMgr.CreateClientTransaction(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create transaction: %w", err)
-	}
-
-	return tx, nil
-}
-
-// hasLRParam проверяет наличие lr параметра в URI
-func hasLRParam(uri types.URI) bool {
-	if uri == nil {
-		return false
-	}
-	params := uri.Parameters()
-	_, hasLR := params["lr"]
-	return hasLR
-}
-
-// Terminate завершает диалог
-func (d *sipDialog) Terminate() error {
-	d.stateMu.Lock()
-	oldState := d.state
-	if oldState == DialogStateTerminated {
-		d.stateMu.Unlock()
-		return nil
-	}
-	d.state = DialogStateTerminated
-	d.stateMu.Unlock()
-
-	// Отменяем контекст
-	d.cancel()
-
-	// Уведомляем обработчики
-	d.notifyStateChange(oldState, DialogStateTerminated)
-
-	return nil
-}
-
-// OnStateChange регистрирует обработчик изменения состояния
-func (d *sipDialog) OnStateChange(handler DialogStateHandler) {
-	d.handlersMu.Lock()
-	defer d.handlersMu.Unlock()
-	d.stateHandlers = append(d.stateHandlers, handler)
-}
-
-// OnRequest регистрирует обработчик входящих запросов
-func (d *sipDialog) OnRequest(handler DialogRequestHandler) {
-	d.handlersMu.Lock()
-	defer d.handlersMu.Unlock()
-	d.requestHandlers = append(d.requestHandlers, handler)
-}
-
-// OnResponse регистрирует обработчик ответов
-func (d *sipDialog) OnResponse(handler DialogResponseHandler) {
-	d.handlersMu.Lock()
-	defer d.handlersMu.Unlock()
-	d.responseHandlers = append(d.responseHandlers, handler)
-}
-
-// Context возвращает контекст диалога
-func (d *sipDialog) Context() context.Context {
-	return d.ctx
-}
-
-// SetValue сохраняет значение в контексте диалога
-func (d *sipDialog) SetValue(key string, value interface{}) {
-	d.values.Store(key, value)
-}
-
-// GetValue получает значение из контекста диалога
-func (d *sipDialog) GetValue(key string) interface{} {
-	value, _ := d.values.Load(key)
-	return value
-}
-
-// setState устанавливает новое состояние диалога
-func (d *sipDialog) setState(newState DialogState) {
-	d.stateMu.Lock()
-	oldState := d.state
-	if oldState != newState {
-		d.state = newState
-		d.stateMu.Unlock()
-		d.notifyStateChange(oldState, newState)
-	} else {
-		d.stateMu.Unlock()
-	}
-}
-
-// notifyStateChange уведомляет обработчики об изменении состояния
-func (d *sipDialog) notifyStateChange(oldState, newState DialogState) {
-	d.handlersMu.RLock()
-	handlers := make([]DialogStateHandler, len(d.stateHandlers))
-	copy(handlers, d.stateHandlers)
-	d.handlersMu.RUnlock()
-
-	for _, handler := range handlers {
-		handler(d, oldState, newState)
-	}
-}
-
-// notifyRequest уведомляет обработчики о входящем запросе
-func (d *sipDialog) notifyRequest(req types.Message, tx transaction.Transaction) {
-	d.handlersMu.RLock()
-	handlers := make([]DialogRequestHandler, len(d.requestHandlers))
-	copy(handlers, d.requestHandlers)
-	d.handlersMu.RUnlock()
-
-	for _, handler := range handlers {
-		handler(d, req, tx)
-	}
-}
-
-// notifyResponse уведомляет обработчики об ответе
-func (d *sipDialog) notifyResponse(resp types.Message, tx transaction.Transaction) {
-	d.handlersMu.RLock()
-	handlers := make([]DialogResponseHandler, len(d.responseHandlers))
-	copy(handlers, d.responseHandlers)
-	d.handlersMu.RUnlock()
-
-	for _, handler := range handlers {
-		handler(d, resp, tx)
-	}
-}
-
-// updateFromRequest обновляет диалог из входящего запроса
-func (d *sipDialog) updateFromRequest(req types.Message) error {
-	// Обновляем remote CSeq
-	cseqHeader := req.GetHeader("CSeq")
-	if cseqHeader != "" {
-		// TODO: Парсить CSeq и обновить remoteCSeq
-	}
-
-	// Обновляем remote target из Contact (если есть)
-	contactHeader := req.GetHeader("Contact")
-	if contactHeader != "" && req.Method() != "REGISTER" {
-		// TODO: Парсить Contact и обновить remoteTarget
-	}
-
-	return nil
-}
-
-// updateFromResponse обновляет диалог из ответа
-func (d *sipDialog) updateFromResponse(resp types.Message) error {
-	// Обновляем remote target из Contact в 2xx ответах
-	if resp.StatusCode() >= 200 && resp.StatusCode() < 300 {
-		contactHeader := resp.GetHeader("Contact")
-		if contactHeader != "" {
-			// TODO: Парсить Contact и обновить remoteTarget
-		}
-	}
-
-	// Обновляем route set из Record-Route в 2xx на INVITE
-	if resp.StatusCode() >= 200 && resp.StatusCode() < 300 {
-		// Проверяем CSeq чтобы убедиться, что это ответ на INVITE
-		cseqHeader := resp.GetHeader(types.HeaderCSeq)
-		if cseqHeader != "" {
-			cseq, err := types.ParseCSeq(cseqHeader)
-			if err == nil && cseq.Method == "INVITE" {
-				// Обрабатываем Record-Route заголовки
-				if err := d.ProcessRecordRoute(resp); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// ProcessRecordRoute обрабатывает Record-Route заголовки из ответа
-// и строит route set для диалога согласно RFC 3261
-func (d *sipDialog) ProcessRecordRoute(resp types.Message) error {
-	// Route set устанавливается только один раз при первом 2xx ответе на INVITE
-	d.routeMu.Lock()
-	defer d.routeMu.Unlock()
-	
-	// Если route set уже установлен, не обновляем его
-	if len(d.routeSet) > 0 {
-		return nil
+		d.mu.Unlock()
+		return fmt.Errorf("failed to create transaction: %w", err)
 	}
 	
-	// Получаем все Record-Route заголовки
-	recordRouteHeaders := resp.GetHeaders(types.HeaderRecordRoute)
-	if len(recordRouteHeaders) == 0 {
-		// Нет Record-Route заголовков, route set остается пустым
-		return nil
+	// Сохраняем текущую транзакцию
+	d.currentTx = tx
+	
+	// Отправляем запрос
+	if err := tx.SendRequest(req); err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("failed to send request: %w", err)
 	}
 	
-	// Парсим все Record-Route заголовки
-	var allRoutes []*types.Route
-	for _, rrHeader := range recordRouteHeaders {
-		routes, err := types.ParseRouteHeader(rrHeader)
-		if err != nil {
-			return fmt.Errorf("failed to parse Record-Route header: %w", err)
-		}
-		allRoutes = append(allRoutes, routes...)
-	}
-	
-	// Порядок route set зависит от роли (UAC/UAS)
-	isUAC := d.direction == DialogDirectionUAC
-	
-	if isUAC {
-		// UAC: сохраняем маршруты в прямом порядке
-		d.routeSet = make([]types.URI, 0, len(allRoutes))
-		for _, route := range allRoutes {
-			if route.Address != nil && route.Address.URI() != nil {
-				d.routeSet = append(d.routeSet, route.Address.URI())
-			}
-		}
-	} else {
-		// UAS: сохраняем маршруты в обратном порядке
-		d.routeSet = make([]types.URI, 0, len(allRoutes))
-		for i := len(allRoutes) - 1; i >= 0; i-- {
-			route := allRoutes[i]
-			if route.Address != nil && route.Address.URI() != nil {
-				d.routeSet = append(d.routeSet, route.Address.URI())
-			}
-		}
-	}
+	d.mu.Unlock()
 	
 	return nil
 }
 
-// processRequest обрабатывает входящий запрос в контексте диалога
-func (d *sipDialog) processRequest(req types.Message, tx transaction.Transaction) error {
-	// Проверяем состояние
-	state := d.State()
-	if state == DialogStateTerminated {
-		return ErrDialogTerminated
+// ProcessRequest обрабатывает входящий запрос
+func (d *Dialog) ProcessRequest(req types.Message) error {
+	if !req.IsRequest() {
+		return fmt.Errorf("not a request")
 	}
-
+	
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	
+	method := req.Method()
+	
 	// Проверяем CSeq
-	// TODO: Валидировать, что CSeq больше предыдущего
-
-	// Обновляем информацию из запроса
-	if err := d.updateFromRequest(req); err != nil {
+	cseqHeader := req.GetHeader("CSeq")
+	if cseqHeader == "" {
+		return fmt.Errorf("missing CSeq header")
+	}
+	
+	cseq, cseqMethod, err := ParseCSeq(cseqHeader)
+	if err != nil {
+		return fmt.Errorf("invalid CSeq: %w", err)
+	}
+	
+	if cseqMethod != method {
+		return fmt.Errorf("CSeq method mismatch: %s != %s", cseqMethod, method)
+	}
+	
+	// Валидируем удаленный CSeq
+	if !d.sequenceManager.ValidateRemoteCSeq(cseq, method) {
+		return fmt.Errorf("invalid CSeq number: %d", cseq)
+	}
+	
+	// Обновляем target из Contact
+	if err := d.targetManager.UpdateFromRequest(req); err != nil {
+		// Не критично, логируем
+	}
+	
+	// Обрабатываем в state machine
+	if err := d.stateMachine.ProcessRequest(method, 0); err != nil {
 		return err
 	}
-
-	// Специальная обработка методов
-	switch req.Method() {
-	case "BYE":
-		// BYE завершает диалог
-		d.setState(DialogStateTerminated)
-	case "INVITE":
-		// re-INVITE в подтвержденном диалоге
-		if state != DialogStateConfirmed {
-			return &DialogError{
-				Code:    491,
-				Message: "Request Pending",
-			}
-		}
-		// TODO: Обработка re-INVITE
+	
+	// Обрабатываем тело если есть
+	if body := req.Body(); body != nil {
+		contentType := req.GetHeader("Content-Type")
+		d.notifyBody(NewSimpleBody(contentType, body))
 	}
-
-	// Уведомляем обработчики
-	d.notifyRequest(req, tx)
-
+	
 	return nil
 }
 
-// processResponse обрабатывает ответ в контексте диалога
-func (d *sipDialog) processResponse(resp types.Message, tx transaction.Transaction) error {
-	// Обновляем информацию из ответа
-	if err := d.updateFromResponse(resp); err != nil {
+// ProcessResponse обрабатывает входящий ответ
+func (d *Dialog) ProcessResponse(resp types.Message, method string) error {
+	if !resp.IsResponse() {
+		return fmt.Errorf("not a response")
+	}
+	
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	
+	statusCode := resp.StatusCode()
+	
+	// Обновляем target из Contact
+	if err := d.targetManager.UpdateFromResponse(resp, method); err != nil {
+		// Не критично, логируем
+	}
+	
+	// Обрабатываем в state machine
+	if err := d.stateMachine.ProcessResponse(method, statusCode); err != nil {
 		return err
 	}
+	
+	// Обрабатываем тело если есть
+	if body := resp.Body(); body != nil {
+		contentType := resp.GetHeader("Content-Type")
+		d.notifyBody(NewSimpleBody(contentType, body))
+	}
+	
+	return nil
+}
 
-	// Обработка изменения состояния диалога
-	if tx.Request().Method() == "INVITE" {
-		statusCode := resp.StatusCode()
+// createRequest создает новый запрос в рамках диалога
+func (d *Dialog) createRequest(method string) *types.Request {
+	// Получаем target URI и route set
+	targetURI := d.targetManager.GetTargetURI()
+	
+	// Создаем запрос
+	req := types.NewRequest(method, targetURI)
+	
+	// Основные заголовки
+	req.SetHeader("Call-ID", d.key.CallID)
+	
+	// From/To с правильными тегами
+	if d.isUAC {
+		req.SetHeader("From", d.formatAddress(d.localURI, d.key.LocalTag))
+		req.SetHeader("To", d.formatAddress(d.remoteURI, d.key.RemoteTag))
+	} else {
+		req.SetHeader("From", d.formatAddress(d.remoteURI, d.key.RemoteTag))
+		req.SetHeader("To", d.formatAddress(d.localURI, d.key.LocalTag))
+	}
+	
+	// CSeq
+	cseq := d.sequenceManager.NextLocalCSeq()
+	req.SetHeader("CSeq", FormatCSeq(cseq, method))
+	
+	// Via
+	branch := d.generateBranch()
+	via := fmt.Sprintf("SIP/2.0/%s %s;branch=%s", d.transport, d.getLocalAddress(), branch)
+	req.SetHeader("Via", via)
+	
+	// Max-Forwards
+	req.SetHeader("Max-Forwards", "70")
+	
+	// Contact
+	contact := fmt.Sprintf("<%s>", d.localURI.String())
+	req.SetHeader("Contact", contact)
+	
+	// Route headers если есть
+	routes := d.targetManager.BuildRouteHeaders()
+	for _, route := range routes {
+		req.AddHeader("Route", route)
+	}
+	
+	// User-Agent
+	req.SetHeader("User-Agent", "SoftPhone/1.0")
+	
+	return req
+}
 
-		if statusCode >= 100 && statusCode < 200 {
-			// Provisional response с tag создает ранний диалог
-			if d.State() == DialogStateNone && d.RemoteTag() != "" {
-				d.setState(DialogStateEarly)
-			}
-		} else if statusCode >= 200 && statusCode < 300 {
-			// 2xx подтверждает диалог
-			d.setState(DialogStateConfirmed)
-		} else if statusCode >= 300 {
-			// 3xx-6xx завершает диалог
-			d.setState(DialogStateTerminated)
+// createResponse создает ответ на запрос
+func (d *Dialog) createResponse(code int, reason string) *types.Response {
+	if d.inviteTx == nil || d.inviteTx.Request() == nil {
+		return nil
+	}
+	
+	req := d.inviteTx.Request()
+	resp := types.NewResponse(code, reason)
+	
+	// Копируем основные заголовки из запроса
+	resp.SetHeader("Call-ID", req.GetHeader("Call-ID"))
+	resp.SetHeader("From", req.GetHeader("From"))
+	
+	// To с локальным тегом
+	to := req.GetHeader("To")
+	if d.key.LocalTag != "" && extractTag(to) == "" {
+		to = fmt.Sprintf("%s;tag=%s", to, d.key.LocalTag)
+	}
+	resp.SetHeader("To", to)
+	
+	// CSeq
+	resp.SetHeader("CSeq", req.GetHeader("CSeq"))
+	
+	// Via
+	vias := req.GetHeaders("Via")
+	for _, via := range vias {
+		resp.AddHeader("Via", via)
+	}
+	
+	// Contact для 2xx
+	if code >= 200 && code < 300 {
+		contact := fmt.Sprintf("<%s>", d.localURI.String())
+		resp.SetHeader("Contact", contact)
+	}
+	
+	// Record-Route если есть
+	recordRoutes := req.GetHeaders("Record-Route")
+	for _, rr := range recordRoutes {
+		resp.AddHeader("Record-Route", rr)
+	}
+	
+	// SDP если есть
+	if d.sdp != nil && code == 200 {
+		resp.SetHeader("Content-Type", "application/sdp")
+		resp.SetBody(d.sdp)
+	}
+	
+	return resp
+}
+
+// formatAddress форматирует адрес с тегом
+func (d *Dialog) formatAddress(uri types.URI, tag string) string {
+	addr := fmt.Sprintf("<%s>", uri.String())
+	if tag != "" {
+		addr += fmt.Sprintf(";tag=%s", tag)
+	}
+	return addr
+}
+
+// generateBranch генерирует уникальный branch для Via
+func (d *Dialog) generateBranch() string {
+	return fmt.Sprintf("z9hG4bK-%s-%d", d.key.LocalTag, time.Now().UnixNano())
+}
+
+// getLocalAddress возвращает локальный адрес для Via
+func (d *Dialog) getLocalAddress() string {
+	// TODO: получать из транспорта
+	return "192.168.1.100:5060"
+}
+
+// waitForByeResponse ожидает ответ на BYE
+func (d *Dialog) waitForByeResponse(ctx context.Context, tx transaction.Transaction) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-tx.Context().Done():
+		// Транзакция завершилась
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		
+		if tx.Response() != nil && tx.Response().StatusCode() >= 200 {
+			// Получили финальный ответ
+			d.stateMachine.ProcessResponse("BYE", tx.Response().StatusCode())
 		}
 	}
+}
 
-	// Уведомляем обработчики
-	d.notifyResponse(resp, tx)
+// notifyStateChange уведомляет о изменении состояния
+func (d *Dialog) notifyStateChange(state DialogState) {
+	d.mu.RLock()
+	callbacks := append([]func(DialogState){}, d.stateCallbacks...)
+	d.mu.RUnlock()
+	
+	for _, cb := range callbacks {
+		cb(state)
+	}
+}
 
-	return nil
+// notifyBody уведомляет о получении тела
+func (d *Dialog) notifyBody(body Body) {
+	d.mu.RLock()
+	callbacks := append([]func(Body){}, d.bodyCallbacks...)
+	d.mu.RUnlock()
+	
+	for _, cb := range callbacks {
+		cb(body)
+	}
+}
+
+// SetSDP устанавливает SDP для ответов
+func (d *Dialog) SetSDP(sdp []byte) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.sdp = append([]byte(nil), sdp...) // копируем
+}
+
+// SetTransport устанавливает транспорт
+func (d *Dialog) SetTransport(transport string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.transport = transport
+}
+
+// SetInviteTransaction устанавливает INVITE транзакцию
+func (d *Dialog) SetInviteTransaction(tx transaction.Transaction) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.inviteTx = tx
+	
+	// Сохраняем CSeq от INVITE
+	if req := tx.Request(); req != nil {
+		if cseqHeader := req.GetHeader("CSeq"); cseqHeader != "" {
+			if cseq, method, err := ParseCSeq(cseqHeader); err == nil {
+				d.sequenceManager.SetInviteCSeq(cseq, method)
+			}
+		}
+	}
 }

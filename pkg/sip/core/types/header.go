@@ -99,14 +99,12 @@ func ParseVia(value string) (*Via, error) {
 
 	// Парсим host:port
 	hostPort := strings.TrimSpace(segments[0])
-	if colonIndex := strings.LastIndex(hostPort, ":"); colonIndex != -1 {
-		via.Host = hostPort[:colonIndex]
-		if port, err := parsePort(hostPort[colonIndex+1:]); err == nil {
-			via.Port = port
-		}
-	} else {
-		via.Host = hostPort
+	host, port, err := parseHostPort(hostPort)
+	if err != nil {
+		return nil, fmt.Errorf("invalid host:port in Via: %v", err)
 	}
+	via.Host = host
+	via.Port = port
 
 	// Парсим параметры
 	for i := 1; i < len(segments); i++ {
@@ -306,6 +304,82 @@ func parsePort(s string) (int, error) {
 	return port, nil
 }
 
+// parseHostPort парсит host:port с поддержкой IPv6
+func parseHostPort(hostPort string) (host string, port int, err error) {
+	// Проверяем наличие IPv6 адреса в квадратных скобках
+	if strings.HasPrefix(hostPort, "[") {
+		// IPv6 формат: [2001:db8::1]:5060
+		closingBracket := strings.Index(hostPort, "]")
+		if closingBracket == -1 {
+			return "", 0, fmt.Errorf("missing closing bracket for IPv6 address")
+		}
+		
+		host = hostPort[1:closingBracket]
+		
+		// Проверяем наличие порта после скобки
+		if closingBracket+1 < len(hostPort) && hostPort[closingBracket+1] == ':' {
+			portStr := hostPort[closingBracket+2:]
+			port, err = parsePort(portStr)
+			if err != nil {
+				return "", 0, err
+			}
+		}
+	} else {
+		// IPv4 или hostname
+		colonIndex := strings.LastIndex(hostPort, ":")
+		if colonIndex != -1 {
+			// Проверяем, что это не часть IPv6 адреса без скобок
+			// Если есть более одного двоеточия, это IPv6 без скобок
+			if strings.Count(hostPort, ":") > 1 {
+				// IPv6 без скобок и без порта
+				host = hostPort
+			} else {
+				// IPv4 или hostname с портом
+				host = hostPort[:colonIndex]
+				portStr := hostPort[colonIndex+1:]
+				port, err = parsePort(portStr)
+				if err != nil {
+					return "", 0, err
+				}
+			}
+		} else {
+			// Только хост без порта
+			host = hostPort
+		}
+	}
+	
+	return host, port, nil
+}
+
+// GetAddress возвращает адрес для отправки ответов из Via заголовка
+// Учитывает параметры received и rport согласно RFC 3261
+func (v *Via) GetAddress() string {
+	host := v.Host
+	port := v.Port
+	
+	// Если есть параметр received, используем его вместо хоста
+	if v.Received != "" {
+		host = v.Received
+	}
+	
+	// Если есть параметр rport с значением, используем его
+	if v.RPort > 0 {
+		port = v.RPort
+	}
+	
+	// Форматируем адрес
+	if port > 0 {
+		// Проверяем, нужны ли квадратные скобки для IPv6
+		if strings.Contains(host, ":") {
+			return fmt.Sprintf("[%s]:%d", host, port)
+		}
+		return fmt.Sprintf("%s:%d", host, port)
+	}
+	
+	// Если порт не указан, возвращаем только хост
+	return host
+}
+
 // Предопределенные имена заголовков
 const (
 	HeaderVia              = "Via"
@@ -348,6 +422,20 @@ const (
 	HeaderMinExpires       = "Min-Expires"
 	HeaderReplyTo          = "Reply-To"
 	HeaderAuthenticationInfo = "Authentication-Info"
+	
+	// REFER specific headers
+	HeaderReferTo          = "Refer-To"
+	HeaderReferredBy       = "Referred-By"
+	HeaderReplaces         = "Replaces"
+	HeaderReferSub         = "Refer-Sub"
+	HeaderAcceptReferSub   = "Accept-Refer-Sub"
+	HeaderNotifyReferSub   = "Notify-Refer-Sub"
+	HeaderReferEvents      = "Refer-Events-At"
+	
+	// Event specific headers (RFC 3265)
+	HeaderEvent            = "Event"
+	HeaderSubscriptionState = "Subscription-State"
+	HeaderAllowEvents      = "Allow-Events"
 )
 
 // Compact form заголовков

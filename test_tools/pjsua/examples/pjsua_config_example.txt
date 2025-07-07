@@ -1,0 +1,48 @@
+# Example PJSUA configuration file
+# This file can be used with --config-file option
+
+# Account configuration
+--registrar sip:pbx.example.com
+--id sip:user@example.com
+--username user
+--password secret
+--realm example.com
+
+# Transport configuration
+--local-port 5060
+--ip-addr 192.168.1.100
+--bound-addr 0.0.0.0
+
+# NAT traversal
+--stun-srv stun.l.google.com:19302
+--use-ice
+--auto-update-nat 2
+
+# Media configuration
+--null-audio
+--clock-rate 16000
+--quality 8
+--ec-tail 200
+--no-vad
+
+# Codecs
+--add-codec PCMU
+--add-codec PCMA
+--add-codec G722
+--dis-codec GSM
+
+# Auto-answer for testing
+--auto-answer 200
+--auto-conf
+
+# Maximum concurrent calls
+--max-calls 4
+
+# Logging
+--log-level 5
+--app-log-level 4
+
+# CLI configuration
+--use-cli
+--cli-telnet-port 2323
+--no-cli-console
