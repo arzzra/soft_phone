@@ -6,830 +6,554 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/arzzra/soft_phone/pkg/sip/message"
+	"github.com/arzzra/soft_phone/pkg/sip/core/types"
 	"github.com/arzzra/soft_phone/pkg/sip/transaction"
 )
 
-// dialog implements the Dialog interface
-type dialog struct {
-	// Identity
-	id        string
-	callID    string
-	localTag  string
-	remoteTag string
-	role      Role
+// sipDialog реализация интерфейса Dialog
+type sipDialog struct {
+	// Идентификация
+	id        DialogID
+	direction DialogDirection
 
-	// State
-	state          int32 // atomic
-	stateMutex     sync.RWMutex
-	stateCallbacks []func(State)
+	// Состояние
+	state   DialogState
+	stateMu sync.RWMutex
+
+	// URI и адреса
+	localURI     types.URI
+	remoteURI    types.URI
+	localTarget  types.URI // Contact URI локальной стороны
+	remoteTarget types.URI // Contact URI удаленной стороны
+
+	// Route set (из Record-Route заголовков)
+	routeSet []types.URI
+	routeMu  sync.RWMutex
 
 	// Sequence numbers
-	localSeq  uint32 // atomic
-	remoteSeq uint32 // atomic
+	localCSeq  uint32 // CSeq для исходящих запросов
+	remoteCSeq uint32 // CSeq последнего входящего запроса
+	cseqMu     sync.Mutex
 
-	// Addresses
-	localURI     *message.URI
-	remoteURI    *message.URI
-	localTarget  *message.URI
-	remoteTarget *message.URI
+	// Транзакции
+	txManager DialogTransactionManager
 
-	// Route set (locked after dialog establishment)
-	routeSet []*message.URI
+	// Обработчики событий
+	stateHandlers    []DialogStateHandler
+	requestHandlers  []DialogRequestHandler
+	responseHandlers []DialogResponseHandler
+	handlersMu       sync.RWMutex
 
-	// Transaction manager
-	txManager transaction.Manager
+	// Контекст и данные
+	ctx    context.Context
+	cancel context.CancelFunc
+	values sync.Map // для хранения произвольных данных
 
-	// Callbacks
-	requestCallbacks  []func(*message.Request)
-	responseCallbacks []func(*message.Response)
-
-	// REFER handling
-	referMutex         sync.Mutex
-	pendingRefer       *referTransaction
-	referSubscriptions map[string]*ReferSubscription
-
-	// Synchronization
-	mutex sync.RWMutex
-	done  chan struct{}
+	// Флаги
+	secure bool // использовать SIPS
 }
 
-// referTransaction tracks pending REFER
-type referTransaction struct {
-	request      *message.Request
-	responseChan chan *message.Response
-	errorChan    chan error
-	subscription *ReferSubscription
+// NewDialog создает новый диалог
+func NewDialog(id DialogID, direction DialogDirection, txManager DialogTransactionManager) *sipDialog {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &sipDialog{
+		id:        id,
+		direction: direction,
+		state:     DialogStateNone,
+		txManager: txManager,
+		ctx:       ctx,
+		cancel:    cancel,
+	}
 }
 
-// NewDialog creates a new dialog
-func NewDialog(invite *message.Request, role Role, txManager transaction.Manager) (*dialog, error) {
-	if invite == nil || invite.Method != "INVITE" {
-		return nil, ErrInvalidRequest
-	}
-
-	// Extract dialog identification
-	callID := invite.GetHeader("Call-ID")
-	if callID == "" {
-		return nil, fmt.Errorf("missing Call-ID")
-	}
-
-	var localTag, remoteTag string
-	var localURI, remoteURI *message.URI
-
-	fromHeader := invite.GetHeader("From")
-	toHeader := invite.GetHeader("To")
-
-	fromURI, err := message.ExtractURI(fromHeader)
-	if err != nil {
-		return nil, fmt.Errorf("invalid From URI: %w", err)
-	}
-
-	toURI, err := message.ExtractURI(toHeader)
-	if err != nil {
-		return nil, fmt.Errorf("invalid To URI: %w", err)
-	}
-
-	fromTag := message.ExtractTag(fromHeader)
-	toTag := message.ExtractTag(toHeader)
-
-	// Set tags based on role
-	if role == RoleUAC {
-		localTag = fromTag
-		remoteTag = toTag // Will be empty initially
-		localURI = fromURI
-		remoteURI = toURI
-	} else {
-		localTag = toTag // We'll generate this
-		remoteTag = fromTag
-		localURI = toURI
-		remoteURI = fromURI
-
-		// Generate local tag if not present
-		if localTag == "" {
-			localTag = message.GenerateTag()
-		}
-	}
-
-	// Extract initial CSeq
-	cseqHeader := invite.GetHeader("CSeq")
-	cseq, _, err := message.ParseCSeq(cseqHeader)
-	if err != nil {
-		return nil, fmt.Errorf("invalid CSeq: %w", err)
-	}
-
-	d := &dialog{
-		callID:             callID,
-		localTag:           localTag,
-		remoteTag:          remoteTag,
-		role:               role,
-		state:              int32(StateInit),
-		localURI:           localURI,
-		remoteURI:          remoteURI,
-		txManager:          txManager,
-		referSubscriptions: make(map[string]*ReferSubscription),
-		done:               make(chan struct{}),
-	}
-
-	// Set initial sequence numbers
-	if role == RoleUAC {
-		atomic.StoreUint32(&d.localSeq, cseq)
-		atomic.StoreUint32(&d.remoteSeq, 0)
-	} else {
-		atomic.StoreUint32(&d.localSeq, 0)
-		atomic.StoreUint32(&d.remoteSeq, cseq)
-	}
-
-	// Generate dialog ID
-	d.updateID()
-
-	return d, nil
-}
-
-// ID returns the dialog ID
-func (d *dialog) ID() string {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
+// ID возвращает идентификатор диалога
+func (d *sipDialog) ID() DialogID {
 	return d.id
 }
 
-// CallID returns the Call-ID
-func (d *dialog) CallID() string {
-	return d.callID
+// CallID возвращает Call-ID диалога
+func (d *sipDialog) CallID() string {
+	return d.id.CallID
 }
 
-// LocalTag returns the local tag
-func (d *dialog) LocalTag() string {
-	return d.localTag
+// LocalTag возвращает локальный tag
+func (d *sipDialog) LocalTag() string {
+	return d.id.LocalTag
 }
 
-// RemoteTag returns the remote tag
-func (d *dialog) RemoteTag() string {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
-	return d.remoteTag
+// RemoteTag возвращает удаленный tag
+func (d *sipDialog) RemoteTag() string {
+	return d.id.RemoteTag
 }
 
-// State returns current dialog state
-func (d *dialog) State() State {
-	return State(atomic.LoadInt32(&d.state))
+// State возвращает текущее состояние диалога
+func (d *sipDialog) State() DialogState {
+	d.stateMu.RLock()
+	defer d.stateMu.RUnlock()
+	return d.state
 }
 
-// Role returns UAC or UAS role
-func (d *dialog) Role() Role {
-	return d.role
+// Direction возвращает направление диалога (UAC/UAS)
+func (d *sipDialog) Direction() DialogDirection {
+	return d.direction
 }
 
-// LocalSeq returns local CSeq number
-func (d *dialog) LocalSeq() uint32 {
-	return atomic.LoadUint32(&d.localSeq)
-}
-
-// RemoteSeq returns remote CSeq number
-func (d *dialog) RemoteSeq() uint32 {
-	return atomic.LoadUint32(&d.remoteSeq)
-}
-
-// LocalURI returns local URI
-func (d *dialog) LocalURI() *message.URI {
+// LocalURI возвращает локальный URI
+func (d *sipDialog) LocalURI() types.URI {
 	return d.localURI
 }
 
-// RemoteURI returns remote URI
-func (d *dialog) RemoteURI() *message.URI {
+// RemoteURI возвращает удаленный URI
+func (d *sipDialog) RemoteURI() types.URI {
 	return d.remoteURI
 }
 
-// LocalTarget returns local target
-func (d *dialog) LocalTarget() *message.URI {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
+// LocalTarget возвращает локальный target (Contact)
+func (d *sipDialog) LocalTarget() types.URI {
 	return d.localTarget
 }
 
-// RemoteTarget returns remote target
-func (d *dialog) RemoteTarget() *message.URI {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
+// RemoteTarget возвращает удаленный target (Contact)
+func (d *sipDialog) RemoteTarget() types.URI {
 	return d.remoteTarget
 }
 
-// RouteSet returns the route set
-func (d *dialog) RouteSet() []*message.URI {
-	d.mutex.RLock()
-	defer d.mutex.RUnlock()
-	return append([]*message.URI{}, d.routeSet...)
+// RouteSet возвращает route set
+func (d *sipDialog) RouteSet() []types.URI {
+	d.routeMu.RLock()
+	defer d.routeMu.RUnlock()
+
+	// Возвращаем копию для безопасности
+	routes := make([]types.URI, len(d.routeSet))
+	copy(routes, d.routeSet)
+	return routes
 }
 
-// SendRequest sends a request within the dialog
-func (d *dialog) SendRequest(ctx context.Context, req *message.Request) (*message.Response, error) {
-	if d.State() == StateTerminated {
-		return nil, ErrTerminated
-	}
-
-	// Update request with dialog information
-	if err := d.updateRequest(req); err != nil {
-		return nil, err
-	}
-
-	// For testing, use mock transaction manager if available
-	type mockInterface interface {
-		OnSendRequest(*message.Request) (*message.Response, error)
-	}
-	if mockTx, ok := d.txManager.(mockInterface); ok {
-		return mockTx.OnSendRequest(req)
-	}
-
-	// TODO: Real implementation with transaction manager
-	return nil, fmt.Errorf("not implemented")
+// LocalCSeq возвращает локальный CSeq
+func (d *sipDialog) LocalCSeq() uint32 {
+	return atomic.LoadUint32(&d.localCSeq)
 }
 
-// SendResponse sends a response within the dialog
-func (d *dialog) SendResponse(resp *message.Response) error {
-	if d.State() == StateTerminated {
-		return ErrTerminated
-	}
-
-	// Update response with dialog information
-	if err := d.updateResponse(resp); err != nil {
-		return err
-	}
-
-	// For testing, use mock transaction manager if available
-	type mockInterface interface {
-		OnSendResponse(*message.Response) error
-	}
-	if mockTx, ok := d.txManager.(mockInterface); ok {
-		return mockTx.OnSendResponse(resp)
-	}
-
-	// TODO: Real implementation with transaction manager
-	return fmt.Errorf("not implemented")
+// RemoteCSeq возвращает удаленный CSeq
+func (d *sipDialog) RemoteCSeq() uint32 {
+	return atomic.LoadUint32(&d.remoteCSeq)
 }
 
-// SendBye sends BYE to terminate dialog
-func (d *dialog) SendBye(ctx context.Context) error {
-	if d.State() != StateConfirmed {
-		return ErrInvalidState
-	}
-
-	// Build BYE request
-	bye, err := d.buildRequest("BYE")
-	if err != nil {
-		return err
-	}
-
-	// Send request
-	resp, err := d.SendRequest(ctx, bye)
-	if err != nil {
-		return err
-	}
-
-	// Check response
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		d.setState(StateTerminated)
-	}
-
-	return nil
+// SendRequest отправляет запрос в рамках диалога
+func (d *sipDialog) SendRequest(method string) (transaction.Transaction, error) {
+	return d.SendRequestWithBody(method, nil, "")
 }
 
-// SendRefer sends REFER for call transfer
-func (d *dialog) SendRefer(ctx context.Context, referTo *message.URI, opts *ReferOptions) error {
-	if d.State() != StateConfirmed {
-		return ErrInvalidState
+// SendRequestWithBody отправляет запрос с телом в рамках диалога
+func (d *sipDialog) SendRequestWithBody(method string, body []byte, contentType string) (transaction.Transaction, error) {
+	// Проверяем состояние диалога
+	state := d.State()
+	if state == DialogStateTerminated {
+		return nil, ErrDialogTerminated
 	}
 
-	d.referMutex.Lock()
-	if d.pendingRefer != nil {
-		d.referMutex.Unlock()
-		return ErrReferPending
-	}
-
-	// Build REFER request
-	refer, err := d.buildRequest("REFER")
-	if err != nil {
-		d.referMutex.Unlock()
-		return err
-	}
-
-	// Add Refer-To header
-	refer.SetHeader("Refer-To", fmt.Sprintf("<%s>", referTo.String()))
-
-	// Add optional headers
-	if opts != nil {
-		if opts.ReferredBy != nil {
-			refer.SetHeader("Referred-By", fmt.Sprintf("<%s>", opts.ReferredBy.String()))
-		}
-		if opts.Replaces != "" {
-			// For attended transfer
-			referToWithReplaces := fmt.Sprintf("<%s?Replaces=%s>", referTo.String(), opts.Replaces)
-			refer.SetHeader("Refer-To", referToWithReplaces)
-		}
-		for name, value := range opts.Headers {
-			refer.SetHeader(name, value)
-		}
-	}
-
-	// Create subscription
-	subscriptionID := message.GenerateTag()
-	subscription := &ReferSubscription{
-		ID:            subscriptionID,
-		Dialog:        d,
-		ReferTo:       referTo,
-		State:         "pending",
-		Notifications: make(chan *ReferNotification, 10),
-		Done:          make(chan struct{}),
-	}
-
-	// Create pending transaction
-	d.pendingRefer = &referTransaction{
-		request:      refer,
-		responseChan: make(chan *message.Response, 1),
-		errorChan:    make(chan error, 1),
-		subscription: subscription,
-	}
-	d.referMutex.Unlock()
-
-	// Send REFER in goroutine
-	go func() {
-		resp, err := d.SendRequest(ctx, refer)
-
-		d.referMutex.Lock()
-		if d.pendingRefer != nil {
-			if err != nil {
-				d.pendingRefer.errorChan <- err
-			} else {
-				d.pendingRefer.responseChan <- resp
+	// Для некоторых методов требуется подтвержденный диалог
+	if state != DialogStateConfirmed {
+		switch method {
+		case "BYE", "UPDATE", "INFO", "NOTIFY":
+			return nil, &DialogError{
+				Code:    481,
+				Message: fmt.Sprintf("dialog must be confirmed for %s", method),
 			}
 		}
-		d.referMutex.Unlock()
-	}()
-
-	return nil
-}
-
-// WaitRefer waits for REFER response
-func (d *dialog) WaitRefer(ctx context.Context) (*ReferSubscription, error) {
-	d.referMutex.Lock()
-	if d.pendingRefer == nil {
-		d.referMutex.Unlock()
-		return nil, fmt.Errorf("no pending REFER")
 	}
 
-	pending := d.pendingRefer
-	d.referMutex.Unlock()
+	// Инкрементируем локальный CSeq
+	d.cseqMu.Lock()
+	d.localCSeq++
+	cseq := d.localCSeq
+	d.cseqMu.Unlock()
 
-	// Wait for response
-	select {
-	case resp := <-pending.responseChan:
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			// Success - add subscription
-			d.mutex.Lock()
-			d.referSubscriptions[pending.subscription.ID] = pending.subscription
-			d.mutex.Unlock()
-
-			// Clear pending
-			d.referMutex.Lock()
-			d.pendingRefer = nil
-			d.referMutex.Unlock()
-
-			pending.subscription.State = "active"
-			return pending.subscription, nil
+	// Определяем Request-URI
+	// Если есть route set, используем первый элемент, иначе remote target
+	var requestURI types.URI
+	routes := d.RouteSet()
+	
+	if len(routes) > 0 {
+		// Если первый route имеет lr параметр, используем remote target
+		firstRoute := routes[0]
+		if hasLRParam(firstRoute) {
+			requestURI = d.remoteTarget
 		} else {
-			// Failure
-			d.referMutex.Lock()
-			d.pendingRefer = nil
-			d.referMutex.Unlock()
-
-			return nil, fmt.Errorf("%w: %d %s", ErrReferRejected, resp.StatusCode, resp.ReasonPhrase)
+			// Strict routing - используем первый route как Request-URI
+			requestURI = firstRoute
+			// Удаляем первый route из списка для заголовков
+			routes = routes[1:]
 		}
-
-	case err := <-pending.errorChan:
-		d.referMutex.Lock()
-		d.pendingRefer = nil
-		d.referMutex.Unlock()
-		return nil, err
-
-	case <-ctx.Done():
-		d.referMutex.Lock()
-		d.pendingRefer = nil
-		d.referMutex.Unlock()
-		return nil, ctx.Err()
-	}
-}
-
-// Terminate terminates the dialog
-func (d *dialog) Terminate() {
-	if !d.setState(StateTerminated) {
-		return // Already terminated
+	} else {
+		// Нет route set - используем remote target
+		requestURI = d.remoteTarget
 	}
 
-	// Close subscriptions
-	d.mutex.Lock()
-	for _, sub := range d.referSubscriptions {
-		close(sub.Done)
-		close(sub.Notifications)
-	}
-	d.referSubscriptions = nil
-	d.mutex.Unlock()
-
-	// Close dialog
-	close(d.done)
-}
-
-// OnStateChange registers state change callback
-func (d *dialog) OnStateChange(callback func(State)) {
-	d.stateMutex.Lock()
-	d.stateCallbacks = append(d.stateCallbacks, callback)
-	d.stateMutex.Unlock()
-}
-
-// OnRequest registers callback for incoming requests
-func (d *dialog) OnRequest(callback func(*message.Request)) {
-	d.mutex.Lock()
-	d.requestCallbacks = append(d.requestCallbacks, callback)
-	d.mutex.Unlock()
-}
-
-// OnResponse registers callback for incoming responses
-func (d *dialog) OnResponse(callback func(*message.Response)) {
-	d.mutex.Lock()
-	d.responseCallbacks = append(d.responseCallbacks, callback)
-	d.mutex.Unlock()
-}
-
-// ProcessRequest handles incoming request
-func (d *dialog) ProcessRequest(req *message.Request) error {
-	// Validate sequence number
-	cseqHeader := req.GetHeader("CSeq")
-	cseq, method, err := message.ParseCSeq(cseqHeader)
-	if err != nil {
-		return err
-	}
-
-	// Update remote sequence
-	remoteSeq := atomic.LoadUint32(&d.remoteSeq)
-	if cseq < remoteSeq && method != "ACK" {
-		return ErrCSeqOutOfOrder
-	}
-	atomic.StoreUint32(&d.remoteSeq, cseq)
-
-	// Handle based on method
-	switch req.Method {
-	case "BYE":
-		d.handleBye(req)
-	case "REFER":
-		d.handleRefer(req)
-	case "NOTIFY":
-		d.handleNotify(req)
-	case "INFO":
-		// Pass through
-	case "UPDATE":
-		// Update target
-		d.updateTarget(req)
-	}
-
-	// Notify callbacks
-	d.notifyRequestCallbacks(req)
-
-	return nil
-}
-
-// ProcessResponse handles incoming response
-func (d *dialog) ProcessResponse(resp *message.Response) error {
-	// Extract method from CSeq
-	_, method, err := message.ParseCSeq(resp.GetHeader("CSeq"))
-	if err != nil {
-		return err
-	}
-
-	// Update dialog state based on response
-	if method == "INVITE" {
-		d.processInviteResponse(resp)
-	}
-
-	// Notify callbacks
-	d.notifyResponseCallbacks(resp)
-
-	return nil
-}
-
-// Helper methods
-
-func (d *dialog) setState(state State) bool {
-	oldState := State(atomic.LoadInt32(&d.state))
-	if oldState == state {
-		return false
-	}
-
-	atomic.StoreInt32(&d.state, int32(state))
-
-	// Notify callbacks
-	d.stateMutex.RLock()
-	callbacks := d.stateCallbacks
-	d.stateMutex.RUnlock()
-
-	for _, cb := range callbacks {
-		cb(state)
-	}
-
-	return true
-}
-
-func (d *dialog) updateID() {
-	d.id = DialogKey{
-		CallID:    d.callID,
-		LocalTag:  d.localTag,
-		RemoteTag: d.remoteTag,
-	}.String()
-}
-
-func (d *dialog) buildRequest(method string) (*message.Request, error) {
-	// Get next sequence number
-	cseq := atomic.AddUint32(&d.localSeq, 1)
-
-	// Determine request URI
-	requestURI := d.remoteTarget
+	// Если remote target не установлен, используем remote URI
 	if requestURI == nil {
 		requestURI = d.remoteURI
 	}
 
-	// Build request
-	builder := message.NewRequest(method, requestURI).
-		Via("UDP", "0.0.0.0", 5060, message.GenerateBranch()). // Will be updated by transport
-		From(d.localURI, d.localTag).
-		To(d.remoteURI, d.remoteTag).
-		CallID(d.callID).
-		CSeq(cseq, method)
-
-	// Add Contact if required
-	if method == "INVITE" || method == "REGISTER" || method == "SUBSCRIBE" || method == "REFER" {
-		if d.localTarget != nil {
-			builder = builder.Contact(d.localTarget)
-		} else {
-			builder = builder.Contact(d.localURI)
+	// Проверяем, что есть необходимые URI
+	if requestURI == nil {
+		return nil, &DialogError{
+			Code:    500,
+			Message: "no valid request URI available",
 		}
 	}
 
-	req, err := builder.Build()
+	// Создаем запрос
+	req := types.NewRequest(method, requestURI)
 
-	if err != nil {
-		return nil, err
-	}
-
-	// Add route headers
-	for _, route := range d.routeSet {
-		req.Headers.Add("Route", fmt.Sprintf("<%s>", route.String()))
-	}
-
-	// Add Contact
-	if d.localTarget != nil {
-		req.SetHeader("Contact", fmt.Sprintf("<%s>", d.localTarget.String()))
-	}
-
-	return req, nil
-}
-
-func (d *dialog) updateRequest(req *message.Request) error {
-	// Update dialog-specific headers
-	req.SetHeader("From", fmt.Sprintf("<%s>;tag=%s", d.localURI.String(), d.localTag))
-	req.SetHeader("To", fmt.Sprintf("<%s>;tag=%s", d.remoteURI.String(), d.remoteTag))
-	req.SetHeader("Call-ID", d.callID)
-
-	return nil
-}
-
-func (d *dialog) updateResponse(resp *message.Response) error {
-	// Add To tag if not present
-	toHeader := resp.GetHeader("To")
-	if toHeader != "" && !containsTag(toHeader) {
-		resp.SetHeader("To", toHeader+";tag="+d.localTag)
-	}
-
-	return nil
-}
-
-func (d *dialog) updateTarget(req *message.Request) {
-	if contact := req.GetHeader("Contact"); contact != "" {
-		if uri, err := message.ExtractURI(contact); err == nil {
-			d.mutex.Lock()
-			d.remoteTarget = uri
-			d.mutex.Unlock()
-		}
-	}
-}
-
-func (d *dialog) processInviteResponse(resp *message.Response) {
-	statusCode := resp.StatusCode
-
-	switch d.State() {
-	case StateInit:
-		if statusCode >= 100 && statusCode < 200 {
-			// Provisional response
-			d.setState(StateEarly)
-
-			// Update remote tag if present
-			d.updateRemoteTag(resp)
-
-			// Update route set from Record-Route
-			d.updateRouteSet(resp)
-
-		} else if statusCode >= 200 && statusCode < 300 {
-			// Success response
-			d.setState(StateConfirmed)
-
-			// Update remote tag
-			d.updateRemoteTag(resp)
-
-			// Update route set
-			d.updateRouteSet(resp)
-
-			// Update target from Contact
-			d.updateTargetFromResponse(resp)
-
-		} else if statusCode >= 300 {
-			// Failure
-			d.setState(StateTerminated)
-		}
-
-	case StateEarly:
-		if statusCode >= 200 && statusCode < 300 {
-			d.setState(StateConfirmed)
-
-			// Update remote tag in case it wasn't in provisional
-			d.updateRemoteTag(resp)
-
-			d.updateTargetFromResponse(resp)
-		} else if statusCode >= 300 {
-			d.setState(StateTerminated)
-		}
-	}
-}
-
-func (d *dialog) updateRemoteTag(resp *message.Response) {
-	var headerName string
-	if d.role == RoleUAC {
-		headerName = "To"
+	// Устанавливаем обязательные заголовки
+	// From - всегда local URI с local tag
+	if d.localURI != nil {
+		fromAddr := types.NewAddress("", d.localURI)
+		fromAddr.SetParameter("tag", d.id.LocalTag)
+		req.SetHeader(types.HeaderFrom, fromAddr.String())
 	} else {
-		headerName = "From"
-	}
-
-	if header := resp.GetHeader(headerName); header != "" {
-		if tag := message.ExtractTag(header); tag != "" {
-			d.mutex.Lock()
-			if d.remoteTag == "" {
-				d.remoteTag = tag
-				d.updateID()
-			}
-			d.mutex.Unlock()
-		}
-	}
-}
-
-func (d *dialog) updateRouteSet(resp *message.Response) {
-	// Only update route set once (on first response)
-	d.mutex.Lock()
-	if len(d.routeSet) > 0 {
-		d.mutex.Unlock()
-		return
-	}
-	d.mutex.Unlock()
-
-	// Extract Record-Route headers (in reverse order for UAC)
-	recordRoutes := resp.GetHeaders("Record-Route")
-	if len(recordRoutes) == 0 {
-		return
-	}
-
-	routes := make([]*message.URI, 0, len(recordRoutes))
-	for _, rr := range recordRoutes {
-		if uri, err := message.ExtractURI(rr); err == nil {
-			routes = append(routes, uri)
+		return nil, &DialogError{
+			Code:    500,
+			Message: "local URI not set",
 		}
 	}
 
-	// Reverse for UAC
-	if d.role == RoleUAC {
-		for i, j := 0, len(routes)-1; i < j; i, j = i+1, j-1 {
-			routes[i], routes[j] = routes[j], routes[i]
+	// To - всегда remote URI с remote tag
+	if d.remoteURI != nil {
+		toAddr := types.NewAddress("", d.remoteURI)
+		toAddr.SetParameter("tag", d.id.RemoteTag)
+		req.SetHeader(types.HeaderTo, toAddr.String())
+	} else {
+		return nil, &DialogError{
+			Code:    500,
+			Message: "remote URI not set",
 		}
 	}
 
-	d.mutex.Lock()
-	d.routeSet = routes
-	d.mutex.Unlock()
-}
+	// Call-ID
+	req.SetHeader(types.HeaderCallID, d.id.CallID)
 
-func (d *dialog) updateTargetFromResponse(resp *message.Response) {
-	if contact := resp.GetHeader("Contact"); contact != "" {
-		if uri, err := message.ExtractURI(contact); err == nil {
-			d.mutex.Lock()
-			d.remoteTarget = uri
-			d.mutex.Unlock()
+	// CSeq
+	cseqValue := fmt.Sprintf("%d %s", cseq, method)
+	req.SetHeader(types.HeaderCSeq, cseqValue)
+
+	// Contact - local target
+	if d.localTarget != nil {
+		contactAddr := types.NewAddress("", d.localTarget)
+		req.SetHeader(types.HeaderContact, contactAddr.String())
+	}
+
+	// Route заголовки
+	for _, route := range routes {
+		routeAddr := types.NewAddress("", route)
+		req.AddHeader(types.HeaderRoute, routeAddr.String())
+	}
+
+	// Max-Forwards
+	req.SetHeader(types.HeaderMaxForwards, "70")
+
+	// Тело сообщения
+	if body != nil && len(body) > 0 {
+		req.SetBody(body)
+		if contentType != "" {
+			req.SetHeader(types.HeaderContentType, contentType)
 		}
-	}
-}
-
-func (d *dialog) handleBye(req *message.Request) {
-	// Send 200 OK
-	resp := message.NewResponse(req, 200, "OK").Build()
-	d.SendResponse(resp)
-
-	// Terminate dialog
-	d.setState(StateTerminated)
-}
-
-func (d *dialog) handleRefer(req *message.Request) {
-	// Extract Refer-To
-	referTo := req.GetHeader("Refer-To")
-	if referTo == "" {
-		resp := message.NewResponse(req, 400, "Missing Refer-To").Build()
-		d.SendResponse(resp)
-		return
+		req.SetHeader(types.HeaderContentLength, fmt.Sprintf("%d", len(body)))
+	} else {
+		req.SetHeader(types.HeaderContentLength, "0")
 	}
 
-	// Parse Refer-To URI
-	referToURI, err := message.ExtractURI(referTo)
+	// Создаем транзакцию
+	tx, err := d.txManager.CreateClientTransaction(req)
 	if err != nil {
-		resp := message.NewResponse(req, 400, "Invalid Refer-To").Build()
-		d.SendResponse(resp)
-		return
+		return nil, fmt.Errorf("failed to create transaction: %w", err)
 	}
 
-	// Accept REFER
-	resp := message.NewResponse(req, 202, "Accepted").Build()
-	d.SendResponse(resp)
-
-	// TODO: Create subscription and handle transfer
-	_ = referToURI
+	return tx, nil
 }
 
-func (d *dialog) handleNotify(req *message.Request) {
-	// Find subscription
-	event := req.GetHeader("Event")
-	if event != "refer" {
-		// Not a REFER notification
-		resp := message.NewResponse(req, 200, "OK").Build()
-		d.SendResponse(resp)
-		return
+// hasLRParam проверяет наличие lr параметра в URI
+func hasLRParam(uri types.URI) bool {
+	if uri == nil {
+		return false
+	}
+	params := uri.Parameters()
+	_, hasLR := params["lr"]
+	return hasLR
+}
+
+// Terminate завершает диалог
+func (d *sipDialog) Terminate() error {
+	d.stateMu.Lock()
+	oldState := d.state
+	if oldState == DialogStateTerminated {
+		d.stateMu.Unlock()
+		return nil
+	}
+	d.state = DialogStateTerminated
+	d.stateMu.Unlock()
+
+	// Отменяем контекст
+	d.cancel()
+
+	// Уведомляем обработчики
+	d.notifyStateChange(oldState, DialogStateTerminated)
+
+	return nil
+}
+
+// OnStateChange регистрирует обработчик изменения состояния
+func (d *sipDialog) OnStateChange(handler DialogStateHandler) {
+	d.handlersMu.Lock()
+	defer d.handlersMu.Unlock()
+	d.stateHandlers = append(d.stateHandlers, handler)
+}
+
+// OnRequest регистрирует обработчик входящих запросов
+func (d *sipDialog) OnRequest(handler DialogRequestHandler) {
+	d.handlersMu.Lock()
+	defer d.handlersMu.Unlock()
+	d.requestHandlers = append(d.requestHandlers, handler)
+}
+
+// OnResponse регистрирует обработчик ответов
+func (d *sipDialog) OnResponse(handler DialogResponseHandler) {
+	d.handlersMu.Lock()
+	defer d.handlersMu.Unlock()
+	d.responseHandlers = append(d.responseHandlers, handler)
+}
+
+// Context возвращает контекст диалога
+func (d *sipDialog) Context() context.Context {
+	return d.ctx
+}
+
+// SetValue сохраняет значение в контексте диалога
+func (d *sipDialog) SetValue(key string, value interface{}) {
+	d.values.Store(key, value)
+}
+
+// GetValue получает значение из контекста диалога
+func (d *sipDialog) GetValue(key string) interface{} {
+	value, _ := d.values.Load(key)
+	return value
+}
+
+// setState устанавливает новое состояние диалога
+func (d *sipDialog) setState(newState DialogState) {
+	d.stateMu.Lock()
+	oldState := d.state
+	if oldState != newState {
+		d.state = newState
+		d.stateMu.Unlock()
+		d.notifyStateChange(oldState, newState)
+	} else {
+		d.stateMu.Unlock()
+	}
+}
+
+// notifyStateChange уведомляет обработчики об изменении состояния
+func (d *sipDialog) notifyStateChange(oldState, newState DialogState) {
+	d.handlersMu.RLock()
+	handlers := make([]DialogStateHandler, len(d.stateHandlers))
+	copy(handlers, d.stateHandlers)
+	d.handlersMu.RUnlock()
+
+	for _, handler := range handlers {
+		handler(d, oldState, newState)
+	}
+}
+
+// notifyRequest уведомляет обработчики о входящем запросе
+func (d *sipDialog) notifyRequest(req types.Message, tx transaction.Transaction) {
+	d.handlersMu.RLock()
+	handlers := make([]DialogRequestHandler, len(d.requestHandlers))
+	copy(handlers, d.requestHandlers)
+	d.handlersMu.RUnlock()
+
+	for _, handler := range handlers {
+		handler(d, req, tx)
+	}
+}
+
+// notifyResponse уведомляет обработчики об ответе
+func (d *sipDialog) notifyResponse(resp types.Message, tx transaction.Transaction) {
+	d.handlersMu.RLock()
+	handlers := make([]DialogResponseHandler, len(d.responseHandlers))
+	copy(handlers, d.responseHandlers)
+	d.handlersMu.RUnlock()
+
+	for _, handler := range handlers {
+		handler(d, resp, tx)
+	}
+}
+
+// updateFromRequest обновляет диалог из входящего запроса
+func (d *sipDialog) updateFromRequest(req types.Message) error {
+	// Обновляем remote CSeq
+	cseqHeader := req.GetHeader("CSeq")
+	if cseqHeader != "" {
+		// TODO: Парсить CSeq и обновить remoteCSeq
 	}
 
-	// Extract subscription state
-	subState := req.GetHeader("Subscription-State")
-
-	// Parse body for SIP frag
-	var statusLine string
-	if req.GetHeader("Content-Type") == "message/sipfrag" {
-		statusLine = string(req.Body())
+	// Обновляем remote target из Contact (если есть)
+	contactHeader := req.GetHeader("Contact")
+	if contactHeader != "" && req.Method() != "REGISTER" {
+		// TODO: Парсить Contact и обновить remoteTarget
 	}
 
-	// Send to appropriate subscription
-	d.mutex.RLock()
-	for _, sub := range d.referSubscriptions {
-		notification := &ReferNotification{
-			StatusLine: statusLine,
-			State:      subState,
-			Request:    req,
+	return nil
+}
+
+// updateFromResponse обновляет диалог из ответа
+func (d *sipDialog) updateFromResponse(resp types.Message) error {
+	// Обновляем remote target из Contact в 2xx ответах
+	if resp.StatusCode() >= 200 && resp.StatusCode() < 300 {
+		contactHeader := resp.GetHeader("Contact")
+		if contactHeader != "" {
+			// TODO: Парсить Contact и обновить remoteTarget
 		}
+	}
 
-		select {
-		case sub.Notifications <- notification:
-		default:
-			// Channel full
+	// Обновляем route set из Record-Route в 2xx на INVITE
+	if resp.StatusCode() >= 200 && resp.StatusCode() < 300 {
+		// Проверяем CSeq чтобы убедиться, что это ответ на INVITE
+		cseqHeader := resp.GetHeader(types.HeaderCSeq)
+		if cseqHeader != "" {
+			cseq, err := types.ParseCSeq(cseqHeader)
+			if err == nil && cseq.Method == "INVITE" {
+				// Обрабатываем Record-Route заголовки
+				if err := d.ProcessRecordRoute(resp); err != nil {
+					return err
+				}
+			}
 		}
+	}
 
-		if subState == "terminated" {
-			sub.State = "terminated"
-			close(sub.Done)
+	return nil
+}
+
+// ProcessRecordRoute обрабатывает Record-Route заголовки из ответа
+// и строит route set для диалога согласно RFC 3261
+func (d *sipDialog) ProcessRecordRoute(resp types.Message) error {
+	// Route set устанавливается только один раз при первом 2xx ответе на INVITE
+	d.routeMu.Lock()
+	defer d.routeMu.Unlock()
+	
+	// Если route set уже установлен, не обновляем его
+	if len(d.routeSet) > 0 {
+		return nil
+	}
+	
+	// Получаем все Record-Route заголовки
+	recordRouteHeaders := resp.GetHeaders(types.HeaderRecordRoute)
+	if len(recordRouteHeaders) == 0 {
+		// Нет Record-Route заголовков, route set остается пустым
+		return nil
+	}
+	
+	// Парсим все Record-Route заголовки
+	var allRoutes []*types.Route
+	for _, rrHeader := range recordRouteHeaders {
+		routes, err := types.ParseRouteHeader(rrHeader)
+		if err != nil {
+			return fmt.Errorf("failed to parse Record-Route header: %w", err)
+		}
+		allRoutes = append(allRoutes, routes...)
+	}
+	
+	// Порядок route set зависит от роли (UAC/UAS)
+	isUAC := d.direction == DialogDirectionUAC
+	
+	if isUAC {
+		// UAC: сохраняем маршруты в прямом порядке
+		d.routeSet = make([]types.URI, 0, len(allRoutes))
+		for _, route := range allRoutes {
+			if route.Address != nil && route.Address.URI() != nil {
+				d.routeSet = append(d.routeSet, route.Address.URI())
+			}
+		}
+	} else {
+		// UAS: сохраняем маршруты в обратном порядке
+		d.routeSet = make([]types.URI, 0, len(allRoutes))
+		for i := len(allRoutes) - 1; i >= 0; i-- {
+			route := allRoutes[i]
+			if route.Address != nil && route.Address.URI() != nil {
+				d.routeSet = append(d.routeSet, route.Address.URI())
+			}
 		}
 	}
-	d.mutex.RUnlock()
-
-	// Send 200 OK
-	resp := message.NewResponse(req, 200, "OK").Build()
-	d.SendResponse(resp)
+	
+	return nil
 }
 
-func (d *dialog) notifyRequestCallbacks(req *message.Request) {
-	d.mutex.RLock()
-	callbacks := d.requestCallbacks
-	d.mutex.RUnlock()
-
-	for _, cb := range callbacks {
-		cb(req)
+// processRequest обрабатывает входящий запрос в контексте диалога
+func (d *sipDialog) processRequest(req types.Message, tx transaction.Transaction) error {
+	// Проверяем состояние
+	state := d.State()
+	if state == DialogStateTerminated {
+		return ErrDialogTerminated
 	}
-}
 
-func (d *dialog) notifyResponseCallbacks(resp *message.Response) {
-	d.mutex.RLock()
-	callbacks := d.responseCallbacks
-	d.mutex.RUnlock()
+	// Проверяем CSeq
+	// TODO: Валидировать, что CSeq больше предыдущего
 
-	for _, cb := range callbacks {
-		cb(resp)
+	// Обновляем информацию из запроса
+	if err := d.updateFromRequest(req); err != nil {
+		return err
 	}
+
+	// Специальная обработка методов
+	switch req.Method() {
+	case "BYE":
+		// BYE завершает диалог
+		d.setState(DialogStateTerminated)
+	case "INVITE":
+		// re-INVITE в подтвержденном диалоге
+		if state != DialogStateConfirmed {
+			return &DialogError{
+				Code:    491,
+				Message: "Request Pending",
+			}
+		}
+		// TODO: Обработка re-INVITE
+	}
+
+	// Уведомляем обработчики
+	d.notifyRequest(req, tx)
+
+	return nil
 }
 
-func containsTag(header string) bool {
-	return message.ExtractTag(header) != ""
+// processResponse обрабатывает ответ в контексте диалога
+func (d *sipDialog) processResponse(resp types.Message, tx transaction.Transaction) error {
+	// Обновляем информацию из ответа
+	if err := d.updateFromResponse(resp); err != nil {
+		return err
+	}
+
+	// Обработка изменения состояния диалога
+	if tx.Request().Method() == "INVITE" {
+		statusCode := resp.StatusCode()
+
+		if statusCode >= 100 && statusCode < 200 {
+			// Provisional response с tag создает ранний диалог
+			if d.State() == DialogStateNone && d.RemoteTag() != "" {
+				d.setState(DialogStateEarly)
+			}
+		} else if statusCode >= 200 && statusCode < 300 {
+			// 2xx подтверждает диалог
+			d.setState(DialogStateConfirmed)
+		} else if statusCode >= 300 {
+			// 3xx-6xx завершает диалог
+			d.setState(DialogStateTerminated)
+		}
+	}
+
+	// Уведомляем обработчики
+	d.notifyResponse(resp, tx)
+
+	return nil
 }
