@@ -12,7 +12,7 @@ import (
 )
 
 func TestSecurityValidator_ValidateHeader(t *testing.T) {
-	sv := NewSecurityValidator(DefaultSecurityConfig())
+	sv := NewSecurityValidator(DefaultSecurityConfig(), &NoOpLogger{})
 
 	tests := []struct {
 		name    string
@@ -79,7 +79,7 @@ func TestSecurityValidator_ValidateHeader(t *testing.T) {
 }
 
 func TestSecurityValidator_ValidateBody(t *testing.T) {
-	sv := NewSecurityValidator(DefaultSecurityConfig())
+	sv := NewSecurityValidator(DefaultSecurityConfig(), &NoOpLogger{})
 
 	tests := []struct {
 		name        string
@@ -133,7 +133,7 @@ func TestSecurityValidator_ValidateBody(t *testing.T) {
 }
 
 func TestSecurityValidator_ValidateStatusCode(t *testing.T) {
-	sv := NewSecurityValidator(DefaultSecurityConfig())
+	sv := NewSecurityValidator(DefaultSecurityConfig(), &NoOpLogger{})
 
 	tests := []struct {
 		name       string
@@ -161,7 +161,7 @@ func TestSecurityValidator_ValidateStatusCode(t *testing.T) {
 }
 
 func TestSecurityValidator_ValidateRequestURI(t *testing.T) {
-	sv := NewSecurityValidator(DefaultSecurityConfig())
+	sv := NewSecurityValidator(DefaultSecurityConfig(), &NoOpLogger{})
 
 	tests := []struct {
 		name    string
@@ -218,7 +218,7 @@ func TestSecurityValidator_ValidateRequestURI(t *testing.T) {
 func TestSecurityValidator_RateLimit(t *testing.T) {
 	config := DefaultSecurityConfig()
 	config.MaxDialogsPerIP = 3
-	sv := NewSecurityValidator(config)
+	sv := NewSecurityValidator(config, &NoOpLogger{})
 
 	// Тестируем базовый rate limiting
 	key := "test_key"
@@ -467,7 +467,7 @@ func TestSimpleRateLimiter(t *testing.T) {
 	limiter := NewSimpleRateLimiter()
 	
 	// Запускаем таймер очистки с коротким интервалом для теста
-	limiter.StartResetTimer(100 * time.Millisecond)
+	limiter.StartResetTimer(100 * time.Millisecond, &NoOpLogger{})
 	
 	// Тестируем dialog_create лимит (100)
 	key := "dialog_create"

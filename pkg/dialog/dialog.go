@@ -87,7 +87,7 @@ func NewDialog(uasuac *UASUAC, isServer bool, logger Logger) *Dialog {
 		createdAt:         time.Now(),
 		lastActivity:      time.Now(),
 		headerProcessor:   NewHeaderProcessor(),
-		securityValidator: NewSecurityValidator(DefaultSecurityConfig()),
+		securityValidator: NewSecurityValidator(DefaultSecurityConfig(), logger),
 		logger:            logger,
 	}
 

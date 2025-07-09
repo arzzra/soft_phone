@@ -227,15 +227,15 @@ func (r *SimpleRateLimiter) Reset(key string) {
 }
 
 // StartResetTimer запускает таймер для периодического сброса счетчиков
-func (r *SimpleRateLimiter) StartResetTimer(interval time.Duration) {
+func (r *SimpleRateLimiter) StartResetTimer(interval time.Duration, logger Logger) {
 	ticker := time.NewTicker(interval)
-	go func() {
+	SafeGo(logger, "rate-limiter-reset-timer", func() {
 		for range ticker.C {
 			r.mu.Lock()
 			r.requests = make(map[string]int)
 			r.mu.Unlock()
 		}
-	}()
+	})
 }
 
 // SecurityValidator проверяет безопасность входных данных
@@ -245,13 +245,13 @@ type SecurityValidator struct {
 }
 
 // NewSecurityValidator создает новый валидатор безопасности
-func NewSecurityValidator(config *SecurityConfig) *SecurityValidator {
+func NewSecurityValidator(config *SecurityConfig, logger Logger) *SecurityValidator {
 	if config == nil {
 		config = DefaultSecurityConfig()
 	}
 	
 	limiter := NewSimpleRateLimiter()
-	limiter.StartResetTimer(config.RateLimitCleanup)
+	limiter.StartResetTimer(config.RateLimitCleanup, logger)
 	
 	return &SecurityValidator{
 		config:      config,

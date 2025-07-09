@@ -37,7 +37,7 @@ func NewDialogManager(logger Logger) *DialogManager {
 	return &DialogManager{
 		dialogs:           make(map[string]IDialog),
 		callIDIndex:       make(map[string]string),
-		securityValidator: NewSecurityValidator(DefaultSecurityConfig()),
+		securityValidator: NewSecurityValidator(DefaultSecurityConfig(), logger),
 		logger:            logger,
 	}
 }

@@ -115,7 +115,7 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 	uasuac.rateLimiter = NewSimpleRateLimiter()
 	// Запускаем периодический сброс счетчиков каждую минуту
 	if limiter, ok := uasuac.rateLimiter.(*SimpleRateLimiter); ok {
-		limiter.StartResetTimer(time.Minute)
+		limiter.StartResetTimer(time.Minute, uasuac.logger)
 	}
 
 	// Регистрируем обработчики для сервера
