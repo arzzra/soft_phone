@@ -2,11 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Important Context
-- IMPORTANT: Отвечай на русском языке
-- Be brutally honest, don't be a yes man. If I am wrong, point it out bluntly.
-- I need honest feedback on my code.
-- используй mcp godoc-mcp для просмотра api пакетов
 
 ## SIP Protocol Implementation
 - Working directory: `pkg/sip/` - вся реализация SIP протокола здесь
