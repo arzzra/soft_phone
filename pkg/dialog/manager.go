@@ -8,6 +8,13 @@ import (
 	"github.com/emiago/sipgo/sip"
 )
 
+// tagKey представляет составной ключ для поиска диалога по тегам
+type tagKey struct {
+	callID    string
+	localTag  string
+	remoteTag string
+}
+
 // DialogManager управляет коллекцией диалогов
 type DialogManager struct {
 	// Хранилище диалогов по ID
@@ -15,6 +22,10 @@ type DialogManager struct {
 
 	// Индекс по Call-ID для быстрого поиска
 	callIDIndex map[string]string // callID -> dialogID
+
+	// Индекс по тегам для O(1) поиска
+	tagIndex   map[tagKey]string // tagKey -> dialogID
+	tagIndexMu sync.RWMutex      // отдельный мьютекс для оптимизации производительности
 
 	// UASUAC для создания диалогов
 	uasuac *UASUAC
@@ -37,6 +48,7 @@ func NewDialogManager(logger Logger) *DialogManager {
 	return &DialogManager{
 		dialogs:           make(map[string]IDialog),
 		callIDIndex:       make(map[string]string),
+		tagIndex:          make(map[tagKey]string),
 		securityValidator: NewSecurityValidator(DefaultSecurityConfig(), logger),
 		logger:            logger,
 	}
@@ -180,10 +192,24 @@ func (dm *DialogManager) RegisterDialog(dialog IDialog) error {
 	// Сохраняем диалог
 	dm.dialogs[dialogID] = dialog
 	
-	// Обновляем индекс
+	// Обновляем индекс Call-ID
 	callID := dialog.CallID()
 	callIDValue := callID.Value()
 	dm.callIDIndex[callIDValue] = dialogID
+
+	// Обновляем индекс тегов если они доступны
+	localTag := dialog.LocalTag()
+	remoteTag := dialog.RemoteTag()
+	if localTag != "" && remoteTag != "" {
+		dm.tagIndexMu.Lock()
+		key := tagKey{
+			callID:    callIDValue,
+			localTag:  localTag,
+			remoteTag: remoteTag,
+		}
+		dm.tagIndex[key] = dialogID
+		dm.tagIndexMu.Unlock()
+	}
 
 	return nil
 }
@@ -211,7 +237,32 @@ func (dm *DialogManager) UpdateDialogID(oldID, newID string, dialog IDialog) err
 	
 	// Обновляем индекс Call-ID
 	callID := dialog.CallID()
-	dm.callIDIndex[callID.Value()] = newID
+	callIDValue := callID.Value()
+	dm.callIDIndex[callIDValue] = newID
+	
+	// Обновляем индекс тегов
+	localTag := dialog.LocalTag()
+	remoteTag := dialog.RemoteTag()
+	if localTag != "" && remoteTag != "" {
+		dm.tagIndexMu.Lock()
+		
+		// Удаляем старую запись в индексе тегов если она есть
+		// Пробуем оба варианта порядка тегов
+		oldKey1 := tagKey{callID: callIDValue, localTag: localTag, remoteTag: remoteTag}
+		oldKey2 := tagKey{callID: callIDValue, localTag: remoteTag, remoteTag: localTag}
+		delete(dm.tagIndex, oldKey1)
+		delete(dm.tagIndex, oldKey2)
+		
+		// Добавляем новую запись
+		newKey := tagKey{
+			callID:    callIDValue,
+			localTag:  localTag,
+			remoteTag: remoteTag,
+		}
+		dm.tagIndex[newKey] = newID
+		
+		dm.tagIndexMu.Unlock()
+	}
 	
 	return nil
 }
@@ -279,6 +330,55 @@ func (dm *DialogManager) GetDialogByRequest(req *sip.Request) (IDialog, error) {
 	return dialog, nil
 }
 
+// GetDialogByTags возвращает диалог по Call-ID и тегам с O(1) производительностью
+func (dm *DialogManager) GetDialogByTags(callID, localTag, remoteTag string) (IDialog, error) {
+	// Валидация входных параметров
+	if callID == "" {
+		return nil, fmt.Errorf("callID не может быть пустым")
+	}
+	if localTag == "" || remoteTag == "" {
+		return nil, fmt.Errorf("теги не могут быть пустыми")
+	}
+
+	// Используем отдельный мьютекс для лучшей производительности
+	dm.tagIndexMu.RLock()
+	defer dm.tagIndexMu.RUnlock()
+
+	// Создаем ключ для поиска
+	key := tagKey{
+		callID:    callID,
+		localTag:  localTag,
+		remoteTag: remoteTag,
+	}
+
+	// O(1) поиск в индексе
+	dialogID, exists := dm.tagIndex[key]
+	if !exists {
+		// Пробуем обратный порядок тегов (для UAC/UAS)
+		reverseKey := tagKey{
+			callID:    callID,
+			localTag:  remoteTag,
+			remoteTag: localTag,
+		}
+		dialogID, exists = dm.tagIndex[reverseKey]
+		if !exists {
+			return nil, fmt.Errorf("диалог не найден для callID=%s, localTag=%s, remoteTag=%s", 
+				callID, localTag, remoteTag)
+		}
+	}
+
+	// Получаем диалог по ID
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+	
+	dialog, exists := dm.dialogs[dialogID]
+	if !exists {
+		return nil, fmt.Errorf("диалог с ID %s не найден в хранилище", dialogID)
+	}
+
+	return dialog, nil
+}
+
 // RemoveDialog удаляет диалог из менеджера
 func (dm *DialogManager) RemoveDialog(dialogID string) error {
 	dm.mu.Lock()
@@ -289,10 +389,25 @@ func (dm *DialogManager) RemoveDialog(dialogID string) error {
 		return fmt.Errorf("диалог с ID %s не найден", dialogID)
 	}
 
-	// Удаляем из индекса
+	// Удаляем из индекса Call-ID
 	callID := dialog.CallID()
 	callIDValue := callID.Value()
 	delete(dm.callIDIndex, callIDValue)
+
+	// Удаляем из индекса тегов
+	localTag := dialog.LocalTag()
+	remoteTag := dialog.RemoteTag()
+	if localTag != "" && remoteTag != "" {
+		dm.tagIndexMu.Lock()
+		
+		// Удаляем оба возможных варианта ключа
+		key1 := tagKey{callID: callIDValue, localTag: localTag, remoteTag: remoteTag}
+		key2 := tagKey{callID: callIDValue, localTag: remoteTag, remoteTag: localTag}
+		delete(dm.tagIndex, key1)
+		delete(dm.tagIndex, key2)
+		
+		dm.tagIndexMu.Unlock()
+	}
 
 	// Удаляем диалог
 	delete(dm.dialogs, dialogID)
@@ -341,6 +456,11 @@ func (dm *DialogManager) Close() {
 	// Очищаем хранилища
 	dm.dialogs = make(map[string]IDialog)
 	dm.callIDIndex = make(map[string]string)
+	
+	// Очищаем индекс тегов
+	dm.tagIndexMu.Lock()
+	dm.tagIndex = make(map[tagKey]string)
+	dm.tagIndexMu.Unlock()
 }
 
 // CleanupTerminated удаляет завершенные диалоги
@@ -348,15 +468,37 @@ func (dm *DialogManager) CleanupTerminated() int {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
+	// Собираем индексы тегов для удаления
+	var tagsToRemove []tagKey
+	
 	removed := 0
 	for id, dialog := range dm.dialogs {
 		if dialog.State() == StateTerminated {
 			callID := dialog.CallID()
-	callIDValue := callID.Value()
+			callIDValue := callID.Value()
 			delete(dm.callIDIndex, callIDValue)
 			delete(dm.dialogs, id)
+			
+			// Собираем ключи для удаления из индекса тегов
+			localTag := dialog.LocalTag()
+			remoteTag := dialog.RemoteTag()
+			if localTag != "" && remoteTag != "" {
+				tagsToRemove = append(tagsToRemove, 
+					tagKey{callID: callIDValue, localTag: localTag, remoteTag: remoteTag},
+					tagKey{callID: callIDValue, localTag: remoteTag, remoteTag: localTag})
+			}
+			
 			removed++
 		}
+	}
+	
+	// Удаляем из индекса тегов
+	if len(tagsToRemove) > 0 {
+		dm.tagIndexMu.Lock()
+		for _, key := range tagsToRemove {
+			delete(dm.tagIndex, key)
+		}
+		dm.tagIndexMu.Unlock()
 	}
 
 	return removed
