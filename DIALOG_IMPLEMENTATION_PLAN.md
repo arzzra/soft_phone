@@ -1,687 +1,1099 @@
-# Dialog Package Implementation Plan
+# План реализации P1 исправлений для пакета dialog
 
-## Overview
-This document outlines the development plan for implementing the `pkg/dialog` package using the `emiago/sipgo` library. The implementation will create a custom dialog management system without using sipgo's built-in DialogClientCache and DialogServerCache.
+## Приоритетность задач
 
-## Interface Design
+### 1. Критические исправления безопасности (Приоритет: ВЫСШИЙ)
 
-### Core Interfaces
+#### 1.1 Валидация входных данных и защита от инъекций
 
-#### 1. Dialog Interface (interfaces.go)
+**Файлы для изменения:**
+- `pkg/dialog/security.go` (создать новый)
+- `pkg/dialog/dialog.go` 
+- `pkg/dialog/manager.go`
+- `pkg/dialog/refer.go`
+
+**Конкретные задачи:**
+
+1. **Создать модуль безопасности** (`security.go`):
 ```go
 package dialog
 
 import (
-	"context"
-	"github.com/emiago/sipgo/sip"
-	"time"
+    "fmt"
+    "net"
+    "strings"
+    "sync"
+    "time"
 )
 
-// DialogState represents the state of a SIP dialog
-type DialogState string
-
+// Константы безопасности
 const (
-	DialogStateInit       DialogState = "init"       // Dialog created but not yet established
-	DialogStateEarly      DialogState = "early"      // 1xx provisional response received
-	DialogStateConfirmed  DialogState = "confirmed"  // 2xx response + ACK
-	DialogStateTerminated DialogState = "terminated" // Dialog ended (BYE sent/received)
+    MaxHeaderLength = 8192  // Максимальная длина заголовка
+    MaxBodyLength   = 65536 // Максимальная длина тела
+    MaxDialogsPerIP = 100   // Максимум диалогов с одного IP
+    MaxURILength    = 2048  // Максимальная длина URI
 )
 
-// IDialog represents a SIP dialog between two UA
-// Implementation must be thread-safe
-type IDialog interface {
-	// Core identification
-	ID() string
-	State() DialogState
-	CallID() sip.CallIDHeader
-	LocalTag() string
-	RemoteTag() string
-	
-	// Addressing
-	LocalURI() sip.Uri
-	RemoteURI() sip.Uri
-	LocalTarget() sip.Uri    // Contact URI
-	RemoteTarget() sip.Uri   // Contact URI
-	RouteSet() []sip.RouteHeader
-	
-	// Sequencing
-	LocalSeq() uint32
-	RemoteSeq() uint32
-	
-	// Role identification
-	IsServer() bool // UAS role
-	IsClient() bool // UAC role
-	
-	// Core operations
-	Answer(body Body, headers map[string]string) error
-	Reject(statusCode int, body Body, headers map[string]string) error
-	Terminate() error
-	
-	// Transfer operations
-	Refer(ctx context.Context, target sip.Uri, opts *ReferOptions) (ITransaction, error)
-	ReferReplace(ctx context.Context, replaceDialog IDialog, opts *ReferOptions) (ITransaction, error)
-	
-	// Context and lifecycle
-	Context() context.Context
-	SetContext(ctx context.Context)
-	CreatedAt() time.Time
-	LastActivity() time.Time
-	
-	// Event handling
-	OnStateChange(handler StateChangeHandler)
-	OnBody(handler OnBodyHandler)
+// SecurityValidator проверяет безопасность входных данных
+type SecurityValidator struct {
+    ipCounter   map[string]*ipInfo
+    ipMutex     sync.RWMutex
+    cleanupTime time.Duration
 }
 
-// Event handlers
-type StateChangeHandler func(oldState, newState DialogState)
-type OnBodyHandler func(body Body)
+type ipInfo struct {
+    count      int
+    lastAccess time.Time
+}
 
-// Body represents message body content
-type Body struct {
-	Content     []byte
-	ContentType string
+func NewSecurityValidator() *SecurityValidator {
+    sv := &SecurityValidator{
+        ipCounter:   make(map[string]*ipInfo),
+        cleanupTime: 5 * time.Minute,
+    }
+    go sv.cleanupLoop()
+    return sv
+}
+
+// ValidateHeader проверяет заголовок на безопасность
+func (sv *SecurityValidator) ValidateHeader(name, value string) error {
+    if len(value) > MaxHeaderLength {
+        return fmt.Errorf("header %s too long: %d bytes", name, len(value))
+    }
+    
+    // Проверка на опасные символы
+    if strings.ContainsAny(value, "\r\n\x00") {
+        return fmt.Errorf("invalid characters in header %s", name)
+    }
+    
+    // Специальная проверка для URI заголовков
+    if name == "Refer-To" || name == "Contact" || name == "From" || name == "To" {
+        if err := sv.ValidateURI(value); err != nil {
+            return fmt.Errorf("invalid URI in %s: %w", name, err)
+        }
+    }
+    
+    return nil
+}
+
+// ValidateURI проверяет URI на безопасность
+func (sv *SecurityValidator) ValidateURI(uri string) error {
+    if len(uri) > MaxURILength {
+        return fmt.Errorf("URI too long: %d bytes", len(uri))
+    }
+    
+    // Проверка на SQL/Command injection паттерны
+    dangerousPatterns := []string{
+        "';", "--", "/*", "*/", "xp_", "sp_",
+        "&&", "||", "|", ";", "`", "$(",
+    }
+    
+    uriLower := strings.ToLower(uri)
+    for _, pattern := range dangerousPatterns {
+        if strings.Contains(uriLower, pattern) {
+            return fmt.Errorf("potentially dangerous pattern in URI: %s", pattern)
+        }
+    }
+    
+    return nil
+}
+
+// CheckRateLimit проверяет лимиты для IP
+func (sv *SecurityValidator) CheckRateLimit(remoteAddr string) error {
+    ip, _, err := net.SplitHostPort(remoteAddr)
+    if err != nil {
+        ip = remoteAddr // Если не удалось разделить, используем как есть
+    }
+    
+    sv.ipMutex.Lock()
+    defer sv.ipMutex.Unlock()
+    
+    info, exists := sv.ipCounter[ip]
+    if !exists {
+        sv.ipCounter[ip] = &ipInfo{
+            count:      1,
+            lastAccess: time.Now(),
+        }
+        return nil
+    }
+    
+    info.lastAccess = time.Now()
+    if info.count >= MaxDialogsPerIP {
+        return fmt.Errorf("rate limit exceeded for IP %s: %d dialogs", ip, info.count)
+    }
+    
+    info.count++
+    return nil
+}
+
+// ReleaseRateLimit уменьшает счетчик для IP
+func (sv *SecurityValidator) ReleaseRateLimit(remoteAddr string) {
+    ip, _, err := net.SplitHostPort(remoteAddr)
+    if err != nil {
+        ip = remoteAddr
+    }
+    
+    sv.ipMutex.Lock()
+    defer sv.ipMutex.Unlock()
+    
+    if info, exists := sv.ipCounter[ip]; exists && info.count > 0 {
+        info.count--
+        if info.count == 0 {
+            delete(sv.ipCounter, ip)
+        }
+    }
+}
+
+// cleanupLoop периодически очищает устаревшие записи
+func (sv *SecurityValidator) cleanupLoop() {
+    ticker := time.NewTicker(sv.cleanupTime)
+    defer ticker.Stop()
+    
+    for range ticker.C {
+        sv.ipMutex.Lock()
+        now := time.Now()
+        for ip, info := range sv.ipCounter {
+            if now.Sub(info.lastAccess) > sv.cleanupTime && info.count == 0 {
+                delete(sv.ipCounter, ip)
+            }
+        }
+        sv.ipMutex.Unlock()
+    }
+}
+
+// ValidateBody проверяет тело сообщения
+func (sv *SecurityValidator) ValidateBody(body []byte, contentType string) error {
+    if len(body) > MaxBodyLength {
+        return fmt.Errorf("body too large: %d bytes", len(body))
+    }
+    
+    // Дополнительные проверки в зависимости от content-type
+    if strings.Contains(contentType, "application/sdp") {
+        return sv.validateSDP(body)
+    }
+    
+    return nil
+}
+
+// validateSDP проверяет SDP на безопасность
+func (sv *SecurityValidator) validateSDP(body []byte) error {
+    // Базовая проверка структуры SDP
+    sdpStr := string(body)
+    if !strings.Contains(sdpStr, "v=0") {
+        return fmt.Errorf("invalid SDP: missing version")
+    }
+    
+    // Проверка на слишком большое количество медиа-линий
+    mediaCount := strings.Count(sdpStr, "\nm=")
+    if mediaCount > 10 {
+        return fmt.Errorf("too many media lines in SDP: %d", mediaCount)
+    }
+    
+    return nil
 }
 ```
 
-#### 2. Transaction Interface (transaction_interface.go)
+2. **Обновить dialog.go для использования валидации**:
+   - Добавить поле `validator *SecurityValidator` в структуру Dialog
+   - Добавить валидацию во все методы обработки запросов
+   - Пример для handleREFER:
+
 ```go
-package dialog
-
-import (
-	"context"
-	"github.com/emiago/sipgo/sip"
-)
-
-// ITransaction wraps sipgo transaction with dialog-specific operations
-type ITransaction interface {
-	// Core transaction info
-	ID() string
-	Request() *sip.Request
-	
-	// Response handling
-	Responses() <-chan *sip.Response
-	LastResponse() *sip.Response
-	
-	// Control operations
-	Cancel(ctx context.Context) error
-	Terminate()
-	
-	// Status
-	Done() <-chan struct{}
-	Err() error
-	
-	// Events
-	OnResponse(handler func(*sip.Response))
-	OnTerminate(handler func(error))
-}
-
-```
-
-#### 3. Manager Interface (manager_interface.go)
-```go
-package dialog
-
-import (
-	"context"
-	"github.com/emiago/sipgo/sip"
-)
-
-// DialogKey uniquely identifies a dialog
-type DialogKey struct {
-	CallID    string
-	LocalTag  string
-	RemoteTag string
-}
-
-// IDialogManager manages dialog lifecycle and storage
-type IDialogManager interface {
-	// Dialog creation
-	CreateDialogUAC(ctx context.Context, req *sip.Request) (IDialog, error)
-	CreateDialogUAS(ctx context.Context, req *sip.Request, tx sip.ServerTransaction) (IDialog, error)
-	
-	// Dialog lookup
-	GetDialog(id string) (IDialog, bool)
-	GetDialogByKey(key DialogKey) (IDialog, bool)
-	MatchDialog(msg sip.Message) (IDialog, error)
-	
-	// Dialog management
-	StoreDialog(dialog IDialog) error
-	RemoveDialog(id string) error
-	
-	// Bulk operations
-	ListDialogs() []IDialog
-	DialogCount() int
-	Clear() error
-	
-	// Events
-	OnDialogCreated(handler DialogEventHandler)
-	OnDialogTerminated(handler DialogEventHandler)
-}
-
-// DialogEventHandler handles dialog lifecycle events
-type DialogEventHandler func(dialog IDialog)
-```
-
-#### 4. REFER/Transfer Types (refer_types.go)
-```go
-package dialog
-
-import (
-	"github.com/emiago/sipgo/sip"
-	"time"
-)
-
-// ReferOptions configures REFER request behavior
-type ReferOptions struct {
-	// Refer-To header value
-	ReferTo sip.Uri
-	
-	// For attended transfer
-	Replaces *ReplacesInfo
-	
-	// Referred-By header
-	ReferredBy *sip.Uri
-	
-	// Custom headers
-	Headers map[string]string
-	
-	// Timeout for NOTIFY subscription
-	NotifyTimeout time.Duration
-	
-	// Whether to wait for NOTIFY
-	NoWait bool
-}
-
-// ReplacesInfo for attended transfer
-type ReplacesInfo struct {
-	CallID    string
-	FromTag   string
-	ToTag     string
-	EarlyOnly bool
-}
-
-// IReferSubscription tracks REFER progress
-type IReferSubscription interface {
-	ID() string
-	State() SubscriptionState
-	
-	// Wait for final NOTIFY
-	Wait(ctx context.Context) error
-	
-	// Get progress updates
-	Progress() <-chan ReferProgress
-	
-	// Cancel subscription
-	Cancel() error
-}
-
-// SubscriptionState represents NOTIFY subscription state
-type SubscriptionState string
-
-const (
-	SubscriptionStatePending    SubscriptionState = "pending"
-	SubscriptionStateActive     SubscriptionState = "active"
-	SubscriptionStateTerminated SubscriptionState = "terminated"
-)
-
-// ReferProgress represents REFER progress update
-type ReferProgress struct {
-	StatusCode int
-	StatusText string
-	Final      bool
-}
-```
-
-#### 5. Builder Interfaces (builder_interface.go)
-```go
-package dialog
-
-import (
-	"github.com/emiago/sipgo/sip"
-)
-
-// IDialogBuilder builds dialog configuration
-type IDialogBuilder interface {
-	// Core properties
-	WithCallID(callID string) IDialogBuilder
-	WithLocalURI(uri sip.Uri) IDialogBuilder
-	WithRemoteURI(uri sip.Uri) IDialogBuilder
-	WithLocalTag(tag string) IDialogBuilder
-	WithRemoteTag(tag string) IDialogBuilder
-	
-	// Optional properties
-	WithRouteSet(routes []sip.RouteHeader) IDialogBuilder
-	WithLocalSeq(seq uint32) IDialogBuilder
-	WithRemoteSeq(seq uint32) IDialogBuilder
-	
-	// Role
-	AsUAC() IDialogBuilder
-	AsUAS() IDialogBuilder
-	
-	// Build
-	Build() (IDialog, error)
-	Validate() error
-}
-
-// IRequestBuilder builds SIP requests within dialog context
-type IRequestBuilder interface {
-	// Method
-	WithMethod(method sip.RequestMethod) IRequestBuilder
-	
-	// Headers
-	WithHeader(name string, value string) IRequestBuilder
-	WithHeaders(headers map[string]string) IRequestBuilder
-	
-	// Body
-	WithBody(content []byte, contentType string) IRequestBuilder
-	WithSDP(sdp []byte) IRequestBuilder
-	
-	// Build
-	Build() (*sip.Request, error)
-}
-```
-
-#### 6. User Agent Interface (user_agent_interface.go)
-```go
-package dialog
-
-import (
-	"context"
-	"github.com/emiago/sipgo/sip"
-)
-
-// IUserAgent represents high-level SIP user agent
-type IUserAgent interface {
-	// Lifecycle
-	Start(ctx context.Context) error
-	Stop() error
-	
-	// Dialog operations
-	CreateDialog(ctx context.Context, target sip.Uri, opts *DialogOptions) (IDialog, error)
-	DialogManager() IDialogManager
-	
-	// Transport info
-	ListenAddr() string
-	Transport() string
-	
-	// Configuration
-	SetDisplayName(name string)
-	SetUserURI(uri sip.Uri)
-}
-
-// DialogOptions for creating new dialogs
-type DialogOptions struct {
-	// Initial INVITE body
-	Body Body
-	
-	// Custom headers
-	Headers map[string]string
-	
-	// Transport preference
-	Transport string
-	
-	// Route set
-	RouteSet []sip.Uri
-}
-```
-
-### Implementation Types (types.go)
-```go
-package dialog
-
-import (
-	"sync"
-	"sync/atomic"
-	"time"
-	"context"
-	"github.com/emiago/sipgo/sip"
-)
-
-// Dialog implements IDialog interface
+// В структуру Dialog добавить:
 type Dialog struct {
-	// Identification
-	id        string
-	callID    sip.CallIDHeader
-	localTag  string
-	remoteTag string
-	
-	// State management
-	state     atomic.Value // DialogState
-	stateMu   sync.RWMutex
-	
-	// Addressing
-	localURI    sip.Uri
-	remoteURI   sip.Uri
-	localTarget sip.Uri
-	remoteTarget sip.Uri
-	routeSet    []sip.RouteHeader
-	
-	// Sequencing
-	localSeq  atomic.Uint32
-	remoteSeq atomic.Uint32
-	
-	// Role
-	isUAS bool
-	
-	// Context
-	ctx    context.Context
-	cancel context.CancelFunc
-	
-	// Timestamps
-	createdAt    time.Time
-	lastActivity atomic.Value // time.Time
-	
-	// Event handlers
-	stateHandlers []StateChangeHandler
-	bodyHandlers  []OnBodyHandler
-	handlersMu    sync.RWMutex
-	
-	// Dependencies
-	txManager ITransactionManager
-	client    *sipgo.Client
+    // ... существующие поля
+    validator *SecurityValidator
 }
 
-// DialogManager implements IDialogManager
-type DialogManager struct {
-	// Storage
-	dialogs   sync.Map // map[string]*Dialog
-	dialogsMu sync.RWMutex
-	
-	// Event handlers
-	createHandlers    []DialogEventHandler
-	terminateHandlers []DialogEventHandler
-	handlersMu        sync.RWMutex
-	
-	// Dependencies
-	client *sipgo.Client
-	server *sipgo.Server
-}
-
-// Transaction wraps sipgo.ClientTransaction
-type Transaction struct {
-	id           string
-	sipTx        sip.ClientTransaction
-	request      *sip.Request
-	lastResponse atomic.Value // *sip.Response
-	
-	// Event handlers
-	responseHandlers  []func(*sip.Response)
-	terminateHandlers []func(error)
-	handlersMu        sync.RWMutex
+// Обновить handleREFER:
+func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
+    // Валидация заголовка Refer-To
+    referToHeader := req.GetHeader("Refer-To")
+    if referToHeader == nil {
+        res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Missing Refer-To header", nil)
+        return tx.Respond(res)
+    }
+    
+    // Проверка безопасности
+    if err := d.validator.ValidateHeader("Refer-To", referToHeader.Value()); err != nil {
+        res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, fmt.Sprintf("Invalid Refer-To: %v", err), nil)
+        return tx.Respond(res)
+    }
+    
+    // ... остальная логика
 }
 ```
 
-### Error Types (errors.go)
+3. **Обновить DialogManager для rate limiting**:
+```go
+// В DialogManager добавить:
+type DialogManager struct {
+    // ... существующие поля
+    validator *SecurityValidator
+}
+
+// В CreateServerDialog добавить:
+func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTransaction) (IDialog, error) {
+    // Проверка rate limit
+    remoteAddr := tx.Destination()
+    if err := dm.validator.CheckRateLimit(remoteAddr); err != nil {
+        return nil, err
+    }
+    
+    // ... создание диалога
+    
+    // При ошибке освобождаем лимит
+    defer func() {
+        if err != nil {
+            dm.validator.ReleaseRateLimit(remoteAddr)
+        }
+    }()
+    
+    // ... остальная логика
+}
+```
+
+#### 1.2 Усиленная валидация parseReferTo и parseReplaces
+
+**Файл:** `pkg/dialog/refer.go`
+
+```go
+// Обновить parseReferTo:
+func parseReferTo(referTo string) (*sip.Uri, map[string]string, error) {
+    // Добавить проверку длины
+    if len(referTo) > MaxURILength {
+        return nil, nil, fmt.Errorf("Refer-To too long: %d bytes", len(referTo))
+    }
+    
+    // Удалить пробелы и проверить формат
+    referTo = strings.TrimSpace(referTo)
+    if referTo == "" {
+        return nil, nil, fmt.Errorf("empty Refer-To")
+    }
+    
+    // Проверка на опасные символы
+    if strings.ContainsAny(referTo, "\r\n\x00") {
+        return nil, nil, fmt.Errorf("invalid characters in Refer-To")
+    }
+    
+    // ... существующая логика парсинга с дополнительными проверками
+}
+
+// Обновить parseReplaces:
+func parseReplaces(replaces string) (callID, toTag, fromTag string, err error) {
+    // Проверка длины
+    if len(replaces) > 512 { // Replaces не должен быть слишком длинным
+        return "", "", "", fmt.Errorf("Replaces header too long")
+    }
+    
+    // Проверка формата
+    parts := strings.Split(replaces, ";")
+    if len(parts) < 1 || len(parts) > 3 {
+        return "", "", "", fmt.Errorf("invalid Replaces format")
+    }
+    
+    // Валидация Call-ID
+    callID = strings.TrimSpace(parts[0])
+    if callID == "" || strings.ContainsAny(callID, "\r\n\x00<>\"") {
+        return "", "", "", fmt.Errorf("invalid Call-ID in Replaces")
+    }
+    
+    // ... остальная логика с проверками
+}
+```
+
+### 2. Улучшение обработки ошибок (Приоритет: ВЫСОКИЙ)
+
+#### 2.1 Создание системы логирования
+
+**Файлы:**
+- `pkg/dialog/logger.go` (создать новый)
+- Обновить все файлы где игнорируются ошибки
+
+```go
+// logger.go
+package dialog
+
+import (
+    "context"
+    "fmt"
+    "log/slog"
+    "os"
+)
+
+// Logger интерфейс для логирования
+type Logger interface {
+    Error(ctx context.Context, msg string, args ...any)
+    Warn(ctx context.Context, msg string, args ...any)
+    Info(ctx context.Context, msg string, args ...any)
+    Debug(ctx context.Context, msg string, args ...any)
+    With(args ...any) Logger
+}
+
+// slogLogger обертка над slog
+type slogLogger struct {
+    logger *slog.Logger
+}
+
+// NewDefaultLogger создает логгер по умолчанию
+func NewDefaultLogger() Logger {
+    opts := &slog.HandlerOptions{
+        Level: slog.LevelInfo,
+    }
+    handler := slog.NewJSONHandler(os.Stderr, opts)
+    return &slogLogger{
+        logger: slog.New(handler).With("component", "dialog"),
+    }
+}
+
+func (l *slogLogger) Error(ctx context.Context, msg string, args ...any) {
+    l.logger.ErrorContext(ctx, msg, args...)
+}
+
+func (l *slogLogger) Warn(ctx context.Context, msg string, args ...any) {
+    l.logger.WarnContext(ctx, msg, args...)
+}
+
+func (l *slogLogger) Info(ctx context.Context, msg string, args ...any) {
+    l.logger.InfoContext(ctx, msg, args...)
+}
+
+func (l *slogLogger) Debug(ctx context.Context, msg string, args ...any) {
+    l.logger.DebugContext(ctx, msg, args...)
+}
+
+func (l *slogLogger) With(args ...any) Logger {
+    return &slogLogger{
+        logger: l.logger.With(args...),
+    }
+}
+```
+
+#### 2.2 Замена игнорируемых ошибок
+
+**Конкретные места для исправления:**
+
+1. **dialog.go, строка 665** - ProcessRouteHeaders:
+```go
+// Было:
+_ = d.headerProcessor.ProcessRouteHeaders(req, d.routeSet)
+
+// Стало:
+if err := d.headerProcessor.ProcessRouteHeaders(req, d.routeSet); err != nil {
+    d.logger.Warn(context.Background(), "failed to process route headers",
+        "error", err,
+        "dialog_id", d.ID(),
+        "method", req.Method)
+    // Продолжаем выполнение, так как это не критично
+}
+```
+
+2. **dialog.go, строки 799-850** - обработка в горутинах:
+```go
+// Добавить обработку ошибок в горутине handleREFER:
+go func() {
+    defer func() {
+        if r := recover(); r != nil {
+            d.logger.Error(ctx, "panic in REFER handler",
+                "panic", r,
+                "dialog_id", d.ID())
+        }
+    }()
+    
+    // Отправляем NOTIFY
+    if err := subscription.SendNotify(ctx, "SIP/2.0 100 Trying"); err != nil {
+        d.logger.Error(ctx, "failed to send initial NOTIFY",
+            "error", err,
+            "refer_to", referToURI.String())
+        return
+    }
+    
+    // ... остальная логика с логированием ошибок
+}()
+```
+
+#### 2.3 Система повторных попыток
+
+**Файл:** `pkg/dialog/retry.go` (создать новый)
+
 ```go
 package dialog
 
-import "errors"
-
-var (
-	// Dialog errors
-	ErrDialogNotFound      = errors.New("dialog not found")
-	ErrDialogTerminated    = errors.New("dialog already terminated")
-	ErrInvalidDialogState  = errors.New("invalid dialog state for operation")
-	ErrDialogExists        = errors.New("dialog already exists")
-	
-	// Transaction errors
-	ErrTransactionNotFound = errors.New("transaction not found")
-	ErrTransactionTimeout  = errors.New("transaction timeout")
-	ErrTransactionCanceled = errors.New("transaction canceled")
-	
-	// REFER errors
-	ErrReferNotSupported   = errors.New("REFER not supported by remote party")
-	ErrReferFailed         = errors.New("REFER request failed")
-	ErrInvalidReplaces     = errors.New("invalid Replaces header")
-	
-	// State errors
-	ErrInvalidStateTransition = errors.New("invalid state transition")
-	ErrOperationNotAllowed    = errors.New("operation not allowed in current state")
+import (
+    "context"
+    "errors"
+    "fmt"
+    "time"
 )
+
+// RetryConfig конфигурация повторных попыток
+type RetryConfig struct {
+    MaxAttempts     int
+    InitialInterval time.Duration
+    MaxInterval     time.Duration
+    Multiplier      float64
+}
+
+// DefaultRetryConfig конфигурация по умолчанию
+var DefaultRetryConfig = RetryConfig{
+    MaxAttempts:     3,
+    InitialInterval: 100 * time.Millisecond,
+    MaxInterval:     5 * time.Second,
+    Multiplier:      2.0,
+}
+
+// RetryableError ошибка которую можно повторить
+type RetryableError struct {
+    Err error
+}
+
+func (e RetryableError) Error() string {
+    return fmt.Sprintf("retryable: %v", e.Err)
+}
+
+// IsRetryable проверяет можно ли повторить ошибку
+func IsRetryable(err error) bool {
+    if err == nil {
+        return false
+    }
+    
+    var retryable RetryableError
+    if errors.As(err, &retryable) {
+        return true
+    }
+    
+    // Проверяем временные сетевые ошибки
+    return errors.Is(err, context.DeadlineExceeded) ||
+           errors.Is(err, context.Canceled) ||
+           isTemporaryNetError(err)
+}
+
+// RetryWithBackoff выполняет функцию с повторными попытками
+func RetryWithBackoff(ctx context.Context, config RetryConfig, logger Logger, operation string, fn func() error) error {
+    var lastErr error
+    interval := config.InitialInterval
+    
+    for attempt := 0; attempt < config.MaxAttempts; attempt++ {
+        if attempt > 0 {
+            logger.Debug(ctx, "retrying operation",
+                "operation", operation,
+                "attempt", attempt+1,
+                "max_attempts", config.MaxAttempts,
+                "interval", interval)
+        }
+        
+        lastErr = fn()
+        if lastErr == nil {
+            return nil
+        }
+        
+        if !IsRetryable(lastErr) {
+            return lastErr
+        }
+        
+        // Последняя попытка - не ждем
+        if attempt == config.MaxAttempts-1 {
+            break
+        }
+        
+        select {
+        case <-ctx.Done():
+            return fmt.Errorf("retry cancelled: %w", ctx.Err())
+        case <-time.After(interval):
+        }
+        
+        // Увеличиваем интервал
+        interval = time.Duration(float64(interval) * config.Multiplier)
+        if interval > config.MaxInterval {
+            interval = config.MaxInterval
+        }
+    }
+    
+    return fmt.Errorf("failed after %d attempts: %w", config.MaxAttempts, lastErr)
+}
+
+// isTemporaryNetError проверяет временные сетевые ошибки
+func isTemporaryNetError(err error) bool {
+    // Здесь можно добавить проверку специфичных сетевых ошибок
+    return false
+}
 ```
 
-## Architecture Principles
+### 3. Оптимизация производительности (Приоритет: СРЕДНИЙ)
 
-### 1. Custom Dialog Management
-- Build our own dialog tracking and state management
-- Use sipgo's low-level Client and Server APIs directly
-- Implement thread-safe dialog operations using sync.RWMutex
-- Maintain compatibility with the existing interfaces.go API
+#### 3.1 Добавление индексов в DialogManager
 
-### 2. Integration with sipgo
-- Use sipgo for SIP message parsing and transport
-- Leverage sipgo's transaction layer for request/response handling
-- Build custom dialog state machine on top of sipgo primitives
-- Do NOT use DialogClientCache, DialogServerCache, or DialogUA from sipgo
+**Файл:** `pkg/dialog/manager.go`
 
-### 3. Design Goals
-- Thread-safe concurrent dialog handling
-- Clear separation between UAC and UAS roles
-- Support for REFER-based call transfers
-- Asynchronous operation patterns (non-blocking)
-- Context-based cancellation support
+```go
+// Обновить структуру DialogManager:
+type DialogManager struct {
+    mu       sync.RWMutex
+    dialogs  map[string]IDialog
+    uasuac   *UASUAC
+    logger   Logger
+    
+    // Индексы для быстрого поиска
+    callIDIndex    map[string][]string        // callID -> []dialogID
+    tagIndex       map[string]string          // "localTag:remoteTag" -> dialogID
+    remoteTagIndex map[string][]string        // remoteTag -> []dialogID
+    
+    // Производительность
+    workerPool *WorkerPool
+    validator  *SecurityValidator
+}
 
-## Development Tasks
+// Обновить методы для поддержки индексов:
+func (dm *DialogManager) RegisterDialog(dialog IDialog) error {
+    dm.mu.Lock()
+    defer dm.mu.Unlock()
+    
+    dialogID := dialog.ID()
+    if _, exists := dm.dialogs[dialogID]; exists {
+        return fmt.Errorf("dialog already exists: %s", dialogID)
+    }
+    
+    dm.dialogs[dialogID] = dialog
+    
+    // Обновляем индексы
+    dm.updateIndexesLocked(dialog, true)
+    
+    dm.logger.Info(context.Background(), "dialog registered",
+        "dialog_id", dialogID,
+        "call_id", dialog.CallID().Value())
+    
+    return nil
+}
 
-### Phase 1: Core Infrastructure (Priority: High)
+// updateIndexesLocked обновляет индексы (вызывать под блокировкой)
+func (dm *DialogManager) updateIndexesLocked(dialog IDialog, add bool) {
+    dialogID := dialog.ID()
+    callID := dialog.CallID().Value()
+    localTag := dialog.LocalTag()
+    remoteTag := dialog.RemoteTag()
+    
+    if add {
+        // Добавляем в индексы
+        dm.callIDIndex[callID] = append(dm.callIDIndex[callID], dialogID)
+        
+        if localTag != "" && remoteTag != "" {
+            tagKey := fmt.Sprintf("%s:%s", localTag, remoteTag)
+            dm.tagIndex[tagKey] = dialogID
+        }
+        
+        if remoteTag != "" {
+            dm.remoteTagIndex[remoteTag] = append(dm.remoteTagIndex[remoteTag], dialogID)
+        }
+    } else {
+        // Удаляем из индексов
+        dm.removeFromSlice(&dm.callIDIndex[callID], dialogID)
+        if len(dm.callIDIndex[callID]) == 0 {
+            delete(dm.callIDIndex, callID)
+        }
+        
+        if localTag != "" && remoteTag != "" {
+            tagKey := fmt.Sprintf("%s:%s", localTag, remoteTag)
+            delete(dm.tagIndex, tagKey)
+        }
+        
+        if remoteTag != "" {
+            dm.removeFromSlice(&dm.remoteTagIndex[remoteTag], dialogID)
+            if len(dm.remoteTagIndex[remoteTag]) == 0 {
+                delete(dm.remoteTagIndex, remoteTag)
+            }
+        }
+    }
+}
 
-#### Task 1.1: Interface Files Creation
-- [ ] Create/update interfaces.go with IDialog interface and DialogState enum
-- [ ] Create transaction_interface.go with ITransaction interfaces
-- [ ] Create manager_interface.go with IDialogManager interface
-- [ ] Create refer_types.go with REFER/transfer types
-- [ ] Create builder_interface.go with builder pattern interfaces
-- [ ] Create user_agent_interface.go with IUserAgent interface
-- [ ] Create types.go with implementation structs
-- [ ] Create errors.go with error definitions
+// removeFromSlice удаляет элемент из слайса
+func (dm *DialogManager) removeFromSlice(slice *[]string, value string) {
+    for i, v := range *slice {
+        if v == value {
+            *slice = append((*slice)[:i], (*slice)[i+1:]...)
+            return
+        }
+    }
+}
 
-#### Task 1.2: Dialog State Machine
-- [ ] Implement DialogState constants (Init, Early, Confirmed, Terminated)
-- [ ] Implement state transition validation logic
-- [ ] Add thread-safe state management using atomic.Value
-- [ ] Create state change event notification system
-- [ ] Implement state transition rules per RFC 3261
-
-#### Task 1.3: Dialog Key and Identification
-- [ ] Implement DialogKey struct as defined in interfaces
-- [ ] Create dialog ID generation using CallID + tags
-- [ ] Implement dialog matching for incoming requests
-- [ ] Add UAC/UAS role detection based on message direction
-- [ ] Create helper functions for dialog ID parsing
-
-#### Task 1.4: Dialog Manager Implementation
-- [ ] Implement DialogManager struct with sync.Map storage
-- [ ] Implement IDialogManager interface methods
-- [ ] Add dialog creation for UAC and UAS roles
-- [ ] Implement dialog lookup by ID and by key
-- [ ] Add dialog lifecycle event handling
-
-### Phase 2: Core Dialog Implementation (Priority: High)
-
-#### Task 2.1: Dialog Implementation
-- [ ] Implement Dialog struct with all IDialog interface methods
-- [ ] Add thread-safe getters for all properties
-- [ ] Implement context management with cancellation
-- [ ] Add timestamp tracking using atomic operations
-- [ ] Implement event handler registration and notification
-
-#### Task 2.2: Transaction Wrapper Implementation
-- [ ] Implement Transaction struct wrapping sipgo.ClientTransaction
-- [ ] Implement ITransaction interface methods
-- [ ] Add response channel handling
-- [ ] Implement transaction lifecycle management
-- [ ] Create TransactionManager implementation
-
-#### Task 2.3: Request/Response Handling
-- [ ] Implement CSeq tracking with atomic operations
-- [ ] Add Route/Record-Route header processing per RFC 3261
-- [ ] Implement Contact header management for target refresh
-- [ ] Create request builder for in-dialog requests
-- [ ] Add proper header ordering for requests
-
-### Phase 3: Call Control Features (Priority: Medium)
-
-#### Task 3.1: Basic Call Operations
-- [ ] Implement Accept200 method with response building
-- [ ] Add SDP handling for Accept200
-- [ ] Implement Reject method with status codes 4xx-6xx
-- [ ] Add ACK generation and handling for 2xx responses
-- [ ] Implement Terminate method with BYE request
-
-#### Task 3.2: REFER Implementation
-- [ ] Implement Refer method with ReferOptions
-- [ ] Create Refer-To header builder
-- [ ] Implement NOTIFY subscription handling
-- [ ] Add IReferSubscription implementation
-- [ ] Create subscription state machine
-
-#### Task 3.3: ReferReplace Implementation
-- [ ] Implement ReferReplace method
-- [ ] Create Replaces header builder with proper encoding
-- [ ] Add dialog correlation for replacement
-- [ ] Implement early dialog replacement (early-only flag)
-- [ ] Add attended transfer state tracking
-
-### Phase 4: Advanced Features (Priority: Medium)
-
-#### Task 4.1: Builder Pattern Implementation
-- [ ] Implement DialogBuilder with fluent interface
-- [ ] Add validation in Build method
-- [ ] Implement RequestBuilder for in-dialog requests
-- [ ] Add builder for ReferOptions
-- [ ] Create builder usage examples
-
-#### Task 4.2: Event System Enhancement
-- [ ] Implement thread-safe event handler management
-- [ ] Add event handler removal capability
-- [ ] Create event dispatcher with goroutine pool
-- [ ] Add event filtering by type
-- [ ] Implement event priority handling
-
-#### Task 4.3: Advanced REFER Features
-- [ ] Add REFER progress tracking via NOTIFY
-- [ ] Implement subscription timeout handling
-- [ ] Add multiple concurrent REFER support
-- [ ] Create REFER retry mechanism
-- [ ] Add REFER authentication support
-
-### Phase 5: User Agent Implementation (Priority: Low)
-
-#### Task 5.1: UserAgent Implementation
-- [ ] Implement UserAgent struct per IUserAgent interface
-- [ ] Add sipgo.Client and sipgo.Server integration
-- [ ] Implement dialog creation factory methods
-- [ ] Add transport configuration
-- [ ] Create UA lifecycle management
-
-#### Task 5.2: Integration with sipgo
-- [ ] Create sipgo.Client wrapper methods
-- [ ] Add sipgo.Server handler registration
-- [ ] Implement message routing to dialogs
-- [ ] Add connection pooling support
-- [ ] Create NAT traversal helpers
-
-### Phase 6: Documentation and Examples (Priority: High)
-
-#### Task 6.1: API Documentation
-- [ ] Document all public interfaces with examples
-- [ ] Add package-level documentation
-- [ ] Create method documentation with usage
-- [ ] Document error conditions and handling
-- [ ] Add performance considerations
-
-#### Task 6.2: Usage Examples
-- [ ] Create basic UAC dialog example
-- [ ] Create basic UAS dialog example
-- [ ] Add REFER transfer example
-- [ ] Create attended transfer example
-- [ ] Add concurrent dialog handling example
-
-#### Task 6.3: Architecture Documentation
-- [ ] Document design decisions and rationale
-- [ ] Create sequence diagrams for call flows
-- [ ] Add state machine documentation
-- [ ] Document threading model
-- [ ] Create troubleshooting guide
-
-## Implementation Guidelines
-
-### Code Structure
-```
-pkg/dialog/
-├── interfaces.go               # Core IDialog interface and types
-├── transaction_interface.go    # Transaction interfaces
-├── manager_interface.go        # Dialog manager interface
-├── refer_types.go             # REFER/transfer types
-├── builder_interface.go       # Builder pattern interfaces
-├── user_agent_interface.go    # User agent interface
-├── types.go                   # Implementation structs
-├── errors.go                  # Error definitions
-├── dialog.go                  # Dialog implementation
-├── manager.go                 # Dialog manager implementation
-├── transaction.go             # Transaction wrapper implementation
-├── state_machine.go           # State management implementation
-├── refer.go                   # REFER implementation
-├── builder.go                 # Builder implementations
-├── user_agent.go              # User agent implementation
-└── utils.go                   # Helper functions
+// Оптимизированный GetDialogByRequest
+func (dm *DialogManager) GetDialogByRequest(req *sip.Request) (IDialog, error) {
+    dm.mu.RLock()
+    defer dm.mu.RUnlock()
+    
+    callID := req.CallID()
+    if callID == nil {
+        return nil, fmt.Errorf("missing Call-ID header")
+    }
+    
+    fromTag, _ := req.From().Params.Get("tag")
+    toTag, _ := req.To().Params.Get("tag")
+    
+    // Быстрый поиск по индексу тегов
+    if fromTag != "" && toTag != "" {
+        // Пробуем оба варианта (UAC и UAS)
+        if dialogID, exists := dm.tagIndex[fmt.Sprintf("%s:%s", fromTag, toTag)]; exists {
+            return dm.dialogs[dialogID], nil
+        }
+        if dialogID, exists := dm.tagIndex[fmt.Sprintf("%s:%s", toTag, fromTag)]; exists {
+            return dm.dialogs[dialogID], nil
+        }
+    }
+    
+    // Если не нашли по тегам, ищем по Call-ID
+    dialogIDs, exists := dm.callIDIndex[callID.Value()]
+    if !exists {
+        return nil, fmt.Errorf("dialog not found for Call-ID: %s", callID.Value())
+    }
+    
+    // Проверяем каждый диалог
+    for _, dialogID := range dialogIDs {
+        dialog := dm.dialogs[dialogID]
+        if dialog != nil && dm.isRequestForDialog(req, dialog) {
+            return dialog, nil
+        }
+    }
+    
+    return nil, fmt.Errorf("dialog not found")
+}
 ```
 
-### Key Design Decisions
+#### 3.2 Пул воркеров для обработки событий
 
-1. **No sipgo Dialog Types**: We will NOT use sipgo.Dialog, DialogUA, DialogClientCache, or DialogServerCache
-2. **Custom State Management**: Implement our own FSM instead of using sipgo's dialog states
-3. **Transaction Abstraction**: Wrap sipgo transactions in our own interface for better control
-4. **Event-Driven Architecture**: Use channels and callbacks for async operations
-5. **Context-First API**: All operations should accept context for cancellation
+**Файл:** `pkg/dialog/worker_pool.go` (создать новый)
 
-### Dependencies
-- github.com/emiago/sipgo (for SIP protocol handling)
-- No direct usage of sipgo dialog types
-- Standard library only for other functionality
+```go
+package dialog
 
-### Testing Strategy
-- Unit tests for each component
-- Integration tests with mock SIP endpoints
-- Stress tests for concurrent dialog handling
-- Compatibility tests with existing pkg/sip/dialog implementation
+import (
+    "context"
+    "runtime"
+    "sync"
+    "sync/atomic"
+)
 
-## Success Criteria
+// Task представляет задачу для выполнения
+type Task struct {
+    Name     string
+    Priority int
+    Execute  func() error
+}
 
-1. Full implementation of IDialog interface
-2. Thread-safe concurrent dialog handling
-3. REFER transfer support (blind and attended)
-4. All tests passing with >80% coverage
-5. Performance on par with pkg/sip/dialog implementation
-6. Clean API without sipgo dialog type exposure
+// WorkerPool пул воркеров для обработки задач
+type WorkerPool struct {
+    workers    int
+    maxQueue   int
+    taskQueue  chan *Task
+    wg         sync.WaitGroup
+    ctx        context.Context
+    cancel     context.CancelFunc
+    logger     Logger
+    
+    // Метрики
+    processed  atomic.Uint64
+    failed     atomic.Uint64
+    queueSize  atomic.Int32
+}
 
-## Interface Design Summary
+// NewWorkerPool создает новый пул воркеров
+func NewWorkerPool(workers int, queueSize int, logger Logger) *WorkerPool {
+    if workers <= 0 {
+        workers = runtime.NumCPU()
+    }
+    if queueSize <= 0 {
+        queueSize = workers * 10
+    }
+    
+    ctx, cancel := context.WithCancel(context.Background())
+    pool := &WorkerPool{
+        workers:   workers,
+        maxQueue:  queueSize,
+        taskQueue: make(chan *Task, queueSize),
+        ctx:       ctx,
+        cancel:    cancel,
+        logger:    logger.With("component", "worker_pool"),
+    }
+    
+    pool.start()
+    return pool
+}
 
-The interface design follows these principles:
+// start запускает воркеров
+func (p *WorkerPool) start() {
+    for i := 0; i < p.workers; i++ {
+        p.wg.Add(1)
+        go p.worker(i)
+    }
+    
+    p.logger.Info(p.ctx, "worker pool started",
+        "workers", p.workers,
+        "queue_size", p.maxQueue)
+}
 
-1. **Separation of Concerns**: Each interface has a single, well-defined responsibility
-2. **Composability**: Smaller interfaces can be composed to build larger functionality
-3. **Thread Safety**: All implementations must be thread-safe for concurrent use
-4. **Context Support**: All long-running operations accept context for cancellation
-5. **Event-Driven**: Asynchronous operations use channels and callbacks
-6. **Builder Pattern**: Complex objects use builders for clean construction
-7. **Error Handling**: Comprehensive error types for all failure scenarios
+// worker обрабатывает задачи
+func (p *WorkerPool) worker(id int) {
+    defer p.wg.Done()
+    
+    logger := p.logger.With("worker_id", id)
+    logger.Debug(p.ctx, "worker started")
+    
+    for {
+        select {
+        case <-p.ctx.Done():
+            logger.Debug(p.ctx, "worker stopped")
+            return
+            
+        case task, ok := <-p.taskQueue:
+            if !ok {
+                return
+            }
+            
+            p.queueSize.Add(-1)
+            p.processTask(task, logger)
+        }
+    }
+}
 
-## Timeline Estimate
+// processTask обрабатывает одну задачу
+func (p *WorkerPool) processTask(task *Task, logger Logger) {
+    defer func() {
+        if r := recover(); r != nil {
+            p.failed.Add(1)
+            logger.Error(p.ctx, "panic in task execution",
+                "task", task.Name,
+                "panic", r)
+        }
+    }()
+    
+    if err := task.Execute(); err != nil {
+        p.failed.Add(1)
+        logger.Error(p.ctx, "task execution failed",
+            "task", task.Name,
+            "error", err)
+    } else {
+        p.processed.Add(1)
+    }
+}
 
-- Phase 1: 3-4 days (includes interface design)
-- Phase 2: 3-4 days
-- Phase 3: 2-3 days
-- Phase 4: 2-3 days
-- Phase 5: 1-2 days
-- Phase 6: 2-3 days
+// Submit отправляет задачу в пул
+func (p *WorkerPool) Submit(task *Task) error {
+    select {
+    case <-p.ctx.Done():
+        return context.Canceled
+        
+    case p.taskQueue <- task:
+        p.queueSize.Add(1)
+        return nil
+        
+    default:
+        return fmt.Errorf("worker pool queue is full")
+    }
+}
 
-**Total: 14-19 days**
+// SubmitWithTimeout отправляет задачу с таймаутом
+func (p *WorkerPool) SubmitWithTimeout(task *Task, timeout time.Duration) error {
+    ctx, cancel := context.WithTimeout(p.ctx, timeout)
+    defer cancel()
+    
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+        
+    case p.taskQueue <- task:
+        p.queueSize.Add(1)
+        return nil
+    }
+}
 
-## Next Steps
+// Stop останавливает пул воркеров
+func (p *WorkerPool) Stop() {
+    p.logger.Info(p.ctx, "stopping worker pool")
+    
+    p.cancel()
+    close(p.taskQueue)
+    p.wg.Wait()
+    
+    p.logger.Info(p.ctx, "worker pool stopped",
+        "processed", p.processed.Load(),
+        "failed", p.failed.Load())
+}
 
-1. Review and approve this plan
-2. Set up development environment
-3. Begin with Phase 1 implementation
-4. Regular progress reviews after each phase
-5. Adjust plan based on findings during implementation
+// Stats возвращает статистику пула
+func (p *WorkerPool) Stats() (processed, failed uint64, queueSize int32) {
+    return p.processed.Load(), p.failed.Load(), p.queueSize.Load()
+}
+```
+
+### 4. Интеграция всех компонентов
+
+#### 4.1 Обновление конструкторов
+
+**Файл:** `pkg/dialog/dialog.go`
+
+```go
+// Обновить NewDialog:
+func NewDialog(callID sip.CallIDHeader, localTag, remoteTag string, isServer bool, uasuac *UASUAC) *Dialog {
+    ctx, cancel := context.WithCancel(context.Background())
+    
+    logger := NewDefaultLogger()
+    if uasuac != nil && uasuac.logger != nil {
+        logger = uasuac.logger
+    }
+    
+    d := &Dialog{
+        id:              generateDialogID(callID, localTag, remoteTag, isServer),
+        callID:          callID,
+        localTag:        localTag,
+        remoteTag:       remoteTag,
+        isServer:        isServer,
+        state:           StateNone,
+        ctx:             ctx,
+        cancel:          cancel,
+        createdAt:       time.Now(),
+        lastActivity:    time.Now(),
+        uasuac:          uasuac,
+        headerProcessor: NewHeaderProcessor(),
+        validator:       NewSecurityValidator(),
+        logger:          logger.With("dialog_id", d.id),
+        tasks:           make(map[string]*backgroundTask),
+    }
+    
+    d.initStateMachine()
+    return d
+}
+```
+
+**Файл:** `pkg/dialog/manager.go`
+
+```go
+// Обновить NewDialogManager:
+func NewDialogManager(uasuac *UASUAC) *DialogManager {
+    logger := NewDefaultLogger()
+    if uasuac != nil && uasuac.logger != nil {
+        logger = uasuac.logger
+    }
+    
+    dm := &DialogManager{
+        dialogs:        make(map[string]IDialog),
+        callIDIndex:    make(map[string][]string),
+        tagIndex:       make(map[string]string),
+        remoteTagIndex: make(map[string][]string),
+        uasuac:         uasuac,
+        logger:         logger.With("component", "dialog_manager"),
+        validator:      NewSecurityValidator(),
+        workerPool:     NewWorkerPool(10, 100, logger),
+    }
+    
+    // Запускаем периодическую очистку
+    go dm.periodicCleanup()
+    
+    return dm
+}
+
+// periodicCleanup периодически очищает завершенные диалоги
+func (dm *DialogManager) periodicCleanup() {
+    ticker := time.NewTicker(30 * time.Second)
+    defer ticker.Stop()
+    
+    for {
+        select {
+        case <-ticker.C:
+            dm.CleanupTerminated()
+        }
+    }
+}
+```
+
+### 5. Тестирование и валидация
+
+#### 5.1 Unit тесты для безопасности
+
+**Файл:** `pkg/dialog/security_test.go` (создать новый)
+
+```go
+package dialog
+
+import (
+    "testing"
+    "strings"
+)
+
+func TestSecurityValidator_ValidateHeader(t *testing.T) {
+    sv := NewSecurityValidator()
+    
+    tests := []struct {
+        name    string
+        header  string
+        value   string
+        wantErr bool
+    }{
+        {"valid header", "From", "<sip:user@example.com>", false},
+        {"too long header", "From", strings.Repeat("x", MaxHeaderLength+1), true},
+        {"injection attempt", "Refer-To", "sip:user@example.com>;tag=123\r\nInjected: header", true},
+        {"sql injection", "Refer-To", "sip:user'; DROP TABLE users;--@example.com", true},
+        {"command injection", "Contact", "sip:user$(whoami)@example.com", true},
+    }
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            err := sv.ValidateHeader(tt.header, tt.value)
+            if (err != nil) != tt.wantErr {
+                t.Errorf("ValidateHeader() error = %v, wantErr %v", err, tt.wantErr)
+            }
+        })
+    }
+}
+
+func TestSecurityValidator_RateLimit(t *testing.T) {
+    sv := NewSecurityValidator()
+    
+    // Тестируем rate limiting
+    ip := "192.168.1.1:5060"
+    
+    // Должны пройти первые MaxDialogsPerIP запросов
+    for i := 0; i < MaxDialogsPerIP; i++ {
+        if err := sv.CheckRateLimit(ip); err != nil {
+            t.Errorf("CheckRateLimit() failed at %d: %v", i, err)
+        }
+    }
+    
+    // Следующий должен быть отклонен
+    if err := sv.CheckRateLimit(ip); err == nil {
+        t.Error("CheckRateLimit() should have failed after limit")
+    }
+    
+    // После освобождения должен пройти
+    sv.ReleaseRateLimit(ip)
+    if err := sv.CheckRateLimit(ip); err != nil {
+        t.Error("CheckRateLimit() failed after release:", err)
+    }
+}
+```
+
+#### 5.2 Race condition тесты
+
+**Файл:** `pkg/dialog/dialog_race_test.go` (создать новый)
+
+```go
+package dialog
+
+import (
+    "context"
+    "sync"
+    "testing"
+    "time"
+)
+
+func TestDialog_RaceConditions(t *testing.T) {
+    // Создаем тестовый диалог
+    callID := sip.CallIDHeader{Value: func() string { return "test-call-id" }}
+    d := NewDialog(callID, "local-tag", "remote-tag", false, nil)
+    
+    // Запускаем конкурентные операции
+    var wg sync.WaitGroup
+    ctx := context.Background()
+    
+    // Горутина 1: обновление ID
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        for i := 0; i < 100; i++ {
+            d.updateDialogID()
+            time.Sleep(time.Microsecond)
+        }
+    }()
+    
+    // Горутина 2: чтение состояния
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        for i := 0; i < 100; i++ {
+            _ = d.State()
+            _ = d.ID()
+            time.Sleep(time.Microsecond)
+        }
+    }()
+    
+    // Горутина 3: применение заголовков
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        req := &sip.Request{}
+        for i := 0; i < 100; i++ {
+            d.applyDialogHeaders(req)
+            time.Sleep(time.Microsecond)
+        }
+    }()
+    
+    // Горутина 4: изменение состояния
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        for i := 0; i < 50; i++ {
+            _ = d.stateMachine.Event(ctx, "provisional")
+            _ = d.stateMachine.Event(ctx, "confirm")
+            time.Sleep(time.Millisecond)
+        }
+    }()
+    
+    wg.Wait()
+    
+    // Проверяем что диалог в корректном состоянии
+    if d.State() == StateNone {
+        t.Error("Dialog in invalid state after concurrent operations")
+    }
+}
+```
+
+### 6. Последовательность реализации
+
+1. **День 1-2: Безопасность**
+   - Создать security.go с валидаторами
+   - Обновить parseReferTo и parseReplaces
+   - Добавить валидацию во все обработчики запросов
+   - Добавить rate limiting в DialogManager
+
+2. **День 3-4: Логирование и обработка ошибок**
+   - Создать logger.go
+   - Создать retry.go
+   - Заменить все игнорируемые ошибки на логирование
+   - Добавить retry механизм для критических операций
+
+3. **День 5-6: Производительность**
+   - Создать worker_pool.go
+   - Добавить индексы в DialogManager
+   - Оптимизировать поиск диалогов
+   - Реализовать пул воркеров для событий
+
+4. **День 7: Интеграция и тестирование**
+   - Обновить конструкторы для использования новых компонентов
+   - Создать unit тесты для безопасности
+   - Создать race condition тесты
+   - Запустить полное тестирование с `go test -race`
+
+5. **День 8: Финальная проверка**
+   - Запустить линтер `make lint`
+   - Исправить все предупреждения
+   - Провести нагрузочное тестирование
+   - Подготовить документацию
+
+### 7. Критерии завершения
+
+1. **Безопасность:**
+   - ✓ Все входные данные валидируются
+   - ✓ Rate limiting работает
+   - ✓ Нет уязвимостей к инъекциям
+
+2. **Обработка ошибок:**
+   - ✓ Все ошибки логируются
+   - ✓ Критические операции имеют retry
+   - ✓ Нет паник в production коде
+
+3. **Производительность:**
+   - ✓ O(1) поиск диалогов по ключам
+   - ✓ Пул воркеров обрабатывает события
+   - ✓ Нет деградации под нагрузкой
+
+4. **Качество кода:**
+   - ✓ Проходит `go test -race`
+   - ✓ Проходит `make lint`
+   - ✓ 80%+ покрытие тестами

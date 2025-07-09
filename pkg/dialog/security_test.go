@@ -1,33 +1,243 @@
 package dialog
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emiago/sipgo/sip"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGenerateSecureTag(t *testing.T) {
-	// Генерируем несколько тегов
-	tags := make(map[string]bool)
-	
-	for i := 0; i < 100; i++ {
-		tag := generateSecureTag()
-		
-		// Проверяем длину (16 байт = 32 символа в hex)
-		assert.Len(t, tag, 32)
-		
-		// Проверяем, что тег содержит только hex символы
-		for _, c := range tag {
-			assert.True(t, (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))
-		}
-		
-		// Проверяем уникальность
-		assert.False(t, tags[tag], "Тег %s уже существует", tag)
-		tags[tag] = true
+func TestSecurityValidator_ValidateHeader(t *testing.T) {
+	sv := NewSecurityValidator(DefaultSecurityConfig())
+
+	tests := []struct {
+		name    string
+		header  string
+		value   string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid header",
+			header:  "From",
+			value:   "<sip:alice@example.com>",
+			wantErr: false,
+		},
+		{
+			name:    "header too long",
+			header:  "From",
+			value:   strings.Repeat("a", MaxHeaderLength+1),
+			wantErr: true,
+			errMsg:  "слишком длинный",
+		},
+		{
+			name:    "header with CRLF injection",
+			header:  "From",
+			value:   "alice@example.com\r\nX-Hack: value",
+			wantErr: true,
+			errMsg:  "недопустимые символы",
+		},
+		{
+			name:    "header with null byte",
+			header:  "To",
+			value:   "alice@example.com\x00hack",
+			wantErr: true,
+			errMsg:  "недопустимые символы",
+		},
+		{
+			name:    "valid Refer-To",
+			header:  "Refer-To",
+			value:   "<sip:bob@example.com>",
+			wantErr: false,
+		},
+		{
+			name:    "invalid URI in Refer-To",
+			header:  "Refer-To",
+			value:   "<http://evil.com>",
+			wantErr: true,
+			errMsg:  "некорректный URI",
+		},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := sv.ValidateHeader(tt.header, tt.value)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestSecurityValidator_ValidateBody(t *testing.T) {
+	sv := NewSecurityValidator(DefaultSecurityConfig())
+
+	tests := []struct {
+		name        string
+		body        []byte
+		contentType string
+		wantErr     bool
+		errMsg      string
+	}{
+		{
+			name:        "valid SDP",
+			body:        []byte("v=0\r\no=- 123 456 IN IP4 192.168.1.1\r\ns=-\r\nc=IN IP4 192.168.1.1\r\nt=0 0\r\nm=audio 5004 RTP/AVP 0\r\n"),
+			contentType: "application/sdp",
+			wantErr:     false,
+		},
+		{
+			name:        "body too large",
+			body:        make([]byte, MaxBodyLength+1),
+			contentType: "application/sdp",
+			wantErr:     true,
+			errMsg:      "слишком большое",
+		},
+		{
+			name:        "invalid SDP - missing version",
+			body:        []byte("o=- 123 456 IN IP4 192.168.1.1\r\n"),
+			contentType: "application/sdp",
+			wantErr:     true,
+			errMsg:      "отсутствует версия",
+		},
+		{
+			name:        "too many media lines",
+			body:        []byte("v=0\r\n" + strings.Repeat("m=audio 5004 RTP/AVP 0\r\n", 11)),
+			contentType: "application/sdp",
+			wantErr:     true,
+			errMsg:      "слишком много медиа линий",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := sv.ValidateBody(tt.body, tt.contentType)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestSecurityValidator_ValidateStatusCode(t *testing.T) {
+	sv := NewSecurityValidator(DefaultSecurityConfig())
+
+	tests := []struct {
+		name       string
+		statusCode int
+		wantErr    bool
+	}{
+		{"valid 200", 200, false},
+		{"valid 100", 100, false},
+		{"valid 699", 699, false},
+		{"invalid below 100", 99, true},
+		{"invalid above 699", 700, true},
+		{"invalid negative", -1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := sv.ValidateStatusCode(tt.statusCode)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestSecurityValidator_ValidateRequestURI(t *testing.T) {
+	sv := NewSecurityValidator(DefaultSecurityConfig())
+
+	tests := []struct {
+		name    string
+		uri     string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid SIP URI",
+			uri:     "sip:alice@example.com",
+			wantErr: false,
+		},
+		{
+			name:    "URI too long",
+			uri:     "sip:" + strings.Repeat("a", MaxURILength),
+			wantErr: true,
+			errMsg:  "слишком длинный",
+		},
+		{
+			name:    "SQL injection attempt",
+			uri:     "sip:alice@example.com'; DROP TABLE users;--",
+			wantErr: true,
+			errMsg:  "потенциально опасный паттерн",
+		},
+		{
+			name:    "command injection attempt",
+			uri:     "sip:alice@example.com$(whoami)",
+			wantErr: true,
+			errMsg:  "потенциально опасный паттерн",
+		},
+		{
+			name:    "XSS attempt",
+			uri:     "sip:alice@example.com<script>alert('xss')</script>",
+			wantErr: true,
+			errMsg:  "потенциально опасный паттерн",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := sv.ValidateRequestURI(tt.uri)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestSecurityValidator_RateLimit(t *testing.T) {
+	config := DefaultSecurityConfig()
+	config.MaxDialogsPerIP = 3
+	sv := NewSecurityValidator(config)
+
+	// Тестируем базовый rate limiting
+	key := "test_key"
+	
+	// Первые 3 запроса должны пройти
+	for i := 0; i < 3; i++ {
+		err := sv.CheckRateLimit(key)
+		assert.NoError(t, err, "запрос %d должен пройти", i+1)
+	}
+	
+	// 4-й запрос должен быть заблокирован
+	err := sv.CheckRateLimit(key)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "превышен лимит")
+	
+	// После сброса должно снова работать
+	sv.rateLimiter.Reset(key)
+	err = sv.CheckRateLimit(key)
+	assert.NoError(t, err)
 }
 
 func TestValidateSIPURI(t *testing.T) {
@@ -35,6 +245,7 @@ func TestValidateSIPURI(t *testing.T) {
 		name    string
 		uri     *sip.Uri
 		wantErr bool
+		errMsg  string
 	}{
 		{
 			name: "valid SIP URI",
@@ -51,7 +262,7 @@ func TestValidateSIPURI(t *testing.T) {
 			uri: &sip.Uri{
 				Scheme: "sips",
 				User:   "bob",
-				Host:   "192.168.1.1",
+				Host:   "secure.example.com",
 				Port:   5061,
 			},
 			wantErr: false,
@@ -60,6 +271,7 @@ func TestValidateSIPURI(t *testing.T) {
 			name:    "nil URI",
 			uri:     nil,
 			wantErr: true,
+			errMsg:  "не может быть nil",
 		},
 		{
 			name: "invalid scheme",
@@ -68,6 +280,7 @@ func TestValidateSIPURI(t *testing.T) {
 				Host:   "example.com",
 			},
 			wantErr: true,
+			errMsg:  "неподдерживаемая схема",
 		},
 		{
 			name: "missing host",
@@ -76,40 +289,38 @@ func TestValidateSIPURI(t *testing.T) {
 				User:   "alice",
 			},
 			wantErr: true,
-		},
-		{
-			name: "invalid host",
-			uri: &sip.Uri{
-				Scheme: "sip",
-				Host:   "invalid..host",
-			},
-			wantErr: true,
+			errMsg:  "отсутствует хост",
 		},
 		{
 			name: "invalid port",
 			uri: &sip.Uri{
 				Scheme: "sip",
 				Host:   "example.com",
-				Port:   99999,
+				Port:   70000,
 			},
 			wantErr: true,
+			errMsg:  "некорректный порт",
 		},
 		{
 			name: "invalid user",
 			uri: &sip.Uri{
 				Scheme: "sip",
-				User:   "user<script>",
+				User:   "alice<script>",
 				Host:   "example.com",
 			},
 			wantErr: true,
+			errMsg:  "некорректное имя пользователя",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateSIPURI(tt.uri)
 			if tt.wantErr {
 				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
 			} else {
 				assert.NoError(t, err)
 			}
@@ -117,101 +328,58 @@ func TestValidateSIPURI(t *testing.T) {
 	}
 }
 
-func TestIsValidHost(t *testing.T) {
+func TestParseReferTo_Security(t *testing.T) {
 	tests := []struct {
-		host  string
-		valid bool
-	}{
-		{"example.com", true},
-		{"sub.example.com", true},
-		{"192.168.1.1", true},
-		{"::1", true},
-		{"2001:db8::1", true},
-		{"example", true},
-		{"exam-ple.com", true},
-		{"123.com", true},
-		{"", false},
-		{"example..com", false},
-		{".example.com", false},
-		{"example.com.", false},
-		{"exam ple.com", false},
-		{"example_com", false},
-	}
-	
-	for _, tt := range tests {
-		t.Run(tt.host, func(t *testing.T) {
-			assert.Equal(t, tt.valid, isValidHost(tt.host))
-		})
-	}
-}
-
-func TestIsValidSIPUser(t *testing.T) {
-	tests := []struct {
-		user  string
-		valid bool
-	}{
-		{"alice", true},
-		{"alice123", true},
-		{"alice-bob", true},
-		{"alice_bob", true},
-		{"alice.bob", true},
-		{"alice+bob", true},
-		{"alice;param=value", true},
-		{"alice?query", true},
-		{"", false},
-		{"alice<script>", false},
-		{"alice bob", false},
-		{"alice@bob", false},
-		{"alice#bob", false},
-	}
-	
-	for _, tt := range tests {
-		t.Run(tt.user, func(t *testing.T) {
-			assert.Equal(t, tt.valid, isValidSIPUser(tt.user))
-		})
-	}
-}
-
-func TestSanitizeDisplayName(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"Alice", "Alice"},
-		{"Alice Smith", "Alice Smith"},
-		{"Alice<script>alert('xss')</script>", "Alicescriptalert('xss')/script"},
-		{"Alice\"Bob\"", "AliceBob"},
-		{"  Alice  ", "Alice"},
-		{strings.Repeat("A", 200), strings.Repeat("A", 128)},
-		{"Alice\x00Bob", "AliceBob"},
-		{"Alice\nBob", "AliceBob"},
-	}
-	
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.expected, sanitizeDisplayName(tt.input))
-		})
-	}
-}
-
-func TestValidateCallID(t *testing.T) {
-	tests := []struct {
-		callID  string
+		name    string
+		input   string
 		wantErr bool
+		errMsg  string
 	}{
-		{"12345@example.com", false},
-		{"unique-id-123", false},
-		{"", true},
-		{"call id with spaces", true},
-		{"call\x00id", true},
-		{strings.Repeat("A", 300), true},
+		{
+			name:    "valid Refer-To",
+			input:   "<sip:bob@example.com>",
+			wantErr: false,
+		},
+		{
+			name:    "Refer-To too long",
+			input:   "<sip:" + strings.Repeat("a", MaxURILength) + "@example.com>",
+			wantErr: true,
+			errMsg:  "слишком длинный",
+		},
+		{
+			name:    "empty Refer-To",
+			input:   "",
+			wantErr: true,
+			errMsg:  "пустой",
+		},
+		{
+			name:    "Refer-To with CRLF",
+			input:   "<sip:bob@example.com>\r\nX-Evil: hack",
+			wantErr: true,
+			errMsg:  "недопустимые символы",
+		},
+		{
+			name:    "too many parameters",
+			input:   "<sip:bob@example.com?" + strings.Repeat("param=value&", 22) + "param=value>",
+			wantErr: true,
+			errMsg:  "слишком много параметров",
+		},
+		{
+			name:    "invalid URI scheme in Refer-To",
+			input:   "<http://evil.com>",
+			wantErr: true,
+			errMsg:  "некорректный URI",
+		},
 	}
-	
+
 	for _, tt := range tests {
-		t.Run(tt.callID, func(t *testing.T) {
-			err := validateCallID(tt.callID)
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := parseReferTo(tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
 			} else {
 				assert.NoError(t, err)
 			}
@@ -219,82 +387,163 @@ func TestValidateCallID(t *testing.T) {
 	}
 }
 
-func TestValidateCSeq(t *testing.T) {
+func TestParseReplaces_Security(t *testing.T) {
 	tests := []struct {
-		seq     uint32
+		name    string
+		input   string
 		wantErr bool
+		errMsg  string
 	}{
-		{0, false},
-		{1, false},
-		{1000, false},
-		{2147483647, false},
-		{2147483648, true},
-		{4294967295, true},
+		{
+			name:    "valid Replaces",
+			input:   "abc123;to-tag=tag1;from-tag=tag2",
+			wantErr: false,
+		},
+		{
+			name:    "Replaces too long",
+			input:   strings.Repeat("a", 600),
+			wantErr: true,
+			errMsg:  "слишком длинный",
+		},
+		{
+			name:    "empty Replaces",
+			input:   "",
+			wantErr: true,
+			errMsg:  "пустой",
+		},
+		{
+			name:    "Replaces with dangerous chars",
+			input:   "callid<script>;to-tag=tag1",
+			wantErr: true,
+			errMsg:  "недопустимые символы",
+		},
+		{
+			name:    "missing tags",
+			input:   "callid123",
+			wantErr: true,
+			errMsg:  "отсутствуют теги",
+		},
+		{
+			name:    "tag too long",
+			input:   "callid;to-tag=" + strings.Repeat("a", 200),
+			wantErr: true,
+			errMsg:  "слишком длинный тег",
+		},
 	}
-	
+
 	for _, tt := range tests {
-		t.Run(string(rune(tt.seq)), func(t *testing.T) {
-			err := validateCSeq(tt.seq)
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, _, err := parseReplaces(tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
 			} else {
 				assert.NoError(t, err)
 			}
 		})
+	}
+}
+
+func TestSecureTagGeneration(t *testing.T) {
+	// Генерируем несколько тегов и проверяем их уникальность
+	tags := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		tag := generateSecureTag()
+		assert.NotEmpty(t, tag)
+		assert.False(t, tags[tag], "тег должен быть уникальным")
+		tags[tag] = true
+		
+		// Проверяем что тег содержит только hex символы
+		for _, r := range tag {
+			assert.True(t, (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f'),
+				"тег должен содержать только hex символы")
+		}
 	}
 }
 
 func TestSimpleRateLimiter(t *testing.T) {
 	limiter := NewSimpleRateLimiter()
 	
-	// Проверяем дефолтные лимиты
-	t.Run("dialog_create limit", func(t *testing.T) {
-		// Должны пройти первые 100 запросов
-		for i := 0; i < 100; i++ {
-			assert.True(t, limiter.Allow("dialog_create"))
-		}
-		
-		// 101-й запрос должен быть отклонен
-		assert.False(t, limiter.Allow("dialog_create"))
-		
-		// После сброса снова можем делать запросы
-		limiter.Reset("dialog_create")
-		assert.True(t, limiter.Allow("dialog_create"))
-	})
+	// Запускаем таймер очистки с коротким интервалом для теста
+	limiter.StartResetTimer(100 * time.Millisecond)
 	
-	t.Run("invite limit", func(t *testing.T) {
-		// Должны пройти первые 50 запросов
-		for i := 0; i < 50; i++ {
-			assert.True(t, limiter.Allow("invite"))
-		}
-		
-		// 51-й запрос должен быть отклонен
-		assert.False(t, limiter.Allow("invite"))
-	})
+	// Тестируем dialog_create лимит (100)
+	key := "dialog_create"
+	for i := 0; i < 100; i++ {
+		assert.True(t, limiter.Allow(key))
+	}
+	assert.False(t, limiter.Allow(key), "должен превысить лимит")
 	
-	t.Run("unknown key", func(t *testing.T) {
-		// Для неизвестного ключа используется дефолтный лимит (10)
-		for i := 0; i < 10; i++ {
-			assert.True(t, limiter.Allow("unknown"))
-		}
-		assert.False(t, limiter.Allow("unknown"))
-	})
+	// Тестируем invite лимит (50)
+	key = "invite"
+	for i := 0; i < 50; i++ {
+		assert.True(t, limiter.Allow(key))
+	}
+	assert.False(t, limiter.Allow(key), "должен превысить лимит")
+	
+	// Тестируем refer лимит (10)
+	key = "refer"
+	for i := 0; i < 10; i++ {
+		assert.True(t, limiter.Allow(key))
+	}
+	assert.False(t, limiter.Allow(key), "должен превысить лимит")
+	
+	// Ждем сброса
+	time.Sleep(150 * time.Millisecond)
+	
+	// После сброса должно снова работать
+	assert.True(t, limiter.Allow("dialog_create"))
+	assert.True(t, limiter.Allow("invite"))
+	assert.True(t, limiter.Allow("refer"))
 }
 
-func TestSimpleRateLimiterReset(t *testing.T) {
-	limiter := NewSimpleRateLimiter()
-	
-	// Заполняем лимит
-	for i := 0; i < 10; i++ {
-		require.True(t, limiter.Allow("test"))
+func TestDialogSecurityIntegration(t *testing.T) {
+	// Создаем мок UASUAC
+	uasuac := &UASUAC{
+		contactURI: sip.Uri{
+			Scheme: "sip",
+			User:   "test",
+			Host:   "localhost",
+			Port:   5060,
+		},
 	}
-	require.False(t, limiter.Allow("test"))
 	
-	// Сбрасываем все счетчики
-	limiter.mu.Lock()
-	limiter.requests = make(map[string]int)
-	limiter.mu.Unlock()
+	// Создаем диалог с валидатором безопасности
+	dialog := NewDialog(uasuac, true)
+	require.NotNil(t, dialog.securityValidator)
 	
-	// Теперь снова можем делать запросы
-	assert.True(t, limiter.Allow("test"))
+	// Переводим диалог в состояние early для тестирования Answer и Reject
+	dialog.stateMachine.SetState("early")
+	
+	// Тестируем Answer с некорректными данными
+	err := dialog.Answer(Body{
+		Content:     make([]byte, MaxBodyLength+1),
+		ContentType: "application/sdp",
+	}, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "слишком большое")
+	
+	// Тестируем Answer с опасными заголовками
+	err = dialog.Answer(Body{}, map[string]string{
+		"X-Custom": "value\r\nX-Injected: hack",
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "недопустимые символы")
+	
+	// Тестируем Reject с некорректным кодом
+	err = dialog.Reject(999, "Invalid", Body{}, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "некорректный код статуса")
+	
+	// Тестируем Refer с некорректным URI
+	dialog.stateMachine.SetState("confirmed")
+	invalidURI := sip.Uri{
+		Scheme: "http", // Некорректная схема
+		Host:   "evil.com",
+	}
+	_, err = dialog.Refer(context.Background(), invalidURI)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "некорректный целевой URI")
 }

@@ -18,6 +18,9 @@ type DialogManager struct {
 
 	// UASUAC для создания диалогов
 	uasuac *UASUAC
+	
+	// Валидатор безопасности
+	securityValidator *SecurityValidator
 
 	// Мьютекс для синхронизации
 	mu sync.RWMutex
@@ -26,8 +29,9 @@ type DialogManager struct {
 // NewDialogManager создает новый менеджер диалогов
 func NewDialogManager() *DialogManager {
 	return &DialogManager{
-		dialogs:     make(map[string]IDialog),
-		callIDIndex: make(map[string]string),
+		dialogs:           make(map[string]IDialog),
+		callIDIndex:       make(map[string]string),
+		securityValidator: NewSecurityValidator(DefaultSecurityConfig()),
 	}
 }
 
@@ -40,25 +44,43 @@ func (dm *DialogManager) SetUASUAC(uasuac *UASUAC) {
 
 // CreateServerDialog создает новый серверный диалог (UAS)
 func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTransaction) (IDialog, error) {
+	// Проверка rate limit до захвата мьютекса
+	remoteAddr := req.Source()
+	if err := dm.securityValidator.CheckRateLimit(remoteAddr); err != nil {
+		return nil, fmt.Errorf("превышен лимит запросов: %w", err)
+	}
+	
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
+	// При ошибке освобождаем rate limit
+	var err error
+	defer func() {
+		if err != nil {
+			dm.securityValidator.rateLimiter.Reset(remoteAddr)
+		}
+	}()
+
 	if dm.uasuac == nil {
-		return nil, fmt.Errorf("UASUAC не установлен")
+		err = fmt.Errorf("UASUAC не установлен")
+		return nil, err
 	}
 
 	// Проверяем, что это INVITE
 	if req.Method != sip.INVITE {
-		return nil, fmt.Errorf("можно создать диалог только из INVITE запроса")
+		err = fmt.Errorf("можно создать диалог только из INVITE запроса")
+		return nil, err
 	}
 	
 	// Валидируем Call-ID
 	if req.CallID() == nil {
-		return nil, fmt.Errorf("отсутствует Call-ID в запросе")
+		err = fmt.Errorf("отсутствует Call-ID в запросе")
+		return nil, err
 	}
 	
-	if err := validateCallID(req.CallID().Value()); err != nil {
-		return nil, fmt.Errorf("некорректный Call-ID: %w", err)
+	if err = validateCallID(req.CallID().Value()); err != nil {
+		err = fmt.Errorf("некорректный Call-ID: %w", err)
+		return nil, err
 	}
 
 	// Проверяем, нет ли уже диалога с таким Call-ID
@@ -71,8 +93,9 @@ func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTrans
 	dialog := NewDialog(dm.uasuac, true) // isServer = true
 
 	// Настраиваем диалог из INVITE
-	if err := dialog.SetupFromInvite(req, tx); err != nil {
-		return nil, fmt.Errorf("ошибка настройки диалога: %w", err)
+	if err = dialog.SetupFromInvite(req, tx); err != nil {
+		err = fmt.Errorf("ошибка настройки диалога: %w", err)
+		return nil, err
 	}
 
 	// Сохраняем диалог

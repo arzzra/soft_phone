@@ -92,9 +92,9 @@ func TestParseReplaces(t *testing.T) {
 			wantFromTag: "xyz",
 		},
 		{
-			name:       "только Call-ID",
-			replaces:   "call456@host",
-			wantCallID: "call456@host",
+			name:     "только Call-ID",
+			replaces: "call456@host",
+			wantErr:  true, // Теперь требуется хотя бы один тег
 		},
 		{
 			name:       "Call-ID с одним тегом",

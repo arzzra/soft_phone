@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -12,6 +13,54 @@ import (
 
 	"github.com/emiago/sipgo/sip"
 )
+
+// Константы безопасности
+const (
+	// Максимальные размеры
+	MaxHeaderLength = 8192  // Максимальная длина заголовка
+	MaxBodyLength   = 65536 // Максимальная длина тела сообщения
+	MaxDialogsPerIP = 100   // Максимум диалогов с одного IP
+	MaxURILength    = 2048  // Максимальная длина URI
+	
+	// Минимальные размеры
+	MinStatusCode = 100
+	MaxStatusCode = 699
+)
+
+// SecurityConfig конфигурация безопасности для диалога
+type SecurityConfig struct {
+	// Включение различных проверок
+	EnableHeaderValidation bool
+	EnableBodyValidation   bool
+	EnableRateLimit        bool
+	EnableURIValidation    bool
+	
+	// Настройки лимитов
+	MaxHeaderLength int
+	MaxBodyLength   int
+	MaxDialogsPerIP int
+	MaxURILength    int
+	
+	// Настройки rate limiting
+	RateLimitWindow   time.Duration
+	RateLimitCleanup  time.Duration
+}
+
+// DefaultSecurityConfig возвращает конфигурацию безопасности по умолчанию
+func DefaultSecurityConfig() *SecurityConfig {
+	return &SecurityConfig{
+		EnableHeaderValidation: true,
+		EnableBodyValidation:   true,
+		EnableRateLimit:        true,
+		EnableURIValidation:    true,
+		MaxHeaderLength:        MaxHeaderLength,
+		MaxBodyLength:          MaxBodyLength,
+		MaxDialogsPerIP:        MaxDialogsPerIP,
+		MaxURILength:           MaxURILength,
+		RateLimitWindow:        5 * time.Minute,
+		RateLimitCleanup:       1 * time.Minute,
+	}
+}
 
 // generateSecureTag генерирует криптографически стойкий тег для диалога
 func generateSecureTag() string {
@@ -88,26 +137,6 @@ func isValidSIPUser(user string) bool {
 	return userRegex.MatchString(user)
 }
 
-// sanitizeDisplayName очищает display name от потенциально опасных символов
-func sanitizeDisplayName(name string) string {
-	// Удаляем управляющие символы и кавычки
-	name = strings.Map(func(r rune) rune {
-		if r < 32 || r == 127 || r == '"' || r == '<' || r == '>' {
-			return -1
-		}
-		return r
-	}, name)
-	
-	// Обрезаем пробелы
-	name = strings.TrimSpace(name)
-	
-	// Ограничиваем длину
-	if len(name) > 128 {
-		name = name[:128]
-	}
-	
-	return name
-}
 
 // validateCallID проверяет корректность Call-ID
 func validateCallID(callID string) error {
@@ -134,15 +163,6 @@ func validateCallID(callID string) error {
 	return nil
 }
 
-// validateCSeq проверяет корректность CSeq
-func validateCSeq(seq uint32) error {
-	// CSeq должен быть в разумных пределах
-	// Согласно RFC 3261, это 32-битное число
-	if seq > 2147483647 { // 2^31 - 1
-		return fmt.Errorf("CSeq слишком большой: %d", seq)
-	}
-	return nil
-}
 
 // RateLimiter интерфейс для ограничения частоты запросов
 type RateLimiter interface {
@@ -154,9 +174,10 @@ type RateLimiter interface {
 
 // SimpleRateLimiter простая реализация ограничителя частоты
 type SimpleRateLimiter struct {
-	requests map[string]int
-	limits   map[string]int
-	mu       sync.RWMutex
+	requests      map[string]int
+	limits        map[string]int
+	defaultLimit  int
+	mu            sync.RWMutex
 }
 
 // NewSimpleRateLimiter создает новый ограничитель частоты
@@ -168,7 +189,15 @@ func NewSimpleRateLimiter() *SimpleRateLimiter {
 			"invite":        50,  // Максимум 50 INVITE в минуту
 			"refer":         10,  // Максимум 10 REFER в минуту
 		},
+		defaultLimit: 10, // Дефолтный лимит для неизвестных ключей
 	}
+}
+
+// SetLimit устанавливает лимит для ключа
+func (r *SimpleRateLimiter) SetLimit(key string, limit int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.limits[key] = limit
 }
 
 // Allow проверяет, можно ли выполнить операцию
@@ -178,7 +207,7 @@ func (r *SimpleRateLimiter) Allow(key string) bool {
 	
 	limit, ok := r.limits[key]
 	if !ok {
-		limit = 10 // Дефолтный лимит
+		limit = r.defaultLimit
 	}
 	
 	count := r.requests[key]
@@ -207,4 +236,179 @@ func (r *SimpleRateLimiter) StartResetTimer(interval time.Duration) {
 			r.mu.Unlock()
 		}
 	}()
+}
+
+// SecurityValidator проверяет безопасность входных данных
+type SecurityValidator struct {
+	config      *SecurityConfig
+	rateLimiter RateLimiter
+}
+
+// NewSecurityValidator создает новый валидатор безопасности
+func NewSecurityValidator(config *SecurityConfig) *SecurityValidator {
+	if config == nil {
+		config = DefaultSecurityConfig()
+	}
+	
+	limiter := NewSimpleRateLimiter()
+	limiter.StartResetTimer(config.RateLimitCleanup)
+	
+	return &SecurityValidator{
+		config:      config,
+		rateLimiter: limiter,
+	}
+}
+
+// ValidateHeader проверяет заголовок на безопасность
+func (sv *SecurityValidator) ValidateHeader(name, value string) error {
+	if !sv.config.EnableHeaderValidation {
+		return nil
+	}
+	
+	// Проверка длины
+	if len(value) > sv.config.MaxHeaderLength {
+		return fmt.Errorf("заголовок %s слишком длинный: %d байт (максимум %d)", name, len(value), sv.config.MaxHeaderLength)
+	}
+	
+	// Проверка на опасные символы (защита от header injection)
+	if strings.ContainsAny(value, "\r\n\x00") {
+		return fmt.Errorf("недопустимые символы в заголовке %s", name)
+	}
+	
+	// Специальная проверка для URI заголовков
+	uriHeaders := []string{"Refer-To", "Contact", "From", "To", "Route", "Record-Route"}
+	for _, h := range uriHeaders {
+		if strings.EqualFold(name, h) {
+			// Извлекаем URI из заголовка для валидации
+			uri := extractURIFromHeaderValue(value)
+			if uri != nil {
+				if err := validateSIPURI(uri); err != nil {
+					return fmt.Errorf("некорректный URI в заголовке %s: %w", name, err)
+				}
+			}
+			break
+		}
+	}
+	
+	return nil
+}
+
+// ValidateBody проверяет тело сообщения
+func (sv *SecurityValidator) ValidateBody(body []byte, contentType string) error {
+	if !sv.config.EnableBodyValidation {
+		return nil
+	}
+	
+	// Проверка размера
+	if len(body) > sv.config.MaxBodyLength {
+		return fmt.Errorf("тело сообщения слишком большое: %d байт (максимум %d)", len(body), sv.config.MaxBodyLength)
+	}
+	
+	// Дополнительные проверки в зависимости от content-type
+	if strings.Contains(strings.ToLower(contentType), "application/sdp") {
+		return sv.validateSDP(body)
+	}
+	
+	return nil
+}
+
+// validateSDP проверяет SDP на безопасность
+func (sv *SecurityValidator) validateSDP(body []byte) error {
+	sdpStr := string(body)
+	
+	// Базовая проверка структуры SDP
+	if !strings.Contains(sdpStr, "v=0") {
+		return fmt.Errorf("некорректный SDP: отсутствует версия")
+	}
+	
+	// Проверка на слишком большое количество медиа-линий
+	mediaCount := strings.Count(sdpStr, "\nm=")
+	if mediaCount > 10 {
+		return fmt.Errorf("слишком много медиа линий в SDP: %d", mediaCount)
+	}
+	
+	// Проверка на подозрительные паттерны
+	dangerousPatterns := []string{
+		"a=crypto:",  // Проверяем криптографические параметры
+		"a=ice-pwd:", // Проверяем ICE пароли
+	}
+	
+	for _, pattern := range dangerousPatterns {
+		count := strings.Count(strings.ToLower(sdpStr), pattern)
+		if count > 5 {
+			return fmt.Errorf("подозрительное количество %s в SDP: %d", pattern, count)
+		}
+	}
+	
+	return nil
+}
+
+// ValidateStatusCode проверяет корректность кода статуса
+func (sv *SecurityValidator) ValidateStatusCode(statusCode int) error {
+	if statusCode < MinStatusCode || statusCode > MaxStatusCode {
+		return fmt.Errorf("некорректный код статуса: %d (должен быть между %d и %d)", statusCode, MinStatusCode, MaxStatusCode)
+	}
+	return nil
+}
+
+// CheckRateLimit проверяет лимиты частоты запросов
+func (sv *SecurityValidator) CheckRateLimit(key string) error {
+	if !sv.config.EnableRateLimit {
+		return nil
+	}
+	
+	// Устанавливаем лимит из конфигурации для обычных ключей
+	if limiter, ok := sv.rateLimiter.(*SimpleRateLimiter); ok {
+		limiter.SetLimit(key, sv.config.MaxDialogsPerIP)
+	}
+	
+	if !sv.rateLimiter.Allow(key) {
+		return fmt.Errorf("превышен лимит запросов для %s", key)
+	}
+	
+	return nil
+}
+
+// ValidateRequestURI проверяет URI запроса на безопасность
+func (sv *SecurityValidator) ValidateRequestURI(uri string) error {
+	if !sv.config.EnableURIValidation {
+		return nil
+	}
+	
+	// Проверка длины
+	if len(uri) > sv.config.MaxURILength {
+		return fmt.Errorf("URI слишком длинный: %d байт (максимум %d)", len(uri), sv.config.MaxURILength)
+	}
+	
+	// Проверка на SQL/Command injection паттерны
+	dangerousPatterns := []string{
+		"';", "--", "/*", "*/", "xp_", "sp_",
+		"&&", "||", "|", ";", "`", "$(",
+		"<script", "</script>", "javascript:",
+		"onerror=", "onload=", "onclick=",
+	}
+	
+	uriLower := strings.ToLower(uri)
+	for _, pattern := range dangerousPatterns {
+		if strings.Contains(uriLower, pattern) {
+			return fmt.Errorf("потенциально опасный паттерн в URI: %s", pattern)
+		}
+	}
+	
+	// Проверка корректности URL encoding
+	if _, err := url.QueryUnescape(uri); err != nil {
+		return fmt.Errorf("некорректный URL encoding в URI: %w", err)
+	}
+	
+	return nil
+}
+
+// ValidateHeaders проверяет все заголовки запроса
+func (sv *SecurityValidator) ValidateHeaders(headers map[string]string) error {
+	for name, value := range headers {
+		if err := sv.ValidateHeader(name, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }

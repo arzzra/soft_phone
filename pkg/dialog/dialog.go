@@ -58,6 +58,9 @@ type Dialog struct {
 	
 	// Обработчик заголовков
 	headerProcessor *HeaderProcessor
+	
+	// Валидатор безопасности
+	securityValidator *SecurityValidator
 
 	// Мьютекс для синхронизации
 	mu sync.RWMutex
@@ -68,14 +71,15 @@ func NewDialog(uasuac *UASUAC, isServer bool) *Dialog {
 	ctx, cancel := context.WithCancel(context.Background())
 	
 	d := &Dialog{
-		uasuac:          uasuac,
-		isServer:        isServer,
-		isClient:        !isServer,
-		ctx:             ctx,
-		cancel:          cancel,
-		createdAt:       time.Now(),
-		lastActivity:    time.Now(),
-		headerProcessor: NewHeaderProcessor(),
+		uasuac:            uasuac,
+		isServer:          isServer,
+		isClient:          !isServer,
+		ctx:               ctx,
+		cancel:            cancel,
+		createdAt:         time.Now(),
+		lastActivity:      time.Now(),
+		headerProcessor:   NewHeaderProcessor(),
+		securityValidator: NewSecurityValidator(DefaultSecurityConfig()),
 	}
 
 	// Инициализируем FSM
@@ -261,6 +265,18 @@ func (d *Dialog) Answer(body Body, headers map[string]string) error {
 		return fmt.Errorf("неверное состояние диалога для ответа: %s", d.stateMachine.Current())
 	}
 
+	// Валидация тела сообщения
+	if body.Content != nil {
+		if err := d.securityValidator.ValidateBody(body.Content, body.ContentType); err != nil {
+			return fmt.Errorf("ошибка валидации тела сообщения: %w", err)
+		}
+	}
+
+	// Валидация заголовков
+	if err := d.securityValidator.ValidateHeaders(headers); err != nil {
+		return fmt.Errorf("ошибка валидации заголовков: %w", err)
+	}
+
 	// Создаем ответ 200 OK
 	if inviteTx, ok := d.inviteTx.(sip.ServerTransaction); ok {
 		// Получаем исходный запрос из сохраненного dialog
@@ -306,6 +322,23 @@ func (d *Dialog) Reject(statusCode int, reason string, body Body, headers map[st
 
 	if d.stateMachine.Current() != "early" {
 		return fmt.Errorf("неверное состояние диалога для отклонения: %s", d.stateMachine.Current())
+	}
+
+	// Валидация кода статуса
+	if err := d.securityValidator.ValidateStatusCode(statusCode); err != nil {
+		return fmt.Errorf("некорректный код статуса: %w", err)
+	}
+
+	// Валидация тела сообщения
+	if body.Content != nil {
+		if err := d.securityValidator.ValidateBody(body.Content, body.ContentType); err != nil {
+			return fmt.Errorf("ошибка валидации тела сообщения: %w", err)
+		}
+	}
+
+	// Валидация заголовков
+	if err := d.securityValidator.ValidateHeaders(headers); err != nil {
+		return fmt.Errorf("ошибка валидации заголовков: %w", err)
 	}
 
 	// Создаем ответ с указанным кодом
@@ -426,12 +459,24 @@ func (d *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (si
 		return nil, fmt.Errorf("REFER можно отправить только в подтвержденном диалоге")
 	}
 
+	// Валидация целевого URI
+	if err := validateSIPURI(&target); err != nil {
+		return nil, fmt.Errorf("некорректный целевой URI: %w", err)
+	}
+
 	// Создаем REFER запрос
 	referReq := sip.NewRequest(sip.REFER, d.remoteTarget)
 	d.applyDialogHeaders(referReq)
 
 	// Добавляем Refer-To заголовок
-	referReq.AppendHeader(sip.NewHeader("Refer-To", fmt.Sprintf("<%s>", target.String())))
+	referToValue := fmt.Sprintf("<%s>", target.String())
+	
+	// Валидация Refer-To заголовка
+	if err := d.securityValidator.ValidateHeader("Refer-To", referToValue); err != nil {
+		return nil, fmt.Errorf("ошибка валидации Refer-To заголовка: %w", err)
+	}
+	
+	referReq.AppendHeader(sip.NewHeader("Refer-To", referToValue))
 
 	// Применяем опции
 	for _, opt := range opts {
@@ -508,6 +553,11 @@ func (d *Dialog) SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpt
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Валидация целевого URI
+	if err := validateSIPURI(&target); err != nil {
+		return nil, fmt.Errorf("некорректный целевой URI: %w", err)
+	}
+
 	// Создаем запрос
 	req := sip.NewRequest(sip.INFO, target)
 	d.applyDialogHeaders(req)
@@ -517,6 +567,15 @@ func (d *Dialog) SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpt
 		if err := opt(req); err != nil {
 			return nil, err
 		}
+	}
+
+	// Валидация заголовков запроса после применения опций
+	headers := make(map[string]string)
+	for _, h := range req.Headers() {
+		headers[h.Name()] = h.Value()
+	}
+	if err := d.securityValidator.ValidateHeaders(headers); err != nil {
+		return nil, fmt.Errorf("ошибка валидации заголовков запроса: %w", err)
 	}
 
 	// Проверяем наличие клиента
@@ -745,6 +804,12 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 	referToHeader := req.GetHeader("Refer-To")
 	if referToHeader == nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Missing Refer-To header", nil)
+		return tx.Respond(res)
+	}
+	
+	// Валидация Refer-To заголовка
+	if err := d.securityValidator.ValidateHeader("Refer-To", referToHeader.Value()); err != nil {
+		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, fmt.Sprintf("Invalid Refer-To: %v", err), nil)
 		return tx.Respond(res)
 	}
 	
