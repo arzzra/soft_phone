@@ -2,178 +2,158 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Important Context
+- IMPORTANT: Отвечай и пиши комментарии и документацию  на русском языке
+- Be brutally honest, don't be a yes man. If I am wrong, point it out bluntly.
+- I need honest feedback on my code.
+-
+## Code Quality
+**ВАЖНО**: После внесения изменений в код необходимо:
+1. Запустить линтер командой `make lint` или `golangci-lint run`
+2. Исправить все обнаруженные линтером ошибки и предупреждения
+3. Убедиться, что код соответствует настроенным в `.golangci.yml` правилам
+4. Только после успешного прохождения линтера считать задачу выполненной
+5. Сделать commit полноценный. Не указывай себя в авторах
 
-## SIP Protocol Implementation
-- Working directory: `pkg/sip/` - вся реализация SIP протокола здесь
-- Development approach: Test-first - сначала пишем тесты, потом реализацию
-- Use separate sub-agents for each layer implementation
+# Правила использования MCP инструментов
 
-## Project Overview
-This is a professional-grade Go softphone implementation with RTP/Media/SIP stack, focusing on proper RFC compliance and timing requirements for VoIP applications. The project implements a complete telephony stack from RTP packet handling up to SIP dialog management.
+## Общие принципы
+- **ПРИОРИТЕТ**: Всегда используй MCP инструменты вместо стандартных поисковых инструментов для Go кода
+- **ЭФФЕКТИВНОСТЬ**: MCP инструменты предоставляют более точную и структурированную информацию
+- **ПОСЛЕДОВАТЕЛЬНОСТЬ**: Используй инструменты в правильном порядке для максимальной эффективности
 
-## Build Commands
+## 1. MCP gopls - Навигация и анализ Go кода
 
-### Basic Operations
-```bash
-# Build all packages
-go build ./...
+### Когда использовать:
+- **ВСЕГДА** для навигации по Go коду
+- При поиске определений функций, типов, переменных
+- Для поиска всех реализаций интерфейса
+- При рефакторинге (переименование символов)
+- Для поиска всех использований символа
+- При анализе структуры кода
+- Для получения информации о символах (hover)
 
-# Run all tests
-go test ./...
+### Приоритет инструментов gopls:
+1. **mcp__mcp-gopls__GoToDefinition** - переход к определению
+2. **mcp__mcp-gopls__FindReferences** - поиск всех использований
+3. **mcp__mcp-gopls__FindImplementers** - поиск реализаций интерфейса
+4. **mcp__mcp-gopls__Hover** - информация о символе
+5. **mcp__mcp-gopls__ListDocumentSymbols** - структура файла
+6. **mcp__mcp-gopls__SearchSymbol** - поиск символов по имени
+7. **mcp__mcp-gopls__RenameSymbol** - переименование
+8. **mcp__mcp-gopls__GetDiagnostics** - ошибки и предупреждения
+9. **mcp__mcp-gopls__FormatCode** - форматирование кода
+10. **mcp__mcp-gopls__OrganizeImports** - организация импортов
 
-# Run tests with verbose output
-go test -v ./...
+### Примеры использования:
+```
+// Поиск определения функции
+mcp__mcp-gopls__GoToDefinition(file, line, column)
 
-# Run specific package tests
-go test ./pkg/rtp/
-go test ./pkg/media/
-go test ./pkg/dialog/
+// Поиск всех использований переменной
+mcp__mcp-gopls__FindReferences(file, line, column)
 
-# Run single test by name
-go test ./pkg/dialog/ -run TestSendRefer
-go test ./pkg/dialog/ -run TestWaitRefer
-
-# Build and run examples
-go run ./examples_media/example_basic.go
-go run ./examples_media/example_with_rtp.go
-go run ./cmd/test_dtls/
+// Поиск всех реализаций интерфейса
+mcp__mcp-gopls__FindImplementers(file, line, column)
 ```
 
-### Testing Specific Features
-```bash
-# Test RTP timing demonstration
-cd test_timing && go run main.go
+## 2. MCP godoc - Документация Go пакетов
 
-# Test DTLS transport
-go run ./cmd/test_dtls/
+### Когда использовать:
+- **ВСЕГДА** перед чтением исходного кода пакета
+- При изучении API стандартной библиотеки
+- Для понимания внешних зависимостей
+- При работе с локальными пакетами
+- Для получения примеров использования
 
-# Run integration tests
-go test ./pkg/media/ -run TestIntegration
+### Приоритет использования:
+1. **Сначала** - базовая документация пакета
+2. **Затем** - конкретные символы (функции, типы)
+3. **При необходимости** - исходный код с флагом -src
 
-# Test SIP dialog functionality
-go test ./pkg/dialog/ -v -run TestSendRefer
-go test ./pkg/dialog/ -v -run TestSendReferWithReplaces
+### Примеры использования:
+```
+// Базовая документация пакета
+mcp__godoc-mcp__get_doc(path="net/http")
 
-# Test with race detection
-go test -race ./pkg/dialog/
+// Документация конкретной функции
+mcp__godoc-mcp__get_doc(path="net/http", target="HandleFunc")
+
+// Полная документация с примерами
+mcp__godoc-mcp__get_doc(path="io", cmd_flags=["-all"])
 ```
 
-## Code Architecture
+## 3. MCP context7 - Документация библиотек
 
-### 3-Layer Architecture
+### Когда использовать:
+- При работе с внешними библиотеками (не Go)
+- Для изучения фреймворков и инструментов
+- При поиске примеров использования
+- Для получения актуальной документации
+
+### Процесс работы:
+1. **Всегда** сначала вызывай `resolve-library-id`
+2. **Затем** используй полученный ID для `get-library-docs`
+
+### Примеры использования:
 ```
-┌─────────────────────────────────────┐
-│           Application Layer         │ ← SIP Dialog Management
-│          pkg/dialog/                │   (Call setup, teardown, REFER)
-├─────────────────────────────────────┤
-│           Media Layer               │ ← Audio processing, codecs
-│          pkg/media/                 │   (Jitter buffer, DTMF)
-├─────────────────────────────────────┤
-│           RTP Layer                 │ ← Packet transport, timing
-│          pkg/rtp/                   │   (UDP/DTLS, RTCP stats)
-└─────────────────────────────────────┘
-```
+// Поиск ID библиотеки
+mcp__context7__resolve-library-id(libraryName="mongodb")
 
-### Key Components
-
-#### SIP Dialog Layer (`pkg/dialog/`) - New Addition
-- **Architecture**: 3-tier hierarchy: Stack → Dialog → Transaction
-- **State Management**: Dual FSM approach (Dialog FSM + Transaction FSM)
-- **Call Transfer**: Complete REFER implementation (RFC 3515) with blind/attended transfer
-- **Asynchronous Pattern**: SendRefer() + WaitRefer() for non-blocking operations
-- **Thread Safety**: Concurrent dialog handling with proper synchronization using sync.RWMutex
-- **Role Separation**: Clear UAC/UAS distinction with different header handling
-
-#### RTP Layer (`pkg/rtp/`)
-- **Core Concept**: RFC-compliant RTP timing with buffering + ticker approach
-- **Transport Abstraction**: UDP and DTLS transports with platform-specific socket optimizations
-- **Session Management**: Multiple concurrent RTP sessions with SSRC management
-- **RTCP Support**: Quality statistics and feedback reports
-
-#### Media Layer (`pkg/media/`)
-- **Audio Processing**: Codec support (G.711, G.722, GSM, etc.)
-- **Timing Control**: Automatic ptime-based packet sending (20ms default)
-- **Jitter Buffer**: Adaptive buffering for smooth audio playback
-- **DTMF Support**: RFC 4733 compliant DTMF event handling
-
-### Critical Design Patterns
-
-#### SIP Dialog Asynchronous Pattern
-```go
-// CRITICAL: Two-phase REFER pattern for call transfer
-// Phase 1: Send request (non-blocking)
-err := dialog.SendRefer(ctx, targetURI, &ReferOpts{})
-if err != nil {
-    return fmt.Errorf("failed to send REFER: %w", err)
-}
-
-// Phase 2: Wait for response (blocking with timeout)
-subscription, err := dialog.WaitRefer(ctx)
-if err != nil {
-    return fmt.Errorf("REFER rejected: %w", err)
-}
-
-// Benefits: Separate timeout control, cancellable operations, thread-safe
+// Получение документации
+mcp__context7__get-library-docs(context7CompatibleLibraryID="/mongodb/docs")
 ```
 
-#### SIP Dialog State Management
-```go
-// Dual FSM approach: Dialog FSM + Transaction FSM
-// Dialog states: Init → Trying → Ringing → Established → Terminated
-// Each state transition is protected and validated
+## 4. MCP ide - Диагностика IDE
 
-// UAC vs UAS role separation affects header handling:
-if isUAS {
-    // For UAS: LocalTag = To tag, RemoteTag = From tag
-    key = DialogKey{CallID: callID, LocalTag: toTag, RemoteTag: fromTag}
-} else {
-    // For UAC: LocalTag = From tag, RemoteTag = To tag  
-    key = DialogKey{CallID: callID, LocalTag: fromTag, RemoteTag: toTag}
-}
+### Когда использовать:
+- Для получения диагностической информации
+- При отладке проблем с IDE
+- Дополнительно к gopls диагностике
+
+## Workflow для работы с Go кодом:
+
+### 1. Изучение нового кода:
+```
+1. mcp__mcp-gopls__ListDocumentSymbols - структура файла
+2. mcp__godoc-mcp__get_doc - документация пакета
+3. mcp__mcp-gopls__Hover - детали по символам
+4. mcp__mcp-gopls__GoToDefinition - переход к определениям
 ```
 
-#### RTP Timing Pattern
-```go
-// CORRECT: Buffered sending with proper timing
-session.SendAudio(audioData, 20*time.Millisecond)  // Accumulates in buffer
-// Ticker sends every ptime interval automatically
-
-// INCORRECT: Direct sending breaks timing
-session.WriteAudioDirect(rtpPayload)  // ⚠️ Violates RFC timing
+### 2. Поиск функциональности:
+```
+1. mcp__mcp-gopls__SearchSymbol - поиск по имени
+2. mcp__godoc-mcp__get_doc - проверка документации
+3. mcp__mcp-gopls__FindReferences - где используется
 ```
 
-#### Platform-Specific Socket Optimization
-- Files use build tags: `//go:build linux`, `//go:build darwin`, `//go:build windows`
-- Linux: SO_REUSEPORT, SO_BINDTODEVICE, SO_PRIORITY
-- macOS: SO_REUSEADDR, Traffic Class optimizations
-- Windows: Basic socket setup with compatibility focus
-
-#### Error Handling Convention
-- Transport errors: Wrapped with context (`fmt.Errorf("operation [transport]: %w", err)`)
-- Temporary errors: Check with `isTemporaryError()` for retry logic
-- Resource cleanup: Always use defer for connection/session cleanup
-- SIP Dialog errors: State validation before operations (`dialog must be in Established state`)
-
-#### SIP Dialog Thread Safety
-```go
-// All critical sections protected with RWMutex
-d.mutex.Lock()
-d.referSubscriptions[subscription.ID] = subscription
-d.mutex.Unlock()
-
-// Context-based cancellation for all long operations
-select {
-case resp := <-d.referTx.Responses():
-    // Handle response
-case <-ctx.Done():
-    return ctx.Err()  // Graceful cancellation
-}
+### 3. Рефакторинг:
+```
+1. mcp__mcp-gopls__FindReferences - найти все использования
+2. mcp__mcp-gopls__RenameSymbol - переименовать
+3. mcp__mcp-gopls__GetDiagnostics - проверить ошибки
+4. mcp__mcp-gopls__FormatCode - форматировать код
 ```
 
-### Testing Strategy
-- **Mock Transports**: `MockTransport` for unit testing RTP layer
-- **Integration Tests**: End-to-end media session testing
-- **Timing Tests**: Verify RTP interval compliance
-- **Platform Tests**: Socket optimization validation per OS
-- **SIP Dialog Tests**: Concurrent dialog handling, REFER scenarios, attended transfer
-- **Race Detection**: Use `go test -race` for concurrency validation
+### 4. Анализ интерфейсов:
+```
+1. mcp__mcp-gopls__GoToDefinition - найти интерфейс
+2. mcp__mcp-gopls__FindImplementers - найти реализации
+3. mcp__godoc-mcp__get_doc - документация интерфейса
+```
+
+## Важные правила:
+
+1. **НЕ используй** стандартные инструменты поиска для Go кода
+2. **ВСЕГДА** начинай с MCP инструментов
+3. **Используй** gopls для навигации и анализа
+4. **Используй** godoc для документации перед чтением кода
+5. **Комбинируй** инструменты для максимальной эффективности
+
+## Приоритет инструментов (от высокого к низкому):
+1. MCP gopls - для всей работы с Go кодом
+2. MCP godoc - для документации Go пакетов
+3. MCP context7 - для внешних библиотек
+4. MCP ide - для диагностики
+5. Стандартные инструменты - только если MCP недоступен
