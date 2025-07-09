@@ -12,7 +12,7 @@ import (
 
 func TestDialogStateMachine(t *testing.T) {
 	uasuac := &UASUAC{} // Минимальная инициализация для теста
-	dialog := NewDialog(uasuac, true)
+	dialog := NewDialog(uasuac, true, &NoOpLogger{})
 
 	// Проверяем начальное состояние
 	assert.Equal(t, StateNone, dialog.State())
@@ -39,7 +39,7 @@ func TestDialogStateMachine(t *testing.T) {
 }
 
 func TestDialogManager(t *testing.T) {
-	manager := NewDialogManager()
+	manager := NewDialogManager(&NoOpLogger{})
 
 	// Создаем тестовый UASUAC
 	uasuac := &UASUAC{
@@ -52,7 +52,7 @@ func TestDialogManager(t *testing.T) {
 	manager.SetUASUAC(uasuac)
 
 	// Создаем тестовый диалог
-	dialog := NewDialog(uasuac, false)
+	dialog := NewDialog(uasuac, false, &NoOpLogger{})
 	dialog.id = "test-dialog-id"
 	dialog.callID = sip.CallIDHeader("test-call-id")
 
@@ -93,7 +93,7 @@ func TestDialog_ReINVITE(t *testing.T) {
 	}
 
 	// Создаем диалог
-	dialog := NewDialog(uasuac, true)
+	dialog := NewDialog(uasuac, true, &NoOpLogger{})
 	
 	// Устанавливаем диалог в состояние confirmed
 	dialog.stateMachine.SetState("confirmed")
@@ -149,7 +149,7 @@ func TestDialog_ReINVITE_NotConfirmed(t *testing.T) {
 	}
 
 	// Создаем диалог в состоянии early
-	dialog := NewDialog(uasuac, true)
+	dialog := NewDialog(uasuac, true, &NoOpLogger{})
 	dialog.stateMachine.SetState("early")
 	dialog.callID = sip.CallIDHeader("test-call-id")
 	dialog.localTag = "local-tag"

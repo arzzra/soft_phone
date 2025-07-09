@@ -28,6 +28,9 @@ type UASUAC struct {
 	
 	// Ограничитель частоты
 	rateLimiter RateLimiter
+	
+	// Логгер
+	logger Logger
 
 	// Мьютекс для синхронизации
 	mu sync.RWMutex
@@ -42,6 +45,7 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 	uasuac := &UASUAC{
 		hostname:   "localhost",
 		listenAddr: "127.0.0.1:5060",
+		logger:     &NoOpLogger{}, // Будет заменен через опцию
 	}
 
 	// Применяем опции
@@ -84,7 +88,14 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 
 	portInt := 5060
 	if port != "" {
-		_, _ = fmt.Sscanf(port, "%d", &portInt)
+		n, err := fmt.Sscanf(port, "%d", &portInt)
+		if err != nil || n != 1 {
+			// Используем порт по умолчанию при ошибке парсинга
+			uasuac.logger.Warn("не удалось распарсить порт, используется 5060",
+				F("port_str", port),
+				ErrField(err))
+			portInt = 5060
+		}
 	}
 	uasuac.contactURI = sip.Uri{
 		Scheme: "sip",
@@ -93,7 +104,7 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 	}
 
 	// Создаем менеджер диалогов
-	uasuac.dialogManager = NewDialogManager()
+	uasuac.dialogManager = NewDialogManager(uasuac.logger)
 	uasuac.dialogManager.SetUASUAC(uasuac)
 	
 	// Создаем ограничитель частоты
@@ -141,7 +152,12 @@ func (u *UASUAC) registerHandlers() {
 			return
 		}
 
-		_ = dialog.OnRequest(context.Background(), req, tx)
+		err = dialog.OnRequest(context.Background(), req, tx)
+		if err != nil {
+			u.logger.Error("ошибка обработки ACK в диалоге",
+				DialogField(dialog.ID()),
+				ErrField(err))
+		}
 	})
 
 	// Обработчик BYE
@@ -149,11 +165,21 @@ func (u *UASUAC) registerHandlers() {
 		dialog, err := u.dialogManager.GetDialogByCallID(req.CallID())
 		if err != nil {
 			res := sip.NewResponseFromRequest(req, 481, "Call Does Not Exist", nil)
-			_ = tx.Respond(res)
+			resErr := tx.Respond(res)
+			if resErr != nil {
+				u.logger.Error("не удалось отправить ответ 481 на BYE",
+					CallIDField(req.CallID().Value()),
+					ErrField(resErr))
+			}
 			return
 		}
 
-		_ = dialog.OnRequest(context.Background(), req, tx)
+		err = dialog.OnRequest(context.Background(), req, tx)
+		if err != nil {
+			u.logger.Error("ошибка обработки BYE в диалоге",
+				DialogField(dialog.ID()),
+				ErrField(err))
+		}
 	})
 
 	// Обработчик CANCEL
@@ -368,6 +394,17 @@ func WithHostname(hostname string) UASUACOption {
 func WithListenAddr(addr string) UASUACOption {
 	return func(u *UASUAC) error {
 		u.listenAddr = addr
+		return nil
+	}
+}
+
+// WithLogger устанавливает логгер
+func WithLogger(logger Logger) UASUACOption {
+	return func(u *UASUAC) error {
+		if logger == nil {
+			return fmt.Errorf("логгер не может быть nil")
+		}
+		u.logger = logger
 		return nil
 	}
 }

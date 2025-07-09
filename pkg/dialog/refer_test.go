@@ -133,7 +133,7 @@ func TestHandleREFER(t *testing.T) {
 	}
 
 	// Создаем диалог
-	dialog := NewDialog(uasuac, true)
+	dialog := NewDialog(uasuac, true, &NoOpLogger{})
 	dialog.stateMachine.SetState("confirmed")
 	dialog.callID = sip.CallIDHeader("test-call-id")
 	dialog.localTag = "local-tag"
@@ -193,7 +193,7 @@ func TestHandleREFER_WithReplaces(t *testing.T) {
 	}
 
 	// Создаем диалог
-	dialog := NewDialog(uasuac, true)
+	dialog := NewDialog(uasuac, true, &NoOpLogger{})
 	dialog.stateMachine.SetState("confirmed")
 	dialog.callID = sip.CallIDHeader("test-call-id")
 	dialog.localTag = "local-tag"
@@ -240,7 +240,7 @@ func TestHandleREFER_MissingReferTo(t *testing.T) {
 	}
 
 	// Создаем диалог
-	dialog := NewDialog(uasuac, true)
+	dialog := NewDialog(uasuac, true, &NoOpLogger{})
 	dialog.stateMachine.SetState("confirmed")
 	dialog.callID = sip.CallIDHeader("test-call-id")
 	dialog.localTag = "local-tag"

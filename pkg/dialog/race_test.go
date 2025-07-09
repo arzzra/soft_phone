@@ -13,7 +13,7 @@ import (
 
 // TestDialogManagerConcurrentAccess проверяет потокобезопасность DialogManager
 func TestDialogManagerConcurrentAccess(t *testing.T) {
-	manager := NewDialogManager()
+	manager := NewDialogManager(&NoOpLogger{})
 	uasuac := &UASUAC{
 		contactURI: sip.Uri{
 			Scheme: "sip",
@@ -113,7 +113,7 @@ func TestDialogManagerConcurrentAccess(t *testing.T) {
 
 // TestDialogIDUpdate проверяет обновление ID диалога при получении remote tag
 func TestDialogIDUpdate(t *testing.T) {
-	manager := NewDialogManager()
+	manager := NewDialogManager(&NoOpLogger{})
 	uasuac := &UASUAC{
 		contactURI: sip.Uri{
 			Scheme: "sip",
@@ -185,7 +185,7 @@ func TestHandleClientTransactionRace(t *testing.T) {
 	}
 
 	// Создаем диалог
-	dialog := NewDialog(uasuac, false)
+	dialog := NewDialog(uasuac, false, &NoOpLogger{})
 	dialog.callID = sip.CallIDHeader("test-call-id")
 	dialog.localTag = "local-tag"
 

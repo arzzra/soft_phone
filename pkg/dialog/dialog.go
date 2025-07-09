@@ -61,14 +61,22 @@ type Dialog struct {
 	
 	// Валидатор безопасности
 	securityValidator *SecurityValidator
+	
+	// Логгер для структурированного логирования
+	logger Logger
 
 	// Мьютекс для синхронизации
 	mu sync.RWMutex
 }
 
 // NewDialog создает новый диалог
-func NewDialog(uasuac *UASUAC, isServer bool) *Dialog {
+func NewDialog(uasuac *UASUAC, isServer bool, logger Logger) *Dialog {
 	ctx, cancel := context.WithCancel(context.Background())
+	
+	// Используем NoOpLogger если logger не предоставлен
+	if logger == nil {
+		logger = &NoOpLogger{}
+	}
 	
 	d := &Dialog{
 		uasuac:            uasuac,
@@ -80,6 +88,7 @@ func NewDialog(uasuac *UASUAC, isServer bool) *Dialog {
 		lastActivity:      time.Now(),
 		headerProcessor:   NewHeaderProcessor(),
 		securityValidator: NewSecurityValidator(DefaultSecurityConfig()),
+		logger:            logger,
 	}
 
 	// Инициализируем FSM
@@ -441,10 +450,22 @@ func (d *Dialog) Close() error {
 	if currentState != "terminated" {
 		// Пытаемся сначала перейти в terminating, если возможно
 		if currentState == "confirmed" || currentState == "early" {
-			_ = d.stateMachine.Event(context.Background(), "terminate")
+			err := d.stateMachine.Event(context.Background(), "terminate")
+			if err != nil {
+				d.logger.Warn("не удалось перейти в состояние terminate",
+					DialogField(d.id),
+					F("current_state", currentState),
+					ErrField(err))
+			}
 		}
 		// Теперь переходим в terminated
-		_ = d.stateMachine.Event(context.Background(), "terminated")
+		err := d.stateMachine.Event(context.Background(), "terminated")
+		if err != nil {
+			d.logger.Warn("не удалось перейти в состояние terminated",
+				DialogField(d.id),
+				F("current_state", d.stateMachine.Current()),
+				ErrField(err))
+		}
 	}
 	
 	return nil
@@ -721,8 +742,13 @@ func (d *Dialog) applyDialogHeaders(req *sip.Request) {
 	req.ReplaceHeader(sip.NewHeader("Contact", fmt.Sprintf("<%s>", d.localTarget.String())))
 
 	// Route set
-	_ = d.headerProcessor.ProcessRouteHeaders(req, d.routeSet)
-	// Игнорируем ошибку маршрутизации, так как это не критично для формирования запроса
+	if err := d.headerProcessor.ProcessRouteHeaders(req, d.routeSet); err != nil {
+		d.logger.Error("ошибка обработки Route headers",
+			DialogField(d.id),
+			MethodField(string(req.Method)),
+			ErrField(err))
+		// Игнорируем ошибку маршрутизации, так как это не критично для применения заголовков
+	}
 	
 	// Добавляем дополнительные заголовки
 	d.headerProcessor.AddSupportedHeader(req)
@@ -885,11 +911,22 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 			} else {
 				subscription.UpdateStatus(ReferStatusSuccess)
 			}
-			_ = subscription.SendNotify(ctx)
+			notifyErr := subscription.SendNotify(ctx)
+			if notifyErr != nil {
+				d.logger.Error("не удалось отправить NOTIFY с результатом REFER",
+					DialogField(d.id),
+					F("refer_failed", err != nil),
+					ErrField(notifyErr))
+			}
 		} else {
 			// Если нет обработчика, просто сообщаем об успехе
 			subscription.UpdateStatus(ReferStatusSuccess)
-			_ = subscription.SendNotify(ctx)
+			notifyErr := subscription.SendNotify(ctx)
+			if notifyErr != nil {
+				d.logger.Error("не удалось отправить NOTIFY об успехе",
+					DialogField(d.id),
+					ErrField(notifyErr))
+			}
 		}
 		
 		// Закрываем подписку
@@ -960,7 +997,13 @@ func (d *Dialog) handleResponse(res *sip.Response) {
 	defer d.mu.Unlock()
 
 	// Валидируем ответ
-	_ = d.headerProcessor.ValidateResponse(res)
+	err := d.headerProcessor.ValidateResponse(res)
+	if err != nil {
+		d.logger.Warn("некорректный ответ",
+			DialogField(d.id),
+			StatusCodeField(res.StatusCode),
+			ErrField(err))
+	}
 	// Игнорируем ошибки валидации ответа, так как это не должно блокировать обработку
 
 	// Обновляем последнюю активность
@@ -981,7 +1024,13 @@ func (d *Dialog) handleResponse(res *sip.Response) {
 				if d.uasuac != nil {
 					go func(oldID, newID string) {
 						if d.uasuac.dialogManager != nil {
-							_ = d.uasuac.dialogManager.UpdateDialogID(oldID, newID, d)
+							err := d.uasuac.dialogManager.UpdateDialogID(oldID, newID, d)
+						if err != nil {
+							d.logger.Error("не удалось обновить ID диалога",
+								F("old_id", oldID),
+								F("new_id", newID),
+								ErrField(err))
+						}
 						}
 					}(oldID, d.id)
 				}
@@ -997,7 +1046,13 @@ func (d *Dialog) handleResponse(res *sip.Response) {
 			}
 
 			// Переходим в состояние early
-			_ = d.stateMachine.Event(context.Background(), "early")
+			err := d.stateMachine.Event(context.Background(), "early")
+			if err != nil {
+				d.logger.Warn("не удалось перейти в состояние early",
+					DialogField(d.id),
+					StatusCodeField(res.StatusCode),
+					ErrField(err))
+			}
 		}
 	} else if res.StatusCode >= 200 && res.StatusCode < 300 {
 		// Успешный ответ
@@ -1006,11 +1061,23 @@ func (d *Dialog) handleResponse(res *sip.Response) {
 			d.updateRouteSet(res)
 
 			// Переходим в состояние confirmed
-			_ = d.stateMachine.Event(context.Background(), "confirm")
+			err := d.stateMachine.Event(context.Background(), "confirm")
+			if err != nil {
+				d.logger.Warn("не удалось перейти в состояние confirm",
+					DialogField(d.id),
+					StatusCodeField(res.StatusCode),
+					ErrField(err))
+			}
 		}
 	} else {
 		// Ошибка - переходим в terminated
-		_ = d.stateMachine.Event(context.Background(), "terminated")
+		err := d.stateMachine.Event(context.Background(), "terminated")
+		if err != nil {
+			d.logger.Warn("не удалось перейти в состояние terminated",
+				DialogField(d.id),
+				StatusCodeField(res.StatusCode),
+				ErrField(err))
+		}
 	}
 }
 
@@ -1040,7 +1107,12 @@ func (d *Dialog) SetupFromInvite(req *sip.Request, tx sip.ServerTransaction) err
 	} else {
 		return fmt.Errorf("ошибка парсинга From URI")
 	}
-	d.remoteTag, _ = req.From().Params.Get("tag")
+	var ok bool
+	d.remoteTag, ok = req.From().Params.Get("tag")
+	if !ok {
+		d.logger.Debug("тег отсутствует в заголовке From",
+			DialogField(d.id))
+	}
 
 	toValue := req.To().Value()
 	if uri := extractURIFromHeaderValue(toValue); uri != nil {
@@ -1095,7 +1167,12 @@ func (d *Dialog) SetupFromInviteRequest(req *sip.Request) error {
 	} else {
 		return fmt.Errorf("ошибка парсинга From URI")
 	}
-	d.localTag, _ = req.From().Params.Get("tag")
+	var ok bool
+	d.localTag, ok = req.From().Params.Get("tag")
+	if !ok {
+		d.logger.Debug("тег отсутствует в заголовке From для UAS",
+			DialogField(d.id))
+	}
 
 	toValue := req.To().Value()
 	if uri := extractURIFromHeaderValue(toValue); uri != nil {

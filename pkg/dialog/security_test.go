@@ -511,7 +511,7 @@ func TestDialogSecurityIntegration(t *testing.T) {
 	}
 	
 	// Создаем диалог с валидатором безопасности
-	dialog := NewDialog(uasuac, true)
+	dialog := NewDialog(uasuac, true, &NoOpLogger{})
 	require.NotNil(t, dialog.securityValidator)
 	
 	// Переводим диалог в состояние early для тестирования Answer и Reject

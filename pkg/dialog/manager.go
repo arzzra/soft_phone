@@ -21,17 +21,24 @@ type DialogManager struct {
 	
 	// Валидатор безопасности
 	securityValidator *SecurityValidator
+	
+	// Логгер
+	logger Logger
 
 	// Мьютекс для синхронизации
 	mu sync.RWMutex
 }
 
 // NewDialogManager создает новый менеджер диалогов
-func NewDialogManager() *DialogManager {
+func NewDialogManager(logger Logger) *DialogManager {
+	if logger == nil {
+		logger = &NoOpLogger{}
+	}
 	return &DialogManager{
 		dialogs:           make(map[string]IDialog),
 		callIDIndex:       make(map[string]string),
 		securityValidator: NewSecurityValidator(DefaultSecurityConfig()),
+		logger:            logger,
 	}
 }
 
@@ -90,7 +97,7 @@ func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTrans
 	}
 
 	// Создаем новый диалог
-	dialog := NewDialog(dm.uasuac, true) // isServer = true
+	dialog := NewDialog(dm.uasuac, true, dm.logger) // isServer = true
 
 	// Настраиваем диалог из INVITE
 	if err = dialog.SetupFromInvite(req, tx); err != nil {
@@ -137,7 +144,7 @@ func (dm *DialogManager) CreateClientDialog(inviteReq *sip.Request) (IDialog, er
 	}
 
 	// Создаем новый диалог
-	dialog := NewDialog(dm.uasuac, false) // isServer = false
+	dialog := NewDialog(dm.uasuac, false, dm.logger) // isServer = false
 
 	// Настраиваем диалог из INVITE запроса
 	if err := dialog.SetupFromInviteRequest(inviteReq); err != nil {
@@ -322,7 +329,12 @@ func (dm *DialogManager) Close() {
 	for _, dialog := range dm.dialogs {
 		// Пытаемся корректно завершить диалог
 		if dialog.State() == StateConfirmed {
-			_ = dialog.Terminate()
+			err := dialog.Terminate()
+			if err != nil {
+				dm.logger.Warn("не удалось завершить диалог при закрытии",
+					DialogField(dialog.ID()),
+					ErrField(err))
+			}
 		}
 	}
 
