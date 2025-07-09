@@ -440,6 +440,11 @@ func (d *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (si
 		}
 	}
 
+	// Проверяем наличие клиента
+	if d.uasuac == nil || d.uasuac.client == nil {
+		return nil, fmt.Errorf("клиент транзакций не инициализирован")
+	}
+
 	// Отправляем запрос
 	tx, err := d.uasuac.client.TransactionRequest(ctx, referReq)
 	if err != nil {
@@ -483,6 +488,11 @@ func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts *
 		}
 	}
 
+	// Проверяем наличие клиента
+	if d.uasuac == nil || d.uasuac.client == nil {
+		return nil, fmt.Errorf("клиент транзакций не инициализирован")
+	}
+
 	// Отправляем запрос
 	tx, err := d.uasuac.client.TransactionRequest(ctx, referReq)
 	if err != nil {
@@ -507,6 +517,11 @@ func (d *Dialog) SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpt
 		if err := opt(req); err != nil {
 			return nil, err
 		}
+	}
+
+	// Проверяем наличие клиента
+	if d.uasuac == nil || d.uasuac.client == nil {
+		return nil, fmt.Errorf("клиент транзакций не инициализирован")
 	}
 
 	// Отправляем запрос
@@ -984,7 +999,11 @@ func (d *Dialog) SetupFromInvite(req *sip.Request, tx sip.ServerTransaction) err
 	d.remoteSeq = req.CSeq().SeqNo
 
 	// Локальный target берем из UASUAC
-	d.localTarget = d.uasuac.contactURI
+	if d.uasuac != nil {
+		d.localTarget = d.uasuac.contactURI
+	} else {
+		return fmt.Errorf("UASUAC не инициализирован")
+	}
 
 	// Формируем ID диалога
 	d.id = fmt.Sprintf("%s-%s-%s", d.callID.Value(), d.localTag, d.remoteTag)
