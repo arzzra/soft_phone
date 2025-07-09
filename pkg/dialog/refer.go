@@ -149,8 +149,8 @@ func (rs *ReferSubscription) SendNotify(ctx context.Context) error {
 	notifyReq.AppendHeader(sip.NewHeader("Content-Type", contentType))
 	notifyReq.AppendHeader(sip.NewHeader("Content-Length", fmt.Sprintf("%d", len(body))))
 	
-	// Отправляем NOTIFY
-	tx, err := rs.dialog.uasuac.client.TransactionRequest(ctx, notifyReq)
+	// Отправляем NOTIFY с повторными попытками
+	tx, err := rs.dialog.uasuac.transactionRequestWithRetry(ctx, notifyReq)
 	if err != nil {
 		return fmt.Errorf("ошибка отправки NOTIFY: %w", err)
 	}

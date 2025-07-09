@@ -31,6 +31,9 @@ type UASUAC struct {
 	
 	// Логгер
 	logger Logger
+	
+	// Конфигурация повторных попыток
+	retryConfig RetryConfig
 
 	// Мьютекс для синхронизации
 	mu sync.RWMutex
@@ -43,9 +46,10 @@ type UASUAC struct {
 func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 	// Создаем базовую конфигурацию
 	uasuac := &UASUAC{
-		hostname:   "localhost",
-		listenAddr: "127.0.0.1:5060",
-		logger:     &NoOpLogger{}, // Будет заменен через опцию
+		hostname:    "localhost",
+		listenAddr:  "127.0.0.1:5060",
+		logger:      &NoOpLogger{}, // Будет заменен через опцию
+		retryConfig: NetworkRetryConfig(), // Конфигурация по умолчанию для сетевых операций
 	}
 
 	// Применяем опции
@@ -127,7 +131,9 @@ func (u *UASUAC) registerHandlers() {
 		// Проверяем лимиты
 		if u.rateLimiter != nil && !u.rateLimiter.Allow("invite") {
 			res := sip.NewResponseFromRequest(req, sip.StatusServiceUnavailable, "Service Unavailable", nil)
-			_ = tx.Respond(res)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = u.respondWithRetry(ctx, tx, res)
 			return
 		}
 		
@@ -136,7 +142,9 @@ func (u *UASUAC) registerHandlers() {
 		if err != nil {
 			// Отправляем ошибку
 			res := sip.NewResponseFromRequest(req, sip.StatusInternalServerError, "Internal Server Error", nil)
-			_ = tx.Respond(res)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = u.respondWithRetry(ctx, tx, res)
 			return
 		}
 
@@ -165,9 +173,11 @@ func (u *UASUAC) registerHandlers() {
 		dialog, err := u.dialogManager.GetDialogByCallID(req.CallID())
 		if err != nil {
 			res := sip.NewResponseFromRequest(req, 481, "Call Does Not Exist", nil)
-			resErr := tx.Respond(res)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			resErr := u.respondWithRetry(ctx, tx, res)
 			if resErr != nil {
-				u.logger.Error("не удалось отправить ответ 481 на BYE",
+				u.logger.Error("не удалось отправить ответ 481 на BYE после повторных попыток",
 					CallIDField(req.CallID().Value()),
 					ErrField(resErr))
 			}
@@ -186,7 +196,9 @@ func (u *UASUAC) registerHandlers() {
 	u.server.OnCancel(func(req *sip.Request, tx sip.ServerTransaction) {
 		// CANCEL обрабатывается на уровне транзакций
 		res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-		_ = tx.Respond(res)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = u.respondWithRetry(ctx, tx, res)
 	})
 
 	// Обработчик OPTIONS
@@ -199,7 +211,9 @@ func (u *UASUAC) registerHandlers() {
 		hp.AddSupportedHeaderToResponse(res)
 		hp.AddUserAgentToResponse(res, "SoftPhone/1.0")
 		
-		_ = tx.Respond(res)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = u.respondWithRetry(ctx, tx, res)
 	})
 }
 
@@ -247,15 +261,17 @@ func (u *UASUAC) CreateDialog(ctx context.Context, remoteURI sip.Uri, opts ...Ca
 		return nil, fmt.Errorf("ошибка создания диалога: %w", err)
 	}
 
-	// Отправляем INVITE
-	tx, err := u.client.TransactionRequest(ctx, inviteReq)
+	// Отправляем INVITE с повторными попытками
+	tx, err := u.transactionRequestWithRetry(ctx, inviteReq)
 	if err != nil {
 		_ = u.dialogManager.RemoveDialog(dialog.ID())
 		return nil, fmt.Errorf("ошибка отправки INVITE: %w", err)
 	}
 
 	// Обрабатываем ответы в фоновой горутине
-	go u.handleClientTransaction(dialog, tx)
+	SafeGo(u.logger, "handle-client-transaction", func() {
+		u.handleClientTransaction(dialog, tx)
+	})
 
 	return dialog, nil
 }
@@ -349,6 +365,24 @@ func (u *UASUAC) GetDialogByCallID(callID *sip.CallIDHeader) (IDialog, error) {
 	return u.dialogManager.GetDialogByCallID(callID)
 }
 
+// respondWithRetry отправляет ответ с повторными попытками
+func (u *UASUAC) respondWithRetry(ctx context.Context, tx sip.ServerTransaction, res *sip.Response) error {
+	return WithRetry(ctx, u.retryConfig, u.logger, "tx-respond", func() error {
+		return tx.Respond(res)
+	})
+}
+
+// transactionRequestWithRetry отправляет запрос с повторными попытками
+func (u *UASUAC) transactionRequestWithRetry(ctx context.Context, req *sip.Request) (sip.ClientTransaction, error) {
+	var tx sip.ClientTransaction
+	err := WithRetry(ctx, u.retryConfig, u.logger, "client-transaction-request", func() error {
+		var err error
+		tx, err = u.client.TransactionRequest(ctx, req)
+		return err
+	})
+	return tx, err
+}
+
 // Close закрывает UASUAC и освобождает ресурсы
 func (u *UASUAC) Close() error {
 	u.mu.Lock()
@@ -405,6 +439,14 @@ func WithLogger(logger Logger) UASUACOption {
 			return fmt.Errorf("логгер не может быть nil")
 		}
 		u.logger = logger
+		return nil
+	}
+}
+
+// WithRetryConfig устанавливает конфигурацию повторных попыток
+func WithRetryConfig(config RetryConfig) UASUACOption {
+	return func(u *UASUAC) error {
+		u.retryConfig = config
 		return nil
 	}
 }

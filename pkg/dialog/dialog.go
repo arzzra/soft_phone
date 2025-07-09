@@ -306,8 +306,10 @@ func (d *Dialog) Answer(body Body, headers map[string]string) error {
 			res.AppendHeader(sip.NewHeader(name, value))
 		}
 
-		// Отправляем ответ
-		if err := inviteTx.Respond(res); err != nil {
+		// Отправляем ответ с повторными попытками
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := d.uasuac.respondWithRetry(ctx, inviteTx, res); err != nil {
 			return fmt.Errorf("ошибка отправки ответа: %w", err)
 		}
 
@@ -369,8 +371,10 @@ func (d *Dialog) Reject(statusCode int, reason string, body Body, headers map[st
 			res.AppendHeader(sip.NewHeader(name, value))
 		}
 
-		// Отправляем ответ
-		if err := inviteTx.Respond(res); err != nil {
+		// Отправляем ответ с повторными попытками
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := d.uasuac.respondWithRetry(ctx, inviteTx, res); err != nil {
 			return fmt.Errorf("ошибка отправки ответа: %w", err)
 		}
 
@@ -512,7 +516,7 @@ func (d *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (si
 	}
 
 	// Отправляем запрос
-	tx, err := d.uasuac.client.TransactionRequest(ctx, referReq)
+	tx, err := d.uasuac.transactionRequestWithRetry(ctx, referReq)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка отправки REFER: %w", err)
 	}
@@ -560,7 +564,7 @@ func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts *
 	}
 
 	// Отправляем запрос
-	tx, err := d.uasuac.client.TransactionRequest(ctx, referReq)
+	tx, err := d.uasuac.transactionRequestWithRetry(ctx, referReq)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка отправки REFER: %w", err)
 	}
@@ -605,7 +609,7 @@ func (d *Dialog) SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpt
 	}
 
 	// Отправляем запрос
-	tx, err := d.uasuac.client.TransactionRequest(ctx, req)
+	tx, err := d.uasuac.transactionRequestWithRetry(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка отправки запроса: %w", err)
 	}
@@ -662,7 +666,9 @@ func (d *Dialog) OnRequest(_ context.Context, req *sip.Request, tx sip.ServerTra
 	if err := d.headerProcessor.ProcessRequest(req); err != nil {
 		// Отправляем 400 Bad Request
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, err.Error(), nil)
-		return tx.Respond(res)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return d.uasuac.respondWithRetry(ctx, tx, res)
 	}
 
 	// Обновляем последнюю активность
@@ -683,7 +689,9 @@ func (d *Dialog) OnRequest(_ context.Context, req *sip.Request, tx sip.ServerTra
 	default:
 		// Отвечаем 405 Method Not Allowed
 		res := sip.NewResponseFromRequest(req, sip.StatusMethodNotAllowed, "Method Not Allowed", nil)
-		return tx.Respond(res)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return d.uasuac.respondWithRetry(ctx, tx, res)
 	}
 }
 
@@ -793,13 +801,17 @@ func (d *Dialog) handleACK(_ *sip.Request, _ sip.ServerTransaction) error {
 
 // handleBYE обрабатывает BYE запрос
 func (d *Dialog) handleBYE(req *sip.Request, tx sip.ServerTransaction) error {
+	// Создаем контекст для отправки ответа
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
 	// Отвечаем 200 OK
 	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
 	
 	// Добавляем заголовки
 	d.headerProcessor.AddUserAgentToResponse(res, "SoftPhone/1.0")
 	
-	if err := tx.Respond(res); err != nil {
+	if err := d.uasuac.respondWithRetry(ctx, tx, res); err != nil {
 		return err
 	}
 
@@ -809,6 +821,10 @@ func (d *Dialog) handleBYE(req *sip.Request, tx sip.ServerTransaction) error {
 
 // handleINFO обрабатывает INFO запрос
 func (d *Dialog) handleINFO(req *sip.Request, tx sip.ServerTransaction) error {
+	// Создаем контекст для отправки ответа
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
 	// Проверяем тело
 	if req.Body() != nil && d.bodyHandler != nil {
 		contentType := req.GetHeader("Content-Type")
@@ -821,29 +837,33 @@ func (d *Dialog) handleINFO(req *sip.Request, tx sip.ServerTransaction) error {
 
 	// Отвечаем 200 OK
 	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-	return tx.Respond(res)
+	return d.uasuac.respondWithRetry(ctx, tx, res)
 }
 
 // handleREFER обрабатывает REFER запрос
 func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
+	// Создаем контекст для обработки REFER
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	
 	// Проверяем наличие Refer-To заголовка
 	referToHeader := req.GetHeader("Refer-To")
 	if referToHeader == nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Missing Refer-To header", nil)
-		return tx.Respond(res)
+		return d.uasuac.respondWithRetry(ctx, tx, res)
 	}
 	
 	// Валидация Refer-To заголовка
 	if err := d.securityValidator.ValidateHeader("Refer-To", referToHeader.Value()); err != nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, fmt.Sprintf("Invalid Refer-To: %v", err), nil)
-		return tx.Respond(res)
+		return d.uasuac.respondWithRetry(ctx, tx, res)
 	}
 	
 	// Парсим Refer-To
 	referToURI, params, err := parseReferTo(referToHeader.Value())
 	if err != nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Invalid Refer-To header", nil)
-		return tx.Respond(res)
+		return d.uasuac.respondWithRetry(ctx, tx, res)
 	}
 	
 	// Создаем ReferEvent
@@ -871,7 +891,7 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 	
 	// Отправляем 202 Accepted
 	res := sip.NewResponseFromRequest(req, sip.StatusAccepted, "Accepted", nil)
-	if err := tx.Respond(res); err != nil {
+	if err := d.uasuac.respondWithRetry(ctx, tx, res); err != nil {
 		return err
 	}
 	
@@ -882,7 +902,6 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 	d.mu.RLock()
 	referHandler := d.referHandler
 	uasuac := d.uasuac
-	ctx := d.ctx
 	d.mu.RUnlock()
 	
 	// Проверяем что UASUAC инициализирован
@@ -891,7 +910,7 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 	}
 	
 	// Запускаем обработку REFER в фоне
-	go func() {
+	SafeGo(d.logger, "dialog-refer-handler", func() {
 		// Проверяем контекст на отмену
 		select {
 		case <-ctx.Done():
@@ -931,17 +950,21 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 		
 		// Закрываем подписку
 		subscription.Close()
-	}()
+	})
 	
 	return nil
 }
 
 // handleReINVITE обрабатывает re-INVITE запрос (изменение параметров существующего диалога)
 func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) error {
+	// Создаем контекст для обработки re-INVITE
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
 	// Re-INVITE может быть отправлен только в подтвержденном диалоге
 	if d.stateMachine.Current() != "confirmed" {
 		res := sip.NewResponseFromRequest(req, sip.StatusRequestTerminated, "Request Terminated", nil)
-		return tx.Respond(res)
+		return d.uasuac.respondWithRetry(ctx, tx, res)
 	}
 
 	// Сохраняем новый INVITE запрос и транзакцию
@@ -969,7 +992,9 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 	if d.requestHandler != nil {
 		// Передаем управление пользовательскому коду для обработки re-INVITE
 		// Пользователь должен вызвать Answer() или Reject() для ответа
-		go d.requestHandler(req, tx)
+		SafeGo(d.logger, "dialog-request-handler", func() {
+			d.requestHandler(req, tx)
+		})
 		return nil
 	}
 	
@@ -988,7 +1013,7 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 		}
 	}
 	
-	return tx.Respond(res)
+	return d.uasuac.respondWithRetry(ctx, tx, res)
 }
 
 // handleResponse обрабатывает ответ для клиентского диалога
@@ -1022,17 +1047,19 @@ func (d *Dialog) handleResponse(res *sip.Response) {
 				
 				// Обновляем ID в менеджере диалогов
 				if d.uasuac != nil {
-					go func(oldID, newID string) {
+					oldIDCopy := oldID
+					newIDCopy := d.id
+					SafeGo(d.logger, "dialog-id-update", func() {
 						if d.uasuac.dialogManager != nil {
-							err := d.uasuac.dialogManager.UpdateDialogID(oldID, newID, d)
-						if err != nil {
-							d.logger.Error("не удалось обновить ID диалога",
-								F("old_id", oldID),
-								F("new_id", newID),
-								ErrField(err))
+							err := d.uasuac.dialogManager.UpdateDialogID(oldIDCopy, newIDCopy, d)
+							if err != nil {
+								d.logger.Error("не удалось обновить ID диалога",
+									F("old_id", oldIDCopy),
+									F("new_id", newIDCopy),
+									ErrField(err))
+							}
 						}
-						}
-					}(oldID, d.id)
+					})
 				}
 			}
 
