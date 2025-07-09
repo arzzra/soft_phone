@@ -3,6 +3,7 @@ package dialog
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/emiago/sipgo/sip"
 )
@@ -50,6 +51,15 @@ func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTrans
 	if req.Method != sip.INVITE {
 		return nil, fmt.Errorf("можно создать диалог только из INVITE запроса")
 	}
+	
+	// Валидируем Call-ID
+	if req.CallID() == nil {
+		return nil, fmt.Errorf("отсутствует Call-ID в запросе")
+	}
+	
+	if err := validateCallID(req.CallID().Value()); err != nil {
+		return nil, fmt.Errorf("некорректный Call-ID: %w", err)
+	}
 
 	// Проверяем, нет ли уже диалога с таким Call-ID
 	callID := req.CallID()
@@ -86,6 +96,15 @@ func (dm *DialogManager) CreateClientDialog(inviteReq *sip.Request) (IDialog, er
 	if inviteReq.Method != sip.INVITE {
 		return nil, fmt.Errorf("можно создать диалог только из INVITE запроса")
 	}
+	
+	// Валидируем Call-ID
+	if inviteReq.CallID() == nil {
+		return nil, fmt.Errorf("отсутствует Call-ID в запросе")
+	}
+	
+	if err := validateCallID(inviteReq.CallID().Value()); err != nil {
+		return nil, fmt.Errorf("некорректный Call-ID: %w", err)
+	}
 
 	// Проверяем, нет ли уже диалога с таким Call-ID
 	callID := inviteReq.CallID()
@@ -102,10 +121,13 @@ func (dm *DialogManager) CreateClientDialog(inviteReq *sip.Request) (IDialog, er
 		return nil, fmt.Errorf("ошибка настройки диалога: %w", err)
 	}
 
-	// Пока не сохраняем диалог, так как у нас еще нет полного ID
-	// (нет remote tag). Сохраним после получения первого ответа.
-	// Но индексируем по Call-ID для поиска
-	dm.callIDIndex[callIDValue] = "" // Временно пустой ID
+	// Генерируем временный ID для диалога
+	tempID := fmt.Sprintf("temp_%s_%d", callIDValue, time.Now().UnixNano())
+	dialog.id = tempID
+	
+	// Сохраняем диалог с временным ID
+	dm.dialogs[tempID] = dialog
+	dm.callIDIndex[callIDValue] = tempID
 
 	return dialog, nil
 }
@@ -133,6 +155,34 @@ func (dm *DialogManager) RegisterDialog(dialog IDialog) error {
 	callIDValue := callID.Value()
 	dm.callIDIndex[callIDValue] = dialogID
 
+	return nil
+}
+
+// UpdateDialogID обновляет ID диалога после получения remote tag
+func (dm *DialogManager) UpdateDialogID(oldID, newID string, dialog IDialog) error {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	
+	// Проверяем, что старый диалог существует
+	if _, exists := dm.dialogs[oldID]; !exists {
+		return fmt.Errorf("диалог с ID %s не найден", oldID)
+	}
+	
+	// Проверяем, что новый ID не занят
+	if _, exists := dm.dialogs[newID]; exists {
+		return fmt.Errorf("диалог с ID %s уже существует", newID)
+	}
+	
+	// Удаляем старый ID
+	delete(dm.dialogs, oldID)
+	
+	// Сохраняем с новым ID
+	dm.dialogs[newID] = dialog
+	
+	// Обновляем индекс Call-ID
+	callID := dialog.CallID()
+	dm.callIDIndex[callID.Value()] = newID
+	
 	return nil
 }
 

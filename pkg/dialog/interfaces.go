@@ -70,6 +70,9 @@ type IDialog interface {
 	SetContext(ctx context.Context)
 	CreatedAt() time.Time
 	LastActivity() time.Time
+	
+	// Close закрывает диалог и освобождает все ресурсы
+	Close() error
 
 	// Когда приходит новый запрос в рамках диалога
 	OnRequest(ctx context.Context, req *sip.Request, tx sip.ServerTransaction) error
@@ -77,6 +80,8 @@ type IDialog interface {
 	// Event handling
 	OnStateChange(handler StateChangeHandler)
 	OnBody(handler OnBodyHandler)
+	OnRequestHandler(handler func(*sip.Request, sip.ServerTransaction))
+	OnRefer(handler ReferHandler)
 }
 
 type ReqOpts func(req *sip.Request) error
@@ -84,6 +89,10 @@ type ReqOpts func(req *sip.Request) error
 // Event handlers
 type StateChangeHandler func(oldState, newState DialogState)
 type OnBodyHandler func(body Body)
+
+// ReferHandler тип, который импортируется из refer.go
+// Объявляем здесь для избежания циклических зависимостей
+type ReferHandler func(event *ReferEvent) error
 
 // Body represents message body content
 type Body struct {

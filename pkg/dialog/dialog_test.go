@@ -83,6 +83,101 @@ func TestDialogManager(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// Моки перенесены в mocks_test.go
+
+
+func TestDialog_ReINVITE(t *testing.T) {
+	// Создаем мок UASUAC
+	uasuac := &UASUAC{
+		contactURI: sip.Uri{Scheme: "sip", Host: "localhost", Port: 5060},
+	}
+
+	// Создаем диалог
+	dialog := NewDialog(uasuac, true)
+	
+	// Устанавливаем диалог в состояние confirmed
+	dialog.stateMachine.SetState("confirmed")
+	dialog.callID = sip.CallIDHeader("test-call-id")
+	dialog.localTag = "local-tag"
+	dialog.remoteTag = "remote-tag"
+	dialog.localTarget = sip.Uri{Scheme: "sip", Host: "localhost", Port: 5060}
+	
+	// Создаем re-INVITE запрос
+	req := sip.NewRequest(sip.INVITE, sip.Uri{Scheme: "sip", Host: "example.com"})
+	callIDHeader := sip.CallIDHeader("test-call-id")
+	req.AppendHeader(&callIDHeader)
+	req.AppendHeader(sip.NewHeader("From", "<sip:alice@example.com>;tag=remote-tag"))
+	req.AppendHeader(sip.NewHeader("To", "<sip:bob@example.com>;tag=local-tag"))
+	req.AppendHeader(sip.NewHeader("CSeq", "2 INVITE"))
+	req.AppendHeader(sip.NewHeader("Via", "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK776asdhds"))
+	req.AppendHeader(sip.NewHeader("Contact", "<sip:alice@192.168.1.100:5060>"))
+	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
+	req.AppendHeader(sip.NewHeader("Content-Length", "58"))
+	req.SetBody([]byte("v=0\r\no=alice 2890844526 2890844527 IN IP4 192.168.1.100\r\n"))
+	
+	// Создаем мок транзакцию
+	mockTx := &mockServerTransaction{
+		respondFunc: func(res *sip.Response) error {
+			// Проверяем ответ
+			assert.Equal(t, sip.StatusOK, res.StatusCode)
+			assert.NotNil(t, res.GetHeader("Contact"))
+			assert.NotNil(t, res.GetHeader("Content-Type"))
+			assert.NotNil(t, res.Body())
+			return nil
+		},
+	}
+	
+	// Обрабатываем re-INVITE
+	err := dialog.OnRequest(context.Background(), req, mockTx)
+	assert.NoError(t, err)
+	
+	// Проверяем, что Contact обновился
+	assert.Equal(t, "alice", dialog.remoteTarget.User)
+	assert.Equal(t, "192.168.1.100", dialog.remoteTarget.Host)
+	
+	// Проверяем, что CSeq обновился
+	assert.Equal(t, uint32(2), dialog.remoteCSeq)
+	
+	// Проверяем, что состояние осталось confirmed
+	assert.Equal(t, "confirmed", dialog.stateMachine.Current())
+}
+
+func TestDialog_ReINVITE_NotConfirmed(t *testing.T) {
+	// Создаем мок UASUAC
+	uasuac := &UASUAC{
+		contactURI: sip.Uri{Scheme: "sip", Host: "localhost", Port: 5060},
+	}
+
+	// Создаем диалог в состоянии early
+	dialog := NewDialog(uasuac, true)
+	dialog.stateMachine.SetState("early")
+	dialog.callID = sip.CallIDHeader("test-call-id")
+	dialog.localTag = "local-tag"
+	dialog.remoteTag = "remote-tag"
+	
+	// Создаем re-INVITE запрос
+	req := sip.NewRequest(sip.INVITE, sip.Uri{Scheme: "sip", Host: "example.com"})
+	callIDHeader := sip.CallIDHeader("test-call-id")
+	req.AppendHeader(&callIDHeader)
+	req.AppendHeader(sip.NewHeader("From", "<sip:alice@example.com>;tag=remote-tag"))
+	req.AppendHeader(sip.NewHeader("To", "<sip:bob@example.com>;tag=local-tag"))
+	req.AppendHeader(sip.NewHeader("CSeq", "2 INVITE"))
+	req.AppendHeader(sip.NewHeader("Via", "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK776asdhds"))
+	
+	// Создаем мок транзакцию
+	mockTx := &mockServerTransaction{
+		respondFunc: func(res *sip.Response) error {
+			// Проверяем, что вернулся код ошибки
+			assert.Equal(t, sip.StatusRequestTerminated, res.StatusCode)
+			return nil
+		},
+	}
+	
+	// Обрабатываем re-INVITE
+	err := dialog.OnRequest(context.Background(), req, mockTx)
+	assert.NoError(t, err)
+}
+
 func TestUASUACCreation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

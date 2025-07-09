@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
@@ -24,6 +25,9 @@ type UASUAC struct {
 
 	// Менеджер диалогов
 	dialogManager *DialogManager
+	
+	// Ограничитель частоты
+	rateLimiter RateLimiter
 
 	// Мьютекс для синхронизации
 	mu sync.RWMutex
@@ -91,6 +95,13 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 	// Создаем менеджер диалогов
 	uasuac.dialogManager = NewDialogManager()
 	uasuac.dialogManager.SetUASUAC(uasuac)
+	
+	// Создаем ограничитель частоты
+	uasuac.rateLimiter = NewSimpleRateLimiter()
+	// Запускаем периодический сброс счетчиков каждую минуту
+	if limiter, ok := uasuac.rateLimiter.(*SimpleRateLimiter); ok {
+		limiter.StartResetTimer(time.Minute)
+	}
 
 	// Регистрируем обработчики для сервера
 	uasuac.registerHandlers()
@@ -102,6 +113,13 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 func (u *UASUAC) registerHandlers() {
 	// Обработчик INVITE
 	u.server.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
+		// Проверяем лимиты
+		if u.rateLimiter != nil && !u.rateLimiter.Allow("invite") {
+			res := sip.NewResponseFromRequest(req, sip.StatusServiceUnavailable, "Service Unavailable", nil)
+			_ = tx.Respond(res)
+			return
+		}
+		
 		// Создаем новый диалог для входящего INVITE
 		dialog, err := u.dialogManager.CreateServerDialog(req, tx)
 		if err != nil {
@@ -149,8 +167,11 @@ func (u *UASUAC) registerHandlers() {
 	u.server.OnOptions(func(req *sip.Request, tx sip.ServerTransaction) {
 		res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
 		
-		// Добавляем поддерживаемые методы
-		res.AppendHeader(sip.NewHeader("Allow", "INVITE, ACK, BYE, CANCEL, OPTIONS"))
+		// Добавляем поддерживаемые методы и расширения
+		hp := NewHeaderProcessor()
+		hp.AddAllowHeaderToResponse(res)
+		hp.AddSupportedHeaderToResponse(res)
+		hp.AddUserAgentToResponse(res, "SoftPhone/1.0")
 		
 		_ = tx.Respond(res)
 	})
@@ -177,6 +198,16 @@ func (u *UASUAC) CreateDialog(ctx context.Context, remoteURI sip.Uri, opts ...Ca
 		return nil, fmt.Errorf("UASUAC закрыт")
 	}
 	u.mu.RUnlock()
+	
+	// Валидируем URI
+	if err := validateSIPURI(&remoteURI); err != nil {
+		return nil, fmt.Errorf("некорректный remote URI: %w", err)
+	}
+	
+	// Проверяем лимиты
+	if u.rateLimiter != nil && !u.rateLimiter.Allow("dialog_create") {
+		return nil, fmt.Errorf("превышен лимит создания диалогов")
+	}
 
 	// Создаем INVITE запрос
 	inviteReq, err := u.buildInviteRequest(remoteURI, opts...)
@@ -236,6 +267,17 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 		req.AppendHeader(sip.NewHeader(name, value))
 	}
 
+	// Используем HeaderProcessor для добавления стандартных заголовков
+	hp := NewHeaderProcessor()
+	hp.AddSupportedHeader(req)
+	hp.AddUserAgent(req, "SoftPhone/1.0")
+	hp.AddTimestamp(req)
+	
+	// Валидируем запрос
+	if err := hp.ProcessRequest(req); err != nil {
+		return nil, fmt.Errorf("ошибка валидации запроса: %w", err)
+	}
+
 	return req, nil
 }
 
@@ -245,11 +287,28 @@ func (u *UASUAC) handleClientTransaction(dialog IDialog, tx sip.ClientTransactio
 	for res := range tx.Responses() {
 		// Обрабатываем ответ в диалоге
 		if d, ok := dialog.(*Dialog); ok {
+			// Вызываем handleResponse который уже защищен мьютексом
 			d.handleResponse(res)
+			
+			// Если это финальный успешный ответ на INVITE, ACK будет отправлен автоматически
+			// транзакцией или вручную через диалог после перехода в confirmed
+			
 			// Если это финальный ответ, можем выйти
 			if res.StatusCode >= 200 {
 				break
 			}
+		}
+	}
+	
+	// Обрабатываем ошибки транзакции
+	if err := tx.Err(); err != nil {
+		// Если диалог еще не в финальном состоянии, переводим его в terminated
+		if d, ok := dialog.(*Dialog); ok {
+			d.mu.Lock()
+			if d.stateMachine.Current() != "terminated" {
+				_ = d.stateMachine.Event(context.Background(), "terminated")
+			}
+			d.mu.Unlock()
 		}
 	}
 }
