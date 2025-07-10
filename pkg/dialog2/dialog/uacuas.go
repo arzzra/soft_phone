@@ -11,16 +11,12 @@ import (
 
 type Config struct {
 	// Имя контакта для исходящих запросов
-	ContactName string
-	UserAgent   string
+	profile   Profile
+	UserAgent string
 	// Для исходящих запросов
 	Endpoints []Endpoint
 	//Все транспорты которые будут использоваться
 	TransportConfigs []TransportConfig
-	// Хосты для обратной совместимости
-	Hosts []string
-	// Порт для обратной совместимости
-	Port int
 	// Тестовый режим
 	TestMode bool
 }
@@ -81,7 +77,7 @@ func NewUACUAS(cfg Config) (*UACUAS, error) {
 		initSessionsMap(func() string {
 			return "qwerty"
 		})
-		fmt.Println(sessionsMap)
+		fmt.Println(dialogs)
 	} else {
 		initSessionsMap(newTag)
 	}
@@ -109,5 +105,13 @@ func (u *UACUAS) onRequests() {
 }
 
 func initSessionsMap(f func() string) {
-	sessionsMap = NewDialSessionMap(f)
+	dialogs = newDialogsMap(f)
+}
+
+func (u *UACUAS) createDefaultDialog() *Dialog {
+	dialog := &Dialog{
+		uaType:  UAC,
+		profile: &u.config.profile,
+	}
+	return dialog
 }

@@ -3,13 +3,20 @@ package dialog
 import (
 	"context"
 	"fmt"
+	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 	"github.com/looplab/fsm"
+	"github.com/pkg/errors"
+	"log/slog"
 	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// Проверяем, что Dialog реализует интерфейс IDialog
+var _ IDialog = (*Dialog)(nil)
 
 type DialogState string
 
@@ -48,7 +55,11 @@ const (
 type Dialog struct {
 	fsm *fsm.FSM
 
-	callBacks CallBacksDialog
+	// Идентификация диалога
+	id        string
+	localTag  string
+	remoteTag string
+
 	//Тип сессии: UAS или UAC
 	uaType dualValue
 
@@ -80,27 +91,518 @@ type Dialog struct {
 	localBody  Body
 	remoteBody Body
 
-	routeSet []sip.Uri
+	routeSet     []sip.Uri
+	routeHeaders []sip.RouteHeader
+
+	// Контекст и время жизни
+	ctx          context.Context
+	createdAt    time.Time
+	lastActivity time.Time
+	activityMu   sync.Mutex
+
+	// Обработчики событий
+	stateChangeHandler func(DialogState)
+	bodyHandler        func(*Body)
+	requestHandler     func(IServerTX)
+	handlersMu         sync.Mutex
 
 	// Нужно хранить первую транзакцию
 	firstTXIncoming *TX
 }
 
-func NewDialog(profile *Profile) (*Dialog, error) {
+// ID возвращает уникальный идентификатор диалога.
+// Формат: "callID:localTag:remoteTag" или "callID:localTag:pending" если remoteTag еще не установлен.
+func (s *Dialog) ID() string {
+	return s.id
+}
+
+// SetID устанавливает новый идентификатор диалога.
+// Используется менеджером диалогов при необходимости обновления ID.
+func (s *Dialog) SetID(newID string) {
+	s.id = newID
+}
+
+// State возвращает текущее состояние диалога.
+// Возможные состояния: IDLE, Calling, Ringing, InCall, Terminating, Ended.
+func (s *Dialog) State() DialogState {
+	if s.fsm != nil {
+		return DialogState(s.fsm.Current())
+	}
+	return IDLE
+}
+
+// LocalTag возвращает локальный тег диалога.
+// Тег генерируется при создании диалога и используется для его идентификации.
+func (s *Dialog) LocalTag() string {
+	return s.localTag
+}
+
+// RemoteTag возвращает удаленный тег диалога.
+// Устанавливается из ответа удаленной стороны.
+func (s *Dialog) RemoteTag() string {
+	return s.remoteTag
+}
+
+// CallID возвращает заголовок Call-ID диалога.
+// Call-ID уникально идентифицирует SIP диалог вместе с тегами.
+func (s *Dialog) CallID() sip.CallIDHeader {
+	return s.callID
+}
+
+// LocalURI возвращает локальный URI (From для UAC, To для UAS).
+// Метод потокобезопасен.
+func (s *Dialog) LocalURI() sip.Uri {
+	s.uriMu.Lock()
+	defer s.uriMu.Unlock()
+	return s.localURI
+}
+
+// RemoteURI возвращает удаленный URI (To для UAC, From для UAS).
+// Метод потокобезопасен.
+func (s *Dialog) RemoteURI() sip.Uri {
+	s.uriMu.Lock()
+	defer s.uriMu.Unlock()
+	return s.remoteURI
+}
+
+// LocalTarget возвращает локальный Contact URI.
+// Используется для маршрутизации последующих запросов.
+// Метод потокобезопасен.
+func (s *Dialog) LocalTarget() sip.Uri {
+	s.uriMu.Lock()
+	defer s.uriMu.Unlock()
+	return s.localTarget
+}
+
+// RemoteTarget возвращает удаленный Contact URI.
+// Используется для маршрутизации последующих запросов.
+// Метод потокобезопасен.
+func (s *Dialog) RemoteTarget() sip.Uri {
+	s.uriMu.Lock()
+	defer s.uriMu.Unlock()
+	return s.remoteTarget
+}
+
+// RouteSet возвращает набор Route заголовков для маршрутизации.
+// Устанавливается из Record-Route заголовков при установлении диалога.
+func (s *Dialog) RouteSet() []sip.RouteHeader {
+	return s.routeHeaders
+}
+
+// LocalSeq возвращает локальный порядковый номер CSeq.
+// Увеличивается с каждым новым запросом в рамках диалога.
+func (s *Dialog) LocalSeq() uint32 {
+	return s.localCSeq.Load()
+}
+
+// RemoteSeq возвращает удаленный порядковый номер CSeq.
+// Обновляется при получении запросов от удаленной стороны.
+func (s *Dialog) RemoteSeq() uint32 {
+	return s.remoteCSeq.Load()
+}
+
+// Terminate завершает диалог, отправляя BYE запрос.
+// Может быть вызван только в состоянии InCall.
+// Переводит диалог в состояние Terminating.
+func (s *Dialog) Terminate() error {
+	// Отправляем BYE запрос
+	slog.Debug("Dialog.Terminate",
+		slog.String("dialogID", s.id),
+		slog.String("state", s.State().String()),
+		slog.String("callID", string(s.callID)))
+	
+	if s.State() != InCall {
+		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
+		slog.Debug("Dialog.Terminate failed", slog.String("error", err.Error()))
+		return err
+	}
+
+	// Создаем BYE запрос
+	ctx := context.Background()
+	if s.ctx != nil {
+		ctx = s.ctx
+	}
+	
+	req := s.makeRequest(sip.BYE)
+	slog.Debug("Dialog.Terminate creating BYE request",
+		slog.String("request", req.String()))
+	
+	// Отправляем запрос
+	tx, err := s.sendReq(ctx, req)
+	if err != nil {
+		slog.Debug("Dialog.Terminate sendReq failed",
+			slog.String("error", err.Error()))
+		return errors.Wrap(err, "failed to send BYE request")
+	}
+	
+	slog.Debug("Dialog.Terminate BYE sent successfully",
+		slog.String("txID", tx.Request().TransactionID()))
+	
+	// Переводим диалог в состояние завершения
+	if err := s.setState(Terminating, tx); err != nil {
+		slog.Debug("Dialog.Terminate setState failed",
+			slog.String("error", err.Error()))
+		return err
+	}
+	
+	return nil
+}
+
+// Start начинает новый диалог, отправляя INVITE запрос.
+// target - SIP URI вызываемого абонента (например, "sip:alice@example.com").
+// opts - дополнительные опции для настройки запроса.
+// Может быть вызван только в состоянии IDLE.
+// Переводит диалог в состояние Calling.
+func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (IClientTX, error) {
+	// Отправляем INVITE запрос для начала диалога
+	slog.Debug("Dialog.Start",
+		slog.String("dialogID", s.id),
+		slog.String("target", target),
+		slog.String("state", s.State().String()))
+	
+	if s.State() != IDLE {
+		err := fmt.Errorf("dialog already started, state: %s", s.State())
+		slog.Debug("Dialog.Start failed", slog.String("error", err.Error()))
+		return nil, err
+	}
+
+	// Парсим целевой URI
+	targetURI, err := sip.ParseUri(target)
+	if err != nil {
+		slog.Debug("Dialog.Start parse URI failed",
+			slog.String("target", target),
+			slog.String("error", err.Error()))
+		return nil, errors.Wrap(err, "failed to parse target URI")
+	}
+	
+	// Устанавливаем удаленный адрес
+	s.uriMu.Lock()
+	s.remoteTarget = targetURI
+	s.remoteURI = targetURI
+	s.uriMu.Unlock()
+	
+	// Инициализируем заголовки From и To для UAC
+	if s.from == nil {
+		s.from = &sip.FromHeader{
+			DisplayName: s.profile.DisplayName,
+			Address:     s.profile.Address,
+			Params:      sip.NewParams().Add("tag", s.localTag),
+		}
+	}
+	
+	if s.to == nil {
+		s.to = &sip.ToHeader{
+			DisplayName: "",
+			Address:     targetURI,
+			Params:      sip.NewParams(),
+		}
+	}
+	
+	// Создаем INVITE запрос
+	req := s.makeRequest(sip.INVITE)
+	
+	// Применяем опции
+	for _, opt := range opts {
+		opt(req)
+	}
+	
+	slog.Debug("Dialog.Start creating INVITE",
+		slog.String("request", req.String()))
+	
+	// Переводим диалог в состояние вызова
+	if err := s.setState(Calling, nil); err != nil {
+		slog.Debug("Dialog.Start setState failed",
+			slog.String("error", err.Error()))
+		return nil, err
+	}
+	
+	// Отправляем запрос
+	tx, err := s.sendReq(ctx, req)
+	if err != nil {
+		slog.Debug("Dialog.Start sendReq failed",
+			slog.String("error", err.Error()))
+		// Возвращаем состояние обратно
+		s.setState(IDLE, nil)
+		return nil, errors.Wrap(err, "failed to send INVITE")
+	}
+	
+	slog.Debug("Dialog.Start INVITE sent successfully",
+		slog.String("txID", tx.Request().TransactionID()))
+	
+	return tx, nil
+}
+
+// Refer отправляет REFER запрос для переадресации вызова.
+// target - SIP URI на который переадресуется вызов.
+// Может быть вызван только в состоянии InCall.
+// Используется для слепого перевода (blind transfer).
+func (s *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...RequestOpt) (IClientTX, error) {
+	// Отправляем REFER запрос для переадресации
+	slog.Debug("Dialog.Refer",
+		slog.String("dialogID", s.id),
+		slog.String("target", target.String()),
+		slog.String("state", s.State().String()))
+	
+	if s.State() != InCall {
+		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
+		slog.Debug("Dialog.Refer failed", slog.String("error", err.Error()))
+		return nil, err
+	}
+	
+	// Создаем REFER запрос
+	req := s.ReferRequest(target, nil)
+	
+	// Применяем опции
+	for _, opt := range opts {
+		opt(req)
+	}
+	
+	slog.Debug("Dialog.Refer creating REFER request",
+		slog.String("request", req.String()))
+	
+	// Отправляем запрос
+	tx, err := s.sendReq(ctx, req)
+	if err != nil {
+		slog.Debug("Dialog.Refer sendReq failed",
+			slog.String("error", err.Error()))
+		return nil, errors.Wrap(err, "failed to send REFER")
+	}
+	
+	slog.Debug("Dialog.Refer sent successfully",
+		slog.String("txID", tx.Request().TransactionID()))
+	
+	return tx, nil
+}
+
+// ReferReplace отправляет REFER запрос с заменой существующего диалога.
+// replaceDialog - диалог который будет заменен.
+// Может быть вызван только в состоянии InCall.
+// Используется для перевода с подменой (attended transfer).
+func (s *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts ...RequestOpt) (IClientTX, error) {
+	// Отправляем REFER с заменой существующего диалога
+	slog.Debug("Dialog.ReferReplace",
+		slog.String("dialogID", s.id),
+		slog.String("replaceDialogID", replaceDialog.ID()),
+		slog.String("state", s.State().String()))
+	
+	if s.State() != InCall {
+		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
+		slog.Debug("Dialog.ReferReplace failed", slog.String("error", err.Error()))
+		return nil, err
+	}
+
+	if replaceDialog == nil {
+		err := fmt.Errorf("replaceDialog cannot be nil")
+		slog.Debug("Dialog.ReferReplace failed", slog.String("error", err.Error()))
+		return nil, err
+	}
+	
+	// Получаем информацию для Replaces заголовка
+	callID := replaceDialog.CallID()
+	localTag := replaceDialog.LocalTag()
+	remoteTag := replaceDialog.RemoteTag()
+	
+	slog.Debug("Dialog.ReferReplace replace info",
+		slog.String("callID", string(callID)),
+		slog.String("localTag", localTag),
+		slog.String("remoteTag", remoteTag))
+	
+	// Создаем REFER запрос с Replaces
+	// TODO: Нужно создать метод ReferWithReplace с правильными параметрами
+	// Пока используем обычный REFER
+	req := s.ReferRequest(replaceDialog.RemoteURI(), nil)
+	
+	// Добавляем Replaces информацию в Refer-To заголовок
+	replaces := fmt.Sprintf("%s;to-tag=%s;from-tag=%s", callID, remoteTag, localTag)
+	replacesHeader := sip.NewHeader("Replaces", replaces)
+	req.AppendHeader(replacesHeader)
+	
+	// Применяем опции
+	for _, opt := range opts {
+		opt(req)
+	}
+	
+	slog.Debug("Dialog.ReferReplace creating REFER with Replaces",
+		slog.String("request", req.String()))
+	
+	// Отправляем запрос
+	tx, err := s.sendReq(ctx, req)
+	if err != nil {
+		slog.Debug("Dialog.ReferReplace sendReq failed",
+			slog.String("error", err.Error()))
+		return nil, errors.Wrap(err, "failed to send REFER with Replaces")
+	}
+	
+	slog.Debug("Dialog.ReferReplace sent successfully",
+		slog.String("txID", tx.Request().TransactionID()))
+	
+	return tx, nil
+}
+
+// SendRequest отправляет произвольный SIP запрос в рамках диалога.
+// По умолчанию создает INFO запрос. Метод можно изменить через RequestOpt.
+// Не может быть вызван в состоянии Ended.
+func (s *Dialog) SendRequest(ctx context.Context, opts ...RequestOpt) (IClientTX, error) {
+	// Отправляем произвольный запрос в рамках диалога
+	slog.Debug("Dialog.SendRequest",
+		slog.String("dialogID", s.id),
+		slog.String("state", s.State().String()))
+	
+	if s.State() == Ended {
+		err := fmt.Errorf("dialog has ended")
+		slog.Debug("Dialog.SendRequest failed", slog.String("error", err.Error()))
+		return nil, err
+	}
+
+	// Определяем метод запроса из опций
+	method := sip.INFO // По умолчанию INFO
+	var req *sip.Request
+	
+	// Создаем запрос
+	req = s.makeRequest(method)
+	
+	// Применяем все опции
+	for _, opt := range opts {
+		opt(req)
+	}
+	
+	// Получаем актуальный метод после применения опций
+	method = req.Method
+	
+	slog.Debug("Dialog.SendRequest creating request",
+		slog.String("method", string(method)),
+		slog.String("request", req.String()))
+	
+	// Отправляем запрос
+	tx, err := s.sendReq(ctx, req)
+	if err != nil {
+		slog.Debug("Dialog.SendRequest sendReq failed",
+			slog.String("error", err.Error()))
+		return nil, errors.Wrap(err, "failed to send request")
+	}
+	
+	slog.Debug("Dialog.SendRequest sent successfully",
+		slog.String("method", string(method)),
+		slog.String("txID", tx.Request().TransactionID()))
+	
+	return tx, nil
+}
+
+// Context возвращает контекст диалога.
+// Используется для отмены операций и управления жизненным циклом.
+func (s *Dialog) Context() context.Context {
+	return s.ctx
+}
+
+// SetContext устанавливает новый контекст для диалога.
+// Позволяет обновить контекст во время работы диалога.
+func (s *Dialog) SetContext(ctx context.Context) {
+	s.ctx = ctx
+}
+
+// CreatedAt возвращает время создания диалога.
+func (s *Dialog) CreatedAt() time.Time {
+	return s.createdAt
+}
+
+// LastActivity возвращает время последней активности в диалоге.
+// Обновляется при отправке/получении запросов и смене состояния.
+// Метод потокобезопасен.
+func (s *Dialog) LastActivity() time.Time {
+	s.activityMu.Lock()
+	defer s.activityMu.Unlock()
+	return s.lastActivity
+}
+
+// Close закрывает диалог без отправки BYE запроса.
+// Освобождает ресурсы и переводит диалог в состояние Ended.
+// Используется для аварийного завершения или очистки.
+func (s *Dialog) Close() error {
+	// Закрываем диалог без отправки BYE
+	if s.State() == Ended {
+		return nil
+	}
+
+	// Переводим в состояние Ended
+	if err := s.setState(Ended, nil); err != nil {
+		return err
+	}
+
+	// TODO: Освободить ресурсы
+	return nil
+}
+
+// OnStateChange устанавливает обработчик изменения состояния диалога.
+// Обработчик будет вызван при каждом переходе между состояниями.
+// Метод потокобезопасен.
+func (s *Dialog) OnStateChange(handler func(DialogState)) {
+	s.handlersMu.Lock()
+	defer s.handlersMu.Unlock()
+	s.stateChangeHandler = handler
+}
+
+// OnBody устанавливает обработчик получения тела SIP сообщения.
+// Например, для обработки SDP в INVITE или других данных.
+// Метод потокобезопасен.
+func (s *Dialog) OnBody(handler func(body *Body)) {
+	s.handlersMu.Lock()
+	defer s.handlersMu.Unlock()
+	s.bodyHandler = handler
+}
+
+// OnRequestHandler устанавливает обработчик входящих запросов.
+// Обработчик получает серверную транзакцию для ответа.
+// Метод потокобезопасен.
+func (s *Dialog) OnRequestHandler(handler func(IServerTX)) {
+	s.handlersMu.Lock()
+	defer s.handlersMu.Unlock()
+	s.requestHandler = handler
+}
+
+// Без  opts cоздается по дефолту
+func NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, error) {
+
 	if uu == nil {
-		return nil, fmt.Errorf("uac, uas is not initialized")
+		return nil, fmt.Errorf("ua not created")
 	}
-	if profile == nil {
-		return nil, fmt.Errorf("profile  is nil")
+	di := uu.createDefaultDialog()
+
+	for _, opt := range opts {
+		opt(di)
 	}
-	session := &Dialog{}
-	session.localCSeq.Swap(uint32(rand.Int31()))
-	session.initFSM()
 
-	session.profile = profile
-	session.callID = sip.CallIDHeader(newCallId())
+	di.localCSeq.Swap(uint32(rand.Int31()))
+	di.initFSM()
+	di.callID = sip.CallIDHeader(newCallId())
 
-	return session, nil
+	// Инициализируем временные метки
+	di.createdAt = time.Now()
+	di.lastActivity = di.createdAt
+
+	// Устанавливаем контекст
+	di.ctx = ctx
+
+	// Генерируем localTag
+	di.localTag = generateTag()
+	
+	// Устанавливаем локальный URI из профиля
+	if di.profile != nil {
+		di.localURI = di.profile.Address
+		di.localTarget = di.profile.Address
+	}
+	
+	// Инициализируем локальный контакт
+	if di.localContact == nil && di.profile != nil {
+		di.localContact = &sip.ContactHeader{
+			DisplayName: di.profile.DisplayName,
+			Address:     di.profile.Address,
+		}
+	}
+
+	// Устанавливаем ID диалога
+	di.updateDialogID()
+
+	return di, nil
 }
 
 func newUAS(req *sip.Request, tx sip.ServerTransaction) *Dialog {
@@ -109,10 +611,22 @@ func newUAS(req *sip.Request, tx sip.ServerTransaction) *Dialog {
 	session.callID = *req.CallID()
 	session.initReq = req
 
+	// Устанавливаем временные метки
+	session.createdAt = time.Now()
+	session.lastActivity = session.createdAt
+
+	// Устанавливаем контекст
+	session.ctx = context.Background()
+
 	toHeader := req.To()
 	if toHeader != nil && toHeader.Params != nil && toHeader.Params.Has("tag") {
-		//todo
+		if tagValue, ok := toHeader.Params.Get("tag"); ok {
+			session.remoteTag = tagValue
+		}
 	}
+
+	// Генерируем localTag для UAS
+	session.localTag = generateTag()
 
 	session.initFSM()
 
@@ -133,6 +647,20 @@ func newUAS(req *sip.Request, tx sip.ServerTransaction) *Dialog {
 		Params:      nil,
 	}
 	session.remoteContact = req.Contact()
+
+	// Обрабатываем from/to заголовки
+	session.from = req.From()
+	session.to = req.To()
+
+	// Обрабатываем remoteTag из From заголовка (для UAS)
+	if session.from.Params != nil && session.from.Params.Has("tag") {
+		if tagValue, ok := session.from.Params.Get("tag"); ok {
+			session.remoteTag = tagValue
+		}
+	}
+
+	// Устанавливаем ID диалога
+	session.updateDialogID()
 
 	return session
 }
@@ -210,6 +738,7 @@ func (s *Dialog) initFSM() {
 			{Name: formEventName(Calling, Terminating), Src: []string{string(Calling)}, Dst: string(Terminating)},
 			{Name: formEventName(Ringing, Terminating), Src: []string{string(Ringing)}, Dst: string(Terminating)},
 		}, fsm.Callbacks{
+			"after_event":               s.afterStateChange,
 			"enter_" + Ringing.String(): s.enterRinging,
 			"enter_" + Calling.String(): s.enterCalling,
 		})
@@ -217,36 +746,39 @@ func (s *Dialog) initFSM() {
 
 //callBacks for FSM
 
-func (s *Dialog) enterState(ctx context.Context, e *fsm.Event) {
+func (s *Dialog) afterStateChange(ctx context.Context, e *fsm.Event) {
+	// Обновляем время последней активности
+	s.activityMu.Lock()
+	s.lastActivity = time.Now()
+	s.activityMu.Unlock()
 
+	// Уведомляем о смене состояния
+	s.handlersMu.Lock()
+	handler := s.stateChangeHandler
+	s.handlersMu.Unlock()
+
+	if handler != nil {
+		handler(DialogState(e.Dst))
+	}
 }
 
 func (s *Dialog) enterRinging(ctx context.Context, e *fsm.Event) {
-	// callback о новом звонке
+	// Обрабатываем входящий вызов
 	if tx, ok := e.Args[0].(*TX); ok && len(e.Args) == 1 {
-		// TODO: cb не определена
-		// cb.OnIncomingCall(s, tx)
-	}
+		s.handlersMu.Lock()
+		handler := s.requestHandler
+		s.handlersMu.Unlock()
 
+		if handler != nil {
+			handler(tx)
+		}
+	}
 }
 
 func (s *Dialog) enterCalling(ctx context.Context, e *fsm.Event) {
-
+	// Обрабатываем начало исходящего вызова
+	// TODO: Дополнительная логика при необходимости
 }
-
-func (s *Dialog) enterInCall(ctx context.Context, e *fsm.Event) {
-
-}
-
-//callBacks
-
-func (s *Dialog) notify(state DialogState) {
-	if s.callBacks != nil {
-		s.callBacks.OnChangeDialogState(state)
-	}
-}
-
-func (s *Dialog) OnIncomingCall(tx *TX) {}
 
 func (s *Dialog) setState(status DialogState, tx *TX) error {
 
@@ -255,16 +787,6 @@ func (s *Dialog) setState(status DialogState, tx *TX) error {
 
 func (s *Dialog) GetCurrentState() DialogState {
 	return DialogState(s.fsm.Current())
-}
-
-func (s *Dialog) SetCallBacks(cb CallBacksDialog) {
-	s.callBacks = cb
-}
-
-func newUAC(profile *sip.Uri) *Dialog {
-	session := &Dialog{}
-
-	return session
 }
 
 func (s *Dialog) saveHeaders(req *sip.Request) {
@@ -277,6 +799,93 @@ func (s *Dialog) setFirstIncomingTX(tx *TX) {
 
 func (s *Dialog) getFirstIncomingTX() *TX {
 	return s.firstTXIncoming
+}
+
+// generateTag генерирует уникальный тег для диалога
+func generateTag() string {
+	return fmt.Sprintf("%d.%d", time.Now().UnixNano(), rand.Int63())
+}
+
+// makeRequest создает новый SIP запрос в рамках диалога.
+// Автоматически добавляет необходимые заголовки: From, To, Call-ID, CSeq, Route.
+func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
+	s.uriMu.Lock()
+	target := s.remoteTarget
+	s.uriMu.Unlock()
+	
+	// Создаем запрос с целевым URI
+	req := sip.NewRequest(method, target)
+	
+	// Добавляем заголовки диалога
+	if s.from != nil {
+		req.AppendHeader(sip.HeaderClone(s.from))
+	}
+	if s.to != nil {
+		req.AppendHeader(sip.HeaderClone(s.to))
+	}
+	
+	// Call-ID
+	req.AppendHeader(&s.callID)
+	
+	// CSeq с увеличением локального счетчика
+	cseq := sip.CSeqHeader{
+		SeqNo:      s.localCSeq.Add(1),
+		MethodName: method,
+	}
+	req.AppendHeader(&cseq)
+	
+	// Contact
+	if s.localContact != nil {
+		req.AppendHeader(sip.HeaderClone(s.localContact))
+	}
+	
+	// Route set
+	for _, route := range s.routeHeaders {
+		req.AppendHeader(&route)
+	}
+	
+	// Max-Forwards
+	maxForwards := sip.MaxForwardsHeader(70)
+	req.AppendHeader(&maxForwards)
+	
+	slog.Debug("Dialog.makeRequest created",
+		slog.String("method", string(method)),
+		slog.String("callID", string(s.callID)),
+		slog.Uint64("cseq", uint64(cseq.SeqNo)))
+	
+	return req
+}
+
+// sendReq отправляет запрос через транспортный уровень и создает транзакцию.
+func (s *Dialog) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
+	// Обновляем время последней активности
+	s.activityMu.Lock()
+	s.lastActivity = time.Now()
+	s.activityMu.Unlock()
+	
+	// Отправляем через глобальный UAC
+	tx, err := uu.uac.TransactionRequest(ctx, req, sipgo.ClientRequestAddVia)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to send request")
+	}
+	
+	slog.Debug("Dialog.sendReq sent",
+		slog.String("method", string(req.Method)),
+		slog.String("txID", req.TransactionID()))
+	
+	// Создаем обертку транзакции
+	txWrapper := newTX(req, tx, s)
+	return txWrapper, nil
+}
+
+// updateDialogID обновляет ID диалога на основе CallID и тегов
+func (s *Dialog) updateDialogID() {
+	if s.callID != "" && s.localTag != "" && s.remoteTag != "" {
+		s.id = fmt.Sprintf("%s:%s:%s", s.callID, s.localTag, s.remoteTag)
+	} else if s.callID != "" && s.localTag != "" {
+		// Временный ID пока нет remoteTag
+		s.id = fmt.Sprintf("%s:%s:pending", s.callID, s.localTag)
+	}
 }
 
 //func (s *session) storeRouteSet(msg sip.Message, reverse bool) {

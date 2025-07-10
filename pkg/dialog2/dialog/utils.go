@@ -27,7 +27,8 @@ func (s *Dialog) UAType() string {
 }
 
 // CallID возвращает CallID сессии
-func (s *Dialog) CallID() *sip.CallIDHeader {
+// CallIDPtr возвращает указатель на CallID
+func (s *Dialog) CallIDPtr() *sip.CallIDHeader {
 	return &s.callID
 }
 
@@ -41,14 +42,14 @@ func (s *Dialog) RemoteContact() *sip.ContactHeader {
 	return s.remoteContact
 }
 
-// LocalURI возвращает локальный URI
-func (s *Dialog) LocalURI() *sip.Uri {
+// LocalURIPtr возвращает указатель на локальный URI
+func (s *Dialog) LocalURIPtr() *sip.Uri {
 	ret := s.localTarget
 	return &ret
 }
 
-// RemoteURI возвращает удаленный URI
-func (s *Dialog) RemoteURI() *sip.Uri {
+// RemoteURIPtr возвращает указатель на удаленный URI
+func (s *Dialog) RemoteURIPtr() *sip.Uri {
 	ret := s.remoteTarget
 	return &ret
 }

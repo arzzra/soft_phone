@@ -7,7 +7,6 @@ import (
 	"github.com/emiago/sipgo/sip"
 	"github.com/pkg/errors"
 	"log/slog"
-	"net"
 	"strings"
 )
 
@@ -17,28 +16,9 @@ func (s *Dialog) makeReq() {
 
 }
 
-func (s *Dialog) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
-	tx, err := uu.uac.TransactionRequest(ctx, req, sipgo.ClientRequestAddVia)
-	if err != nil {
-		err = errors.Wrapf(err, "failed to send request")
-		return nil, err
-	}
-
-	{
-		slog.Debug("creating new TX", slog.String("request fromTag", GetFromTag(req)))
-	}
-
-	txD, err := newTX(c)
-	if err != nil {
-		err = errors.Wrapf(err, "failed to create TX")
-		return nil, err
-	}
-	return txD, nil
-}
-
 // Invite отправляет INVITE запрос на вызов
 func (s *Dialog) Invite(ctx context.Context, target string, opts ...RequestOpt) (ITx, error) {
-	if target == nil {
+	if target == "" {
 		return nil, fmt.Errorf("target is nill")
 	}
 
@@ -53,8 +33,6 @@ func (s *Dialog) Invite(ctx context.Context, target string, opts ...RequestOpt) 
 	}
 
 	fmt.Println("target", req.String())
-
-	setContent(req, body.contentType, body.content)
 
 	{
 		slog.Debug("session.Invite", slog.String("request", req.String()), slog.String("body", string(req.Body())))
@@ -115,13 +93,13 @@ func createReferToHeader(target sip.Uri, callID, toTag, fromTag string) sip.Head
 	return sip.NewHeader("Refer-To", builder.String())
 }
 
-func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
+func (s *Dialog) makeRequest2(method sip.RequestMethod) *sip.Request {
 	trg := s.remoteTarget
 	trg.Port = 0
 	newRequest := sip.NewRequest(method, trg)
 
 	// Получаем адрес из заголовка To входящего запроса для UAS
-	if s.initReq != nil && s.uaType == UAS {
+	if s.uaType == UAS {
 		toHeader := s.initReq.To()
 		if toHeader != nil {
 			newRequest.Laddr = sip.Addr{
@@ -137,18 +115,9 @@ func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
 				Hostname: tc.Host,
 				Port:     tc.Port,
 			}
-		} else if len(uu.config.Hosts) > 0 {
-			// Для обратной совместимости используем старые поля
-			ip := net.ParseIP(uu.config.Hosts[0])
-			newRequest.Laddr = sip.Addr{
-				IP:       ip,
-				Hostname: uu.config.Hosts[0],
-				Port:     uu.config.Port,
-			}
 		}
-	}
 
-	fmt.Println("new req", s.remoteTarget.String())
+	}
 
 	fromTag := newTag()
 
@@ -195,7 +164,7 @@ func makeReqWithOpts(name sip.RequestMethod, to sip.Uri, opts ...ReqBuilderOpt) 
 //////////////////////////////////////////////////////////
 
 // Refer возвращает REFER запрос для слепого перевода звонка.
-func (s *Dialog) Refer(target sip.Uri, headers []sip.Header) *sip.Request {
+func (s *Dialog) ReferRequest(target sip.Uri, headers []sip.Header) *sip.Request {
 	req := s.makeRequest(sip.REFER)
 
 	referBy := createReferByHeader(s.localContact.Address)
