@@ -218,9 +218,23 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 		fromURI.User = cfg.fromUser
 	}
 
-	req.AppendHeader(sip.NewHeader("From", fmt.Sprintf("<%s>", fromURI.String())))
-	req.AppendHeader(sip.NewHeader("To", fmt.Sprintf("<%s>", remoteURI.String())))
-	req.AppendHeader(sip.NewHeader("Contact", fmt.Sprintf("<%s>", u.contactURI.String())))
+	fromHeader := &sip.FromHeader{
+		Address: *fromURI,
+		Params:  sip.NewParams(),
+	}
+	req.AppendHeader(fromHeader)
+	
+	toHeader := &sip.ToHeader{
+		Address: remoteURI,
+		Params:  sip.NewParams(),
+	}
+	req.AppendHeader(toHeader)
+	
+	contactHeader := &sip.ContactHeader{
+		Address: u.contactURI,
+		Params:  sip.NewParams(),
+	}
+	req.AppendHeader(contactHeader)
 
 	// Добавляем тело, если есть
 	if cfg.body != nil {

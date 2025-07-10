@@ -40,8 +40,18 @@ func TestDialogManagerConcurrentAccess(t *testing.T) {
 				req := sip.NewRequest(sip.INVITE, sip.Uri{Scheme: "sip", Host: "example.com"})
 				callID := sip.CallIDHeader(fmt.Sprintf("call-%d-%d@example.com", id, j))
 				req.AppendHeader(&callID)
-				req.AppendHeader(sip.NewHeader("From", fmt.Sprintf("<sip:user%d@example.com>;tag=tag%d", id, id)))
-				req.AppendHeader(sip.NewHeader("To", "<sip:target@example.com>"))
+				fromHeader := &sip.FromHeader{
+					Address: sip.Uri{Scheme: "sip", User: fmt.Sprintf("user%d", id), Host: "example.com"},
+					Params:  sip.NewParams(),
+				}
+				fromHeader.Params.Add("tag", fmt.Sprintf("tag%d", id))
+				req.AppendHeader(fromHeader)
+				
+				toHeader := &sip.ToHeader{
+					Address: sip.Uri{Scheme: "sip", User: "target", Host: "example.com"},
+					Params:  sip.NewParams(),
+				}
+				req.AppendHeader(toHeader)
 				req.AppendHeader(sip.NewHeader("CSeq", "1 INVITE"))
 				
 				// Создаем диалог

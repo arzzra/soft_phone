@@ -61,7 +61,9 @@ func (dm *DialogManager) SetUASUAC(uasuac *UASUAC) {
 	dm.uasuac = uasuac
 }
 
+
 // CreateServerDialog создает новый серверный диалог (UAS)
+// Эта функция только создает новый диалог, не проверяя существование
 func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTransaction) (IDialog, error) {
 	// Проверка rate limit до захвата мьютекса
 	remoteAddr := req.Source()
@@ -102,12 +104,6 @@ func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTrans
 		return nil, err
 	}
 
-	// Проверяем, нет ли уже диалога с таким Call-ID
-	callID := req.CallID()
-	if dialogID, exists := dm.callIDIndex[callID.Value()]; exists {
-		return dm.dialogs[dialogID], fmt.Errorf("диалог с Call-ID %s уже существует", callID.Value())
-	}
-
 	// Создаем новый диалог
 	dialog := NewDialog(dm.uasuac, true, dm.logger) // isServer = true
 
@@ -119,6 +115,14 @@ func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTrans
 
 	// Сохраняем диалог
 	dialogID := dialog.ID()
+	callID := req.CallID()
+	
+	// Проверяем дубликат только при сохранении
+	if _, exists := dm.callIDIndex[callID.Value()]; exists {
+		err = fmt.Errorf("диалог с Call-ID %s уже существует", callID.Value())
+		return nil, err
+	}
+	
 	dm.dialogs[dialogID] = dialog
 	dm.callIDIndex[callID.Value()] = dialogID
 
@@ -308,15 +312,60 @@ func (dm *DialogManager) GetDialogByCallID(callID *sip.CallIDHeader) (IDialog, e
 }
 
 // GetDialogByRequest пытается найти диалог по запросу
+// Сначала пытается найти по тегам (быстрее), затем по Call-ID
 func (dm *DialogManager) GetDialogByRequest(req *sip.Request) (IDialog, error) {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	// Сначала пробуем найти по Call-ID
+	// Извлекаем Call-ID
 	callID := req.CallID()
-	dialogID, exists := dm.callIDIndex[callID.Value()]
+	if callID == nil {
+		return nil, fmt.Errorf("отсутствует Call-ID в запросе")
+	}
+
+	// Извлекаем теги из заголовков
+	fromHeader := req.From()
+	toHeader := req.To()
+	
+	var fromTag, toTag string
+	if fromHeader != nil && fromHeader.Params != nil {
+		fromTag, _ = fromHeader.Params.Get("tag")
+	}
+	if toHeader != nil && toHeader.Params != nil {
+		toTag, _ = toHeader.Params.Get("tag")
+	}
+
+	// Пытаемся найти по тегам (O(1) операция)
+	if fromTag != "" && toTag != "" {
+		// Пробуем оба варианта порядка тегов
+		dialog, err := dm.GetDialogByTags(callID.Value(), fromTag, toTag)
+		if err == nil {
+			return dialog, nil
+		}
+		
+		// Пробуем обратный порядок тегов
+		dialog, err = dm.GetDialogByTags(callID.Value(), toTag, fromTag)
+		if err == nil {
+			return dialog, nil
+		}
+	}
+
+	// Fallback на поиск по Call-ID
+	return dm.GetDialogByCallID(callID)
+}
+
+// FindDialogForRequest находит диалог для запроса без блокировки
+// Используется когда уже есть блокировка менеджера
+func (dm *DialogManager) findDialogForRequest(req *sip.Request) (IDialog, error) {
+	// Извлекаем Call-ID
+	callID := req.CallID()
+	if callID == nil {
+		return nil, fmt.Errorf("отсутствует Call-ID в запросе")
+	}
+
+	callIDValue := callID.Value()
+	
+	// Сначала пробуем найти по Call-ID
+	dialogID, exists := dm.callIDIndex[callIDValue]
 	if !exists {
-		return nil, fmt.Errorf("диалог для запроса не найден")
+		return nil, fmt.Errorf("диалог с Call-ID %s не найден", callIDValue)
 	}
 
 	if dialogID == "" {
@@ -328,8 +377,6 @@ func (dm *DialogManager) GetDialogByRequest(req *sip.Request) (IDialog, error) {
 		return nil, fmt.Errorf("диалог с ID %s не найден", dialogID)
 	}
 
-	// Проверяем, что запрос действительно относится к этому диалогу
-	// Это делается внутри диалога при обработке
 	return dialog, nil
 }
 

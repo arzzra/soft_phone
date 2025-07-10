@@ -19,14 +19,58 @@ func (u *UASUAC) handleInviteRequest(req *sip.Request, tx sip.ServerTransaction)
 		return
 	}
 	
+	// Проверяем наличие To tag - если есть, это re-INVITE
+	toHeader := req.To()
+	var toTag string
+	if toHeader != nil && toHeader.Params != nil {
+		toTag, _ = toHeader.Params.Get("tag")
+	}
+	
+	if toTag != "" {
+		// Это re-INVITE (есть To tag) - ищем существующий диалог
+		existingDialog, err := u.dialogManager.GetDialogByRequest(req)
+		if err != nil {
+			// Диалог не найден для re-INVITE - отправляем 481
+			res := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = u.respondWithRetry(ctx, tx, res)
+			u.logger.Warn("получен re-INVITE для несуществующего диалога",
+				CallIDField(req.CallID().Value()),
+				F("to_tag", toTag))
+			return
+		}
+		
+		// Передаем re-INVITE в существующий диалог
+		_ = existingDialog.OnRequest(context.Background(), req, tx)
+		return
+	}
+	
+	// Это новый INVITE (нет To tag) - проверяем, нет ли уже диалога с таким Call-ID
+	existingDialog, err := u.dialogManager.GetDialogByCallID(req.CallID())
+	if err == nil && existingDialog != nil {
+		// Диалог с таким Call-ID уже существует - это дубликат
+		res := sip.NewResponseFromRequest(req, 482, "Loop Detected", nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = u.respondWithRetry(ctx, tx, res)
+		u.logger.Warn("получен дублированный INVITE с существующим Call-ID",
+			CallIDField(req.CallID().Value()),
+			F("dialog_state", existingDialog.State()))
+		return
+	}
+	
 	// Создаем новый диалог для входящего INVITE
 	dialog, err := u.dialogManager.CreateServerDialog(req, tx)
 	if err != nil {
-		// Отправляем ошибку
+		// Ошибка создания диалога - отправляем 500
 		res := sip.NewResponseFromRequest(req, sip.StatusInternalServerError, "Internal Server Error", nil)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = u.respondWithRetry(ctx, tx, res)
+		u.logger.Error("ошибка создания диалога",
+			CallIDField(req.CallID().Value()),
+			ErrField(err))
 		return
 	}
 

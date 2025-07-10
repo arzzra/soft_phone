@@ -55,13 +55,13 @@ type Dialog struct {
 
 	// UASUAC для отправки запросов
 	uasuac *UASUAC
-	
+
 	// Обработчик заголовков
 	headerProcessor *HeaderProcessor
-	
+
 	// Валидатор безопасности
 	securityValidator *SecurityValidator
-	
+
 	// Логгер для структурированного логирования
 	logger Logger
 
@@ -72,12 +72,12 @@ type Dialog struct {
 // NewDialog создает новый диалог
 func NewDialog(uasuac *UASUAC, isServer bool, logger Logger) *Dialog {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	// Используем NoOpLogger если logger не предоставлен
 	if logger == nil {
 		logger = &NoOpLogger{}
 	}
-	
+
 	d := &Dialog{
 		uasuac:            uasuac,
 		isServer:          isServer,
@@ -161,7 +161,6 @@ func (d *Dialog) updateDialogID() {
 		d.id = fmt.Sprintf("%s;from-tag=%s;to-tag=%s", d.callID.Value(), d.localTag, d.remoteTag)
 	}
 }
-
 
 // ID возвращает идентификатор диалога
 func (d *Dialog) ID() string {
@@ -303,7 +302,11 @@ func (d *Dialog) Answer(body Body, headers map[string]string) error {
 		res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", body.Content)
 
 		// Добавляем заголовки
-		res.AppendHeader(sip.NewHeader("Contact", fmt.Sprintf("<%s>", d.localTarget.String())))
+		contactHeader := &sip.ContactHeader{
+			Address: d.localTarget,
+			Params:  sip.NewParams(),
+		}
+		res.AppendHeader(contactHeader)
 		if body.Content != nil {
 			res.AppendHeader(sip.NewHeader("Content-Type", body.ContentType))
 			res.AppendHeader(sip.NewHeader("Content-Length", fmt.Sprintf("%d", len(body.Content))))
@@ -440,22 +443,22 @@ func (d *Dialog) Terminate() error {
 func (d *Dialog) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	
+
 	// Отменяем контекст
 	if d.cancel != nil {
 		d.cancel()
 	}
-	
+
 	// Очищаем обработчики чтобы предотвратить утечки памяти
 	d.stateChangeHandler = nil
 	d.bodyHandler = nil
 	d.requestHandler = nil
 	d.referHandler = nil
-	
+
 	// Очищаем ссылки на транзакции
 	d.inviteTx = nil
 	d.inviteRequest = nil
-	
+
 	// Переходим в состояние terminated если это возможно
 	currentState := d.stateMachine.Current()
 	if currentState != "terminated" {
@@ -478,7 +481,7 @@ func (d *Dialog) Close() error {
 				ErrField(err))
 		}
 	}
-	
+
 	return nil
 }
 
@@ -502,12 +505,12 @@ func (d *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (si
 
 	// Добавляем Refer-To заголовок
 	referToValue := fmt.Sprintf("<%s>", target.String())
-	
+
 	// Валидация Refer-To заголовка
 	if err := d.securityValidator.ValidateHeader("Refer-To", referToValue); err != nil {
 		return nil, fmt.Errorf("ошибка валидации Refer-To заголовка: %w", err)
 	}
-	
+
 	referReq.AppendHeader(sip.NewHeader("Refer-To", referToValue))
 
 	// Применяем опции
@@ -636,12 +639,12 @@ func (d *Dialog) Context() context.Context {
 func (d *Dialog) SetContext(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	
+
 	// Отменяем старый контекст
 	if d.cancel != nil {
 		d.cancel()
 	}
-	
+
 	d.ctx, d.cancel = context.WithCancel(ctx)
 }
 
@@ -668,7 +671,7 @@ func (d *Dialog) OnRequest(_ context.Context, req *sip.Request, tx sip.ServerTra
 	if !d.isRequestInDialog(req) {
 		return fmt.Errorf("запрос не относится к этому диалогу")
 	}
-	
+
 	// Обрабатываем заголовки
 	if err := d.headerProcessor.ProcessRequest(req); err != nil {
 		// Отправляем 400 Bad Request
@@ -733,18 +736,24 @@ func (d *Dialog) OnRefer(handler ReferHandler) {
 // applyDialogHeaders применяет заголовки диалога к запросу
 func (d *Dialog) applyDialogHeaders(req *sip.Request) {
 	// From
-	fromValue := fmt.Sprintf("<%s>", d.localURI.String())
-	if d.localTag != "" {
-		fromValue += fmt.Sprintf(";tag=%s", d.localTag)
+	fromHeader := &sip.FromHeader{
+		Address: d.localURI,
+		Params:  sip.NewParams(),
 	}
-	req.ReplaceHeader(sip.NewHeader("From", fromValue))
+	if d.localTag != "" {
+		fromHeader.Params.Add("tag", d.localTag)
+	}
+	req.ReplaceHeader(fromHeader)
 
 	// To
-	toValue := fmt.Sprintf("<%s>", d.remoteURI.String())
-	if d.remoteTag != "" {
-		toValue += fmt.Sprintf(";tag=%s", d.remoteTag)
+	toHeader := &sip.ToHeader{
+		Address: d.remoteURI,
+		Params:  sip.NewParams(),
 	}
-	req.ReplaceHeader(sip.NewHeader("To", toValue))
+	if d.remoteTag != "" {
+		toHeader.Params.Add("tag", d.remoteTag)
+	}
+	req.ReplaceHeader(toHeader)
 
 	// Call-ID
 	req.ReplaceHeader(&d.callID)
@@ -754,7 +763,11 @@ func (d *Dialog) applyDialogHeaders(req *sip.Request) {
 	req.ReplaceHeader(sip.NewHeader("CSeq", fmt.Sprintf("%d %s", d.localSeq, req.Method)))
 
 	// Contact
-	req.ReplaceHeader(sip.NewHeader("Contact", fmt.Sprintf("<%s>", d.localTarget.String())))
+	contactHeader := &sip.ContactHeader{
+		Address: d.localTarget,
+		Params:  sip.NewParams(),
+	}
+	req.ReplaceHeader(contactHeader)
 
 	// Route set
 	if err := d.headerProcessor.ProcessRouteHeaders(req, d.routeSet); err != nil {
@@ -764,7 +777,7 @@ func (d *Dialog) applyDialogHeaders(req *sip.Request) {
 			ErrField(err))
 		// Игнорируем ошибку маршрутизации, так как это не критично для применения заголовков
 	}
-	
+
 	// Добавляем дополнительные заголовки
 	d.headerProcessor.AddSupportedHeader(req)
 	d.headerProcessor.AddUserAgent(req, "SoftPhone/1.0")
@@ -811,13 +824,13 @@ func (d *Dialog) handleBYE(req *sip.Request, tx sip.ServerTransaction) error {
 	// Создаем контекст для отправки ответа
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	// Отвечаем 200 OK
 	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-	
+
 	// Добавляем заголовки
 	d.headerProcessor.AddUserAgentToResponse(res, "SoftPhone/1.0")
-	
+
 	if err := d.uasuac.respondWithRetry(ctx, tx, res); err != nil {
 		return err
 	}
@@ -831,7 +844,7 @@ func (d *Dialog) handleINFO(req *sip.Request, tx sip.ServerTransaction) error {
 	// Создаем контекст для отправки ответа
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	// Проверяем тело
 	if req.Body() != nil && d.bodyHandler != nil {
 		contentType := req.GetHeader("Content-Type")
@@ -852,39 +865,39 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 	// Создаем контекст для обработки REFER
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	// Проверяем наличие Refer-To заголовка
 	referToHeader := req.GetHeader("Refer-To")
 	if referToHeader == nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Missing Refer-To header", nil)
 		return d.uasuac.respondWithRetry(ctx, tx, res)
 	}
-	
+
 	// Валидация Refer-To заголовка
 	if err := d.securityValidator.ValidateHeader("Refer-To", referToHeader.Value()); err != nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, fmt.Sprintf("Invalid Refer-To: %v", err), nil)
 		return d.uasuac.respondWithRetry(ctx, tx, res)
 	}
-	
+
 	// Парсим Refer-To
 	referToURI, params, err := parseReferTo(referToHeader.Value())
 	if err != nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Invalid Refer-To header", nil)
 		return d.uasuac.respondWithRetry(ctx, tx, res)
 	}
-	
+
 	// Создаем ReferEvent
 	event := &ReferEvent{
 		ReferTo:     referToURI,
 		Request:     req,
 		Transaction: tx,
 	}
-	
+
 	// Проверяем ReferredBy
 	if referredBy := req.GetHeader("Referred-By"); referredBy != nil {
 		event.ReferredBy = referredBy.Value()
 	}
-	
+
 	// Проверяем параметр Replaces
 	if replaces, ok := params["Replaces"]; ok {
 		event.Replaces = replaces
@@ -895,26 +908,26 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 			event.ReplacesFromTag = fromTag
 		}
 	}
-	
+
 	// Отправляем 202 Accepted
 	res := sip.NewResponseFromRequest(req, sip.StatusAccepted, "Accepted", nil)
 	if err := d.uasuac.respondWithRetry(ctx, tx, res); err != nil {
 		return err
 	}
-	
+
 	// Создаем подписку для отслеживания статуса
 	subscription := NewReferSubscription(d, referToURI)
-	
+
 	// Получаем необходимые данные без блокировки, так как handleREFER вызывается из OnRequest,
 	// который уже держит блокировку
 	referHandler := d.referHandler
 	uasuac := d.uasuac
-	
+
 	// Проверяем что UASUAC инициализирован
 	if uasuac == nil || uasuac.client == nil {
 		return fmt.Errorf("UASUAC не инициализирован")
 	}
-	
+
 	// Запускаем обработку REFER в фоне
 	SafeGo(d.logger, "dialog-refer-handler", func() {
 		// Проверяем контекст на отмену
@@ -923,12 +936,12 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 			return
 		default:
 		}
-		
+
 		// Обновляем статус на Accepted
 		subscription.UpdateStatus(ReferStatusAccepted)
 		// Отправляем NOTIFY
 		_ = subscription.SendNotify(ctx)
-		
+
 		// Если есть обработчик REFER в диалоге, вызываем его
 		if referHandler != nil {
 			if err := referHandler(event); err != nil {
@@ -953,11 +966,11 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 					ErrField(notifyErr))
 			}
 		}
-		
+
 		// Закрываем подписку
 		subscription.Close()
 	})
-	
+
 	return nil
 }
 
@@ -966,7 +979,7 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 	// Создаем контекст для обработки re-INVITE
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	// Re-INVITE может быть отправлен только в подтвержденном диалоге
 	if d.stateMachine.Current() != "confirmed" {
 		res := sip.NewResponseFromRequest(req, sip.StatusRequestTerminated, "Request Terminated", nil)
@@ -976,7 +989,7 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 	// Сохраняем новый INVITE запрос и транзакцию
 	d.inviteRequest = req
 	d.inviteTx = tx
-	
+
 	// Обновляем Contact если есть
 	if contact := req.GetHeader("Contact"); contact != nil {
 		contactValue := contact.Value()
@@ -984,7 +997,7 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 			d.remoteTarget = *uri
 		}
 	}
-	
+
 	// Обновляем CSeq
 	if cseq := req.GetHeader("CSeq"); cseq != nil {
 		// Парсим CSeq для обновления последовательности
@@ -993,7 +1006,7 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 			d.remoteCSeq = seq
 		}
 	}
-	
+
 	// Если есть обработчик запросов, вызываем его
 	if d.requestHandler != nil {
 		// Передаем управление пользовательскому коду для обработки re-INVITE
@@ -1003,14 +1016,18 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 		})
 		return nil
 	}
-	
+
 	// Если нет обработчика, автоматически принимаем re-INVITE
 	// с текущими параметрами медиа (без изменений)
 	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", req.Body())
-	
+
 	// Добавляем необходимые заголовки
-	res.AppendHeader(sip.NewHeader("Contact", fmt.Sprintf("<%s>", d.localTarget.String())))
-	
+	contactHeader := &sip.ContactHeader{
+		Address: d.localTarget,
+		Params:  sip.NewParams(),
+	}
+	res.AppendHeader(contactHeader)
+
 	// Если есть тело, добавляем Content-Type
 	if req.Body() != nil {
 		if contentType := req.GetHeader("Content-Type"); contentType != nil {
@@ -1018,7 +1035,7 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 			res.AppendHeader(sip.NewHeader("Content-Length", fmt.Sprintf("%d", len(req.Body()))))
 		}
 	}
-	
+
 	return d.uasuac.respondWithRetry(ctx, tx, res)
 }
 
@@ -1050,7 +1067,7 @@ func (d *Dialog) handleResponse(res *sip.Response) {
 				d.remoteTag = toTag
 				// Обновляем ID диалога теперь, когда у нас есть remote tag
 				d.updateDialogID()
-				
+
 				// Обновляем ID в менеджере диалогов
 				if d.uasuac != nil {
 					oldIDCopy := oldID
@@ -1113,7 +1130,6 @@ func (d *Dialog) handleResponse(res *sip.Response) {
 		}
 	}
 }
-
 
 // updateRouteSet обновляет маршруты из ответа
 func (d *Dialog) updateRouteSet(res *sip.Response) {
@@ -1239,7 +1255,7 @@ func extractURIFromHeaderValue(value string) *sip.Uri {
 	// Простая реализация - извлекаем URI из <uri>
 	start := -1
 	end := -1
-	
+
 	for i, ch := range value {
 		if ch == '<' {
 			start = i + 1
@@ -1248,7 +1264,7 @@ func extractURIFromHeaderValue(value string) *sip.Uri {
 			break
 		}
 	}
-	
+
 	if start != -1 && end != -1 && end > start {
 		uriStr := value[start:end]
 		var uri sip.Uri
@@ -1257,14 +1273,14 @@ func extractURIFromHeaderValue(value string) *sip.Uri {
 			return &uri
 		}
 	}
-	
+
 	// Если не нашли <>, пробуем парсить всю строку
 	var uri sip.Uri
 	err := sip.ParseUri(value, &uri)
 	if err == nil {
 		return &uri
 	}
-	
+
 	return nil
 }
 
