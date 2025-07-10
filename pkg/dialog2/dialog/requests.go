@@ -120,10 +120,33 @@ func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
 	trg.Port = 0
 	newRequest := sip.NewRequest(method, trg)
 
-	ip := net.ParseIP(uu.config.Hosts[0])
-
-	//
-	newRequest.Laddr = sip.Addr{IP: ip, Hostname: uu.confi, Port: int(uu.config.Port)}
+	// Получаем адрес из заголовка To входящего запроса для UAS
+	if s.initReq != nil && s.uaType == UAS {
+		toHeader := s.initReq.To()
+		if toHeader != nil {
+			newRequest.Laddr = sip.Addr{
+				Hostname: toHeader.Address.Host,
+				Port:     toHeader.Address.Port,
+			}
+		}
+	} else {
+		// Для исходящих вызовов (UAC) использовать первый транспорт
+		if len(uu.config.TransportConfigs) > 0 {
+			tc := uu.config.TransportConfigs[0]
+			newRequest.Laddr = sip.Addr{
+				Hostname: tc.Host,
+				Port:     tc.Port,
+			}
+		} else if len(uu.config.Hosts) > 0 {
+			// Для обратной совместимости используем старые поля
+			ip := net.ParseIP(uu.config.Hosts[0])
+			newRequest.Laddr = sip.Addr{
+				IP:       ip,
+				Hostname: uu.config.Hosts[0],
+				Port:     uu.config.Port,
+			}
+		}
+	}
 
 	fmt.Println("new req", s.remoteTarget.String())
 

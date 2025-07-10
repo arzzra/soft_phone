@@ -107,6 +107,7 @@ func newUAS(req *sip.Request, tx sip.ServerTransaction) *Dialog {
 	session := new(Dialog)
 	session.uaType = UAS
 	session.callID = *req.CallID()
+	session.initReq = req
 
 	toHeader := req.To()
 	if toHeader != nil && toHeader.Params != nil && toHeader.Params.Has("tag") {
@@ -223,7 +224,8 @@ func (s *Dialog) enterState(ctx context.Context, e *fsm.Event) {
 func (s *Dialog) enterRinging(ctx context.Context, e *fsm.Event) {
 	// callback о новом звонке
 	if tx, ok := e.Args[0].(*TX); ok && len(e.Args) == 1 {
-		cb.OnIncomingCall(s, tx)
+		// TODO: cb не определена
+		// cb.OnIncomingCall(s, tx)
 	}
 
 }

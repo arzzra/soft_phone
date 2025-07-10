@@ -17,6 +17,12 @@ type Config struct {
 	Endpoints []Endpoint
 	//Все транспорты которые будут использоваться
 	TransportConfigs []TransportConfig
+	// Хосты для обратной совместимости
+	Hosts []string
+	// Порт для обратной совместимости
+	Port int
+	// Тестовый режим
+	TestMode bool
 }
 
 var (
@@ -37,10 +43,11 @@ var newTag tagGen
 var newCallId callIdGen
 
 func NewUACUAS(cfg Config) (*UACUAS, error) {
-	if callbacks == nil {
-		return nil, fmt.Errorf("callbacks is nil")
-	}
-	ua, err := sipgo.NewUA(sipgo.WithUserAgent("sss"), sipgo.WithUserAgentHostname(config.Hosts[0]))
+	// TODO: callbacks пока не используется
+	// if callbacks == nil {
+	// 	return nil, fmt.Errorf("callbacks is nil")
+	// }
+	ua, err := sipgo.NewUA(sipgo.WithUserAgent("sss"), sipgo.WithUserAgentHostname(cfg.Hosts[0]))
 	if err != nil {
 		return nil, err
 	}
@@ -58,8 +65,9 @@ func NewUACUAS(cfg Config) (*UACUAS, error) {
 
 	uu = &UACUAS{ua: ua, uas: srv, uac: uac}
 	uu.onRequests()
-	uu.config = config
-	cb = callbacks
+	uu.config = cfg
+	// TODO: cb пока не используется
+	// cb = callbacks
 	newTag = func() string { return sip.RandString(8) }
 	newCallId = func() string { return sip.RandString(32) }
 
