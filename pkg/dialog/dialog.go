@@ -10,6 +10,7 @@ import (
 
 	"github.com/emiago/sipgo/sip"
 	"github.com/looplab/fsm"
+	"github.com/arzzra/soft_phone/pkg/dialog/headers"
 )
 
 // Dialog представляет SIP диалог между двумя UA
@@ -527,7 +528,12 @@ func (d *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (si
 		return nil, fmt.Errorf("ошибка валидации Refer-To заголовка: %w", err)
 	}
 
-	referReq.AppendHeader(sip.NewHeader("Refer-To", referToValue))
+	// Создаем типизированный Refer-To заголовок
+	referToHeader, err := headers.NewReferTo(referToValue)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания Refer-To заголовка: %w", err)
+	}
+	referReq.AppendHeader(referToHeader)
 
 	// Применяем опции
 	for _, opt := range opts {
@@ -583,7 +589,13 @@ func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts *
 	referToBuilder.WriteString(replacesValue)
 	referToBuilder.WriteByte('>')
 	referToValue := referToBuilder.String()
-	referReq.AppendHeader(sip.NewHeader("Refer-To", referToValue))
+	
+	// Создаем типизированный Refer-To заголовок с Replaces
+	referToHeader, err := headers.NewReferTo(referToValue)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка создания Refer-To заголовка: %w", err)
+	}
+	referReq.AppendHeader(referToHeader)
 
 	// Применяем опции, если есть
 	if opts != nil {
@@ -629,11 +641,11 @@ func (d *Dialog) SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpt
 	}
 
 	// Валидация заголовков запроса после применения опций
-	headers := make(map[string]string)
+	headerMap := make(map[string]string)
 	for _, h := range req.Headers() {
-		headers[h.Name()] = h.Value()
+		headerMap[h.Name()] = h.Value()
 	}
-	if err := d.securityValidator.ValidateHeaders(headers); err != nil {
+	if err := d.securityValidator.ValidateHeaders(headerMap); err != nil {
 		return nil, fmt.Errorf("ошибка валидации заголовков запроса: %w", err)
 	}
 

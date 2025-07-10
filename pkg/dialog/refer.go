@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/emiago/sipgo/sip"
+	"github.com/arzzra/soft_phone/pkg/dialog/headers"
 )
 
 // ReferEvent представляет событие REFER
@@ -170,7 +171,7 @@ func (rs *ReferSubscription) SendNotify(ctx context.Context) error {
 
 // parseReferTo парсит Refer-To заголовок и извлекает URI и параметры
 func parseReferTo(referTo string) (sip.Uri, map[string]string, error) {
-	// Проверка длины
+	// Проверка длины перед созданием заголовка
 	if len(referTo) > MaxURILength {
 		return sip.Uri{}, nil, fmt.Errorf("Refer-To слишком длинный: %d байт", len(referTo))
 	}
@@ -186,49 +187,66 @@ func parseReferTo(referTo string) (sip.Uri, map[string]string, error) {
 		return sip.Uri{}, nil, fmt.Errorf("недопустимые символы в Refer-To")
 	}
 	
-	// Убираем < и > если есть
-	if strings.HasPrefix(referTo, "<") && strings.HasSuffix(referTo, ">") {
-		referTo = referTo[1 : len(referTo)-1]
-	}
-	
-	// Разделяем URI и параметры
-	parts := strings.SplitN(referTo, "?", 2)
-	
-	// Парсим URI
-	var uri sip.Uri
-	if err := sip.ParseUri(parts[0], &uri); err != nil {
-		return uri, nil, fmt.Errorf("ошибка парсинга URI: %w", err)
-	}
-	
-	// Валидация распарсенного URI
-	if err := validateSIPURI(&uri); err != nil {
-		return uri, nil, fmt.Errorf("некорректный URI в Refer-To: %w", err)
-	}
-	
-	// Парсим параметры если есть
-	params := make(map[string]string)
-	if len(parts) > 1 {
-		// Ограничиваем количество параметров
-		paramPairs := strings.Split(parts[1], "&")
+	// Проверяем количество параметров перед созданием заголовка
+	// (для совместимости со старыми тестами безопасности)
+	if idx := strings.Index(referTo, "?"); idx != -1 {
+		paramStr := referTo[idx+1:]
+		if strings.HasSuffix(paramStr, ">") {
+			paramStr = paramStr[:len(paramStr)-1]
+		}
+		paramPairs := strings.Split(paramStr, "&")
 		if len(paramPairs) > 20 {
-			return uri, nil, fmt.Errorf("слишком много параметров в Refer-To: %d", len(paramPairs))
-		}
-		
-		for _, pair := range paramPairs {
-			kv := strings.SplitN(pair, "=", 2)
-			if len(kv) == 2 {
-				// Проверяем длину ключа и значения
-				if len(kv[0]) > 64 || len(kv[1]) > 256 {
-					return uri, nil, fmt.Errorf("слишком длинный параметр в Refer-To")
-				}
-				params[kv[0]] = kv[1]
-			} else {
-				params[kv[0]] = ""
-			}
+			return sip.Uri{}, nil, fmt.Errorf("слишком много параметров в Refer-To: %d", len(paramPairs))
 		}
 	}
 	
-	return uri, params, nil
+	// Создаем типизированный заголовок
+	referToHeader, err := headers.NewReferTo(referTo)
+	if err != nil {
+		return sip.Uri{}, nil, fmt.Errorf("ошибка создания Refer-To заголовка: %w", err)
+	}
+	
+	// Валидируем заголовок
+	if err := referToHeader.Validate(); err != nil {
+		return sip.Uri{}, nil, fmt.Errorf("некорректный Refer-To: %w", err)
+	}
+	
+	// Получаем URI - создаем копию без параметров для возврата
+	uri := referToHeader.Address
+	// Создаем чистый URI без query параметров
+	cleanUri := sip.Uri{
+		Scheme:             uri.Scheme,
+		User:               uri.User,
+		Password:           uri.Password,
+		Host:               uri.Host,
+		Port:               uri.Port,
+		UriParams:          uri.UriParams,
+		Headers:            sip.HeaderParams{}, // Убираем query параметры
+		Wildcard:           uri.Wildcard,
+		HierarhicalSlashes: uri.HierarhicalSlashes,
+	}
+	
+	// Собираем параметры
+	params := make(map[string]string)
+	
+	// Добавляем стандартные параметры
+	if method := referToHeader.GetMethod(); method != "" {
+		params["method"] = method
+	}
+	
+	if replaces := referToHeader.GetReplaces(); replaces != "" {
+		params["Replaces"] = replaces
+	}
+	
+	// Получаем все остальные параметры
+	allParams := referToHeader.GetAllParameters()
+	for k, v := range allParams {
+		params[k] = v
+	}
+	
+	// Количество параметров уже проверено выше
+	
+	return cleanUri, params, nil
 }
 
 // parseReplaces парсит параметр Replaces

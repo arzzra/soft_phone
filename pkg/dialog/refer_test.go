@@ -9,6 +9,7 @@ import (
 	"github.com/emiago/sipgo/sip"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/arzzra/soft_phone/pkg/dialog/headers"
 )
 
 func TestParseReferTo(t *testing.T) {
@@ -160,7 +161,10 @@ func TestHandleREFER(t *testing.T) {
 	req.AppendHeader(sip.NewHeader("To", "<sip:bob@example.com>;tag=local-tag"))
 	req.AppendHeader(sip.NewHeader("CSeq", "3 REFER"))
 	req.AppendHeader(sip.NewHeader("Via", "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK776asdhds"))
-	req.AppendHeader(sip.NewHeader("Refer-To", "<sip:alice@example.com>"))
+	// Создаем типизированный Refer-To заголовок
+	referToHeader1, err := headers.NewReferTo("sip:alice@example.com")
+	require.NoError(t, err)
+	req.AppendHeader(referToHeader1)
 	req.AppendHeader(sip.NewHeader("Referred-By", "sip:referrer@example.com"))
 
 	// Создаем мок транзакцию
@@ -175,7 +179,7 @@ func TestHandleREFER(t *testing.T) {
 	}
 
 	// Обрабатываем REFER
-	err := dialog.OnRequest(context.Background(), req, mockTx)
+	err = dialog.OnRequest(context.Background(), req, mockTx)
 	assert.NoError(t, err)
 	
 	// Проверяем что ответ 202 Accepted был отправлен синхронно
@@ -225,7 +229,10 @@ func TestHandleREFER_WithReplaces(t *testing.T) {
 	req.AppendHeader(sip.NewHeader("To", "<sip:bob@example.com>;tag=local-tag"))
 	req.AppendHeader(sip.NewHeader("CSeq", "3 REFER"))
 	req.AppendHeader(sip.NewHeader("Via", "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK776asdhds"))
-	req.AppendHeader(sip.NewHeader("Refer-To", "<sip:charlie@example.com?Replaces=98765@192.168.1.200;to-tag=tag456;from-tag=tag789>"))
+	// Создаем типизированный Refer-To заголовок с Replaces
+	referToHeader2, err := headers.NewReferTo("sip:charlie@example.com?Replaces=98765@192.168.1.200;to-tag=tag456;from-tag=tag789")
+	require.NoError(t, err)
+	req.AppendHeader(referToHeader2)
 
 	// Создаем мок транзакцию
 	mockTx := &mockServerTransaction{
@@ -236,7 +243,7 @@ func TestHandleREFER_WithReplaces(t *testing.T) {
 	}
 
 	// Обрабатываем REFER
-	err := dialog.OnRequest(context.Background(), req, mockTx)
+	err = dialog.OnRequest(context.Background(), req, mockTx)
 	assert.NoError(t, err)
 }
 
