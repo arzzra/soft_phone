@@ -3,7 +3,6 @@ package dialog
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
@@ -138,10 +137,6 @@ func TestHandleREFER(t *testing.T) {
 		contactURI: sip.Uri{Scheme: "sip", Host: "localhost", Port: 5060},
 		client:     &sipgo.Client{}, // Добавляем пустой клиент, чтобы пройти проверку инициализации
 		logger:     logger,
-		retryConfig: RetryConfig{
-			MaxAttempts:  1,
-			InitialDelay: time.Millisecond,
-		},
 	}
 
 	// Создаем диалог
@@ -197,10 +192,6 @@ func TestHandleREFER_WithReplaces(t *testing.T) {
 		contactURI: sip.Uri{Scheme: "sip", Host: "localhost", Port: 5060},
 		client:     &sipgo.Client{}, // Добавляем пустой клиент, чтобы пройти проверку инициализации
 		logger:     logger,
-		retryConfig: RetryConfig{
-			MaxAttempts:  1,
-			InitialDelay: time.Millisecond,
-		},
 	}
 
 	// Создаем диалог
@@ -254,10 +245,6 @@ func TestHandleREFER_MissingReferTo(t *testing.T) {
 		contactURI: sip.Uri{Scheme: "sip", Host: "localhost", Port: 5060},
 		client:     &sipgo.Client{}, // Добавляем пустой клиент, чтобы пройти проверку инициализации
 		logger:     logger,
-		retryConfig: RetryConfig{
-			MaxAttempts:  1,
-			InitialDelay: time.Millisecond,
-		},
 	}
 
 	// Создаем диалог

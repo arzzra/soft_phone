@@ -329,10 +329,8 @@ func (d *Dialog) Answer(body Body, headers map[string]string) error {
 			res.AppendHeader(sip.NewHeader(name, value))
 		}
 
-		// Отправляем ответ с повторными попытками
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := d.uasuac.respondWithRetry(ctx, inviteTx, res); err != nil {
+		// Отправляем ответ
+		if err := inviteTx.Respond(res); err != nil {
 			return fmt.Errorf("ошибка отправки ответа: %w", err)
 		}
 
@@ -394,10 +392,8 @@ func (d *Dialog) Reject(statusCode int, reason string, body Body, headers map[st
 			res.AppendHeader(sip.NewHeader(name, value))
 		}
 
-		// Отправляем ответ с повторными попытками
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := d.uasuac.respondWithRetry(ctx, inviteTx, res); err != nil {
+		// Отправляем ответ
+		if err := inviteTx.Respond(res); err != nil {
 			return fmt.Errorf("ошибка отправки ответа: %w", err)
 		}
 
@@ -547,7 +543,7 @@ func (d *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (si
 	}
 
 	// Отправляем запрос
-	tx, err := d.uasuac.transactionRequestWithRetry(ctx, referReq)
+	tx, err := d.uasuac.client.TransactionRequest(ctx, referReq)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка отправки REFER: %w", err)
 	}
@@ -601,7 +597,7 @@ func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts *
 	}
 
 	// Отправляем запрос
-	tx, err := d.uasuac.transactionRequestWithRetry(ctx, referReq)
+	tx, err := d.uasuac.client.TransactionRequest(ctx, referReq)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка отправки REFER: %w", err)
 	}
@@ -646,7 +642,7 @@ func (d *Dialog) SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpt
 	}
 
 	// Отправляем запрос
-	tx, err := d.uasuac.transactionRequestWithRetry(ctx, req)
+	tx, err := d.uasuac.client.TransactionRequest(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка отправки запроса: %w", err)
 	}
@@ -703,9 +699,7 @@ func (d *Dialog) OnRequest(_ context.Context, req *sip.Request, tx sip.ServerTra
 	if err := d.headerProcessor.ProcessRequest(req); err != nil {
 		// Отправляем 400 Bad Request
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, err.Error(), nil)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return d.uasuac.respondWithRetry(ctx, tx, res)
+		return tx.Respond(res)
 	}
 
 	// Обновляем последнюю активность
@@ -726,9 +720,7 @@ func (d *Dialog) OnRequest(_ context.Context, req *sip.Request, tx sip.ServerTra
 	default:
 		// Отвечаем 405 Method Not Allowed
 		res := sip.NewResponseFromRequest(req, sip.StatusMethodNotAllowed, "Method Not Allowed", nil)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return d.uasuac.respondWithRetry(ctx, tx, res)
+		return tx.Respond(res)
 	}
 }
 
@@ -852,9 +844,6 @@ func (d *Dialog) handleACK(_ *sip.Request, _ sip.ServerTransaction) error {
 
 // handleBYE обрабатывает BYE запрос
 func (d *Dialog) handleBYE(req *sip.Request, tx sip.ServerTransaction) error {
-	// Создаем контекст для отправки ответа
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	// Отвечаем 200 OK
 	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
@@ -862,7 +851,7 @@ func (d *Dialog) handleBYE(req *sip.Request, tx sip.ServerTransaction) error {
 	// Добавляем заголовки
 	d.headerProcessor.AddUserAgentToResponse(res, "SoftPhone/1.0")
 
-	if err := d.uasuac.respondWithRetry(ctx, tx, res); err != nil {
+	if err := tx.Respond(res); err != nil {
 		return err
 	}
 
@@ -872,9 +861,6 @@ func (d *Dialog) handleBYE(req *sip.Request, tx sip.ServerTransaction) error {
 
 // handleINFO обрабатывает INFO запрос
 func (d *Dialog) handleINFO(req *sip.Request, tx sip.ServerTransaction) error {
-	// Создаем контекст для отправки ответа
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	// Проверяем тело
 	if req.Body() != nil && d.bodyHandler != nil {
@@ -888,7 +874,7 @@ func (d *Dialog) handleINFO(req *sip.Request, tx sip.ServerTransaction) error {
 
 	// Отвечаем 200 OK
 	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-	return d.uasuac.respondWithRetry(ctx, tx, res)
+	return tx.Respond(res)
 }
 
 // handleREFER обрабатывает REFER запрос
@@ -901,20 +887,20 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 	referToHeader := req.GetHeader("Refer-To")
 	if referToHeader == nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Missing Refer-To header", nil)
-		return d.uasuac.respondWithRetry(ctx, tx, res)
+		return tx.Respond(res)
 	}
 
 	// Валидация Refer-To заголовка
 	if err := d.securityValidator.ValidateHeader("Refer-To", referToHeader.Value()); err != nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, fmt.Sprintf("Invalid Refer-To: %v", err), nil)
-		return d.uasuac.respondWithRetry(ctx, tx, res)
+		return tx.Respond(res)
 	}
 
 	// Парсим Refer-To
 	referToURI, params, err := parseReferTo(referToHeader.Value())
 	if err != nil {
 		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Invalid Refer-To header", nil)
-		return d.uasuac.respondWithRetry(ctx, tx, res)
+		return tx.Respond(res)
 	}
 
 	// Создаем ReferEvent
@@ -942,7 +928,7 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 
 	// Отправляем 202 Accepted
 	res := sip.NewResponseFromRequest(req, sip.StatusAccepted, "Accepted", nil)
-	if err := d.uasuac.respondWithRetry(ctx, tx, res); err != nil {
+	if err := tx.Respond(res); err != nil {
 		return err
 	}
 
@@ -1007,14 +993,11 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 
 // handleReINVITE обрабатывает re-INVITE запрос (изменение параметров существующего диалога)
 func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) error {
-	// Создаем контекст для обработки re-INVITE
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	// Re-INVITE может быть отправлен только в подтвержденном диалоге
 	if d.stateMachine.Current() != "confirmed" {
 		res := sip.NewResponseFromRequest(req, sip.StatusRequestTerminated, "Request Terminated", nil)
-		return d.uasuac.respondWithRetry(ctx, tx, res)
+		return tx.Respond(res)
 	}
 
 	// Сохраняем новый INVITE запрос и транзакцию
@@ -1067,7 +1050,7 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 		}
 	}
 
-	return d.uasuac.respondWithRetry(ctx, tx, res)
+	return tx.Respond(res)
 }
 
 // handleResponse обрабатывает ответ для клиентского диалога

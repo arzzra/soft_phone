@@ -38,8 +38,6 @@ type UASUAC struct {
 	// Логгер
 	logger Logger
 	
-	// Конфигурация повторных попыток
-	retryConfig RetryConfig
 
 	// Мьютекс для синхронизации
 	mu sync.RWMutex
@@ -55,7 +53,6 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 		hostname:    "localhost",
 		listenAddr:  "127.0.0.1:5060",
 		logger:      &NoOpLogger{}, // Будет заменен через опцию
-		retryConfig: NetworkRetryConfig(), // Конфигурация по умолчанию для сетевых операций
 		transport:   DefaultTransportConfig(), // Транспорт по умолчанию - UDP
 	}
 
@@ -218,8 +215,8 @@ func (u *UASUAC) CreateDialog(ctx context.Context, remoteURI sip.Uri, opts ...Ca
 		return nil, fmt.Errorf("ошибка создания диалога: %w", err)
 	}
 
-	// Отправляем INVITE с повторными попытками
-	tx, err := u.transactionRequestWithRetry(ctx, inviteReq)
+	// Отправляем INVITE
+	tx, err := u.client.TransactionRequest(ctx, inviteReq)
 	if err != nil {
 		_ = u.dialogManager.RemoveDialog(dialog.ID())
 		return nil, fmt.Errorf("ошибка отправки INVITE: %w", err)
@@ -422,23 +419,6 @@ func (u *UASUAC) GetDialogByCallID(callID *sip.CallIDHeader) (IDialog, error) {
 	return u.dialogManager.GetDialogByCallID(callID)
 }
 
-// respondWithRetry отправляет ответ с повторными попытками
-func (u *UASUAC) respondWithRetry(ctx context.Context, tx sip.ServerTransaction, res *sip.Response) error {
-	return WithRetry(ctx, u.retryConfig, u.logger, "tx-respond", func() error {
-		return tx.Respond(res)
-	})
-}
-
-// transactionRequestWithRetry отправляет запрос с повторными попытками
-func (u *UASUAC) transactionRequestWithRetry(ctx context.Context, req *sip.Request) (sip.ClientTransaction, error) {
-	var tx sip.ClientTransaction
-	err := WithRetry(ctx, u.retryConfig, u.logger, "client-transaction-request", func() error {
-		var err error
-		tx, err = u.client.TransactionRequest(ctx, req)
-		return err
-	})
-	return tx, err
-}
 
 // Close закрывает UASUAC и освобождает ресурсы
 // GetTransport возвращает текущую конфигурацию транспорта
@@ -507,13 +487,6 @@ func WithLogger(logger Logger) UASUACOption {
 	}
 }
 
-// WithRetryConfig устанавливает конфигурацию повторных попыток
-func WithRetryConfig(config RetryConfig) UASUACOption {
-	return func(u *UASUAC) error {
-		u.retryConfig = config
-		return nil
-	}
-}
 
 // WithTransport устанавливает конфигурацию транспорта
 func WithTransport(config TransportConfig) UASUACOption {

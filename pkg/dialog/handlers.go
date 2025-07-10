@@ -3,7 +3,6 @@ package dialog
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/emiago/sipgo/sip"
 )
@@ -13,9 +12,7 @@ func (u *UASUAC) handleInviteRequest(req *sip.Request, tx sip.ServerTransaction)
 	// Проверяем лимиты
 	if u.rateLimiter != nil && !u.rateLimiter.Allow("invite") {
 		res := sip.NewResponseFromRequest(req, sip.StatusServiceUnavailable, "Service Unavailable", nil)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = u.respondWithRetry(ctx, tx, res)
+		_ = tx.Respond(res)
 		return
 	}
 	
@@ -32,9 +29,7 @@ func (u *UASUAC) handleInviteRequest(req *sip.Request, tx sip.ServerTransaction)
 		if err != nil {
 			// Диалог не найден для re-INVITE - отправляем 481
 			res := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = u.respondWithRetry(ctx, tx, res)
+			_ = tx.Respond(res)
 			u.logger.Warn("получен re-INVITE для несуществующего диалога",
 				CallIDField(req.CallID().Value()),
 				F("to_tag", toTag))
@@ -51,9 +46,7 @@ func (u *UASUAC) handleInviteRequest(req *sip.Request, tx sip.ServerTransaction)
 	if err == nil && existingDialog != nil {
 		// Диалог с таким Call-ID уже существует - это дубликат
 		res := sip.NewResponseFromRequest(req, 482, "Loop Detected", nil)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = u.respondWithRetry(ctx, tx, res)
+		_ = tx.Respond(res)
 		u.logger.Warn("получен дублированный INVITE с существующим Call-ID",
 			CallIDField(req.CallID().Value()),
 			F("dialog_state", existingDialog.State()))
@@ -65,9 +58,7 @@ func (u *UASUAC) handleInviteRequest(req *sip.Request, tx sip.ServerTransaction)
 	if err != nil {
 		// Ошибка создания диалога - отправляем 500
 		res := sip.NewResponseFromRequest(req, sip.StatusInternalServerError, "Internal Server Error", nil)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = u.respondWithRetry(ctx, tx, res)
+		_ = tx.Respond(res)
 		u.logger.Error("ошибка создания диалога",
 			CallIDField(req.CallID().Value()),
 			ErrField(err))
@@ -104,9 +95,7 @@ func (u *UASUAC) handleByeRequest(req *sip.Request, tx sip.ServerTransaction) {
 	dialog, err := u.findDialogForRequest(req)
 	if err != nil {
 		res := sip.NewResponseFromRequest(req, 481, "Call Does Not Exist", nil)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		resErr := u.respondWithRetry(ctx, tx, res)
+		resErr := tx.Respond(res)
 		if resErr != nil {
 			u.logger.Error("не удалось отправить ответ 481 на BYE после повторных попыток",
 				CallIDField(req.CallID().Value()),
@@ -127,9 +116,7 @@ func (u *UASUAC) handleByeRequest(req *sip.Request, tx sip.ServerTransaction) {
 func (u *UASUAC) handleCancelRequest(req *sip.Request, tx sip.ServerTransaction) {
 	// CANCEL обрабатывается на уровне транзакций
 	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = u.respondWithRetry(ctx, tx, res)
+	_ = tx.Respond(res)
 }
 
 // handleOptionsRequest обрабатывает входящие OPTIONS запросы
@@ -142,9 +129,7 @@ func (u *UASUAC) handleOptionsRequest(req *sip.Request, tx sip.ServerTransaction
 	hp.AddSupportedHeaderToResponse(res)
 	hp.AddUserAgentToResponse(res, "SoftPhone/1.0")
 	
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = u.respondWithRetry(ctx, tx, res)
+	_ = tx.Respond(res)
 }
 
 // findDialogForRequest находит диалог для входящего запроса

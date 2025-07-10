@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-
 type DialogState int
 
 // Состояния диалога
@@ -71,7 +70,7 @@ type IDialog interface {
 	SetContext(ctx context.Context)
 	CreatedAt() time.Time
 	LastActivity() time.Time
-	
+
 	// Close закрывает диалог и освобождает все ресурсы
 	Close() error
 
@@ -84,6 +83,9 @@ type IDialog interface {
 	OnRequestHandler(handler func(*sip.Request, sip.ServerTransaction))
 	OnRefer(handler ReferHandler)
 }
+
+// ICallBacksUA вызывает когда приходит новый вызов и тп
+type OnIncomingCall func(dialog IDialog, transaction sip.ServerTransaction)
 
 type ReqOpts func(req *sip.Request) error
 
