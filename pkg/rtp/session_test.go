@@ -578,7 +578,7 @@ func TestRemoteSources(t *testing.T) {
 	}
 	defer session.Stop()
 
-	session.Start()
+	_ = session.Start()
 
 	// Создаем пакеты от разных источников
 	sources := []uint32{0x11111111, 0x22222222, 0x33333333}
@@ -650,7 +650,7 @@ func TestSessionStatistics(t *testing.T) {
 	}
 	defer session.Stop()
 
-	session.Start()
+	_ = session.Start()
 
 	// Проверяем начальную статистику
 	initialStats := session.GetStatistics()
@@ -783,7 +783,7 @@ func TestPayloadTypes(t *testing.T) {
 					pt.name, session.GetClockRate(), pt.clockRate)
 			}
 
-			session.Start()
+			_ = session.Start()
 
 			// Тестируем отправку пакета
 			audioData := generateTestAudioData(160)
@@ -837,14 +837,14 @@ func BenchmarkSessionOperations(b *testing.B) {
 	}
 	defer session.Stop()
 
-	session.Start()
+	_ = session.Start()
 	audioData := generateTestAudioData(160)
 
 	b.ResetTimer()
 
 	b.Run("SendAudio", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			session.SendAudio(audioData, time.Millisecond*20)
+			_ = session.SendAudio(audioData, time.Millisecond*20)
 		}
 	})
 

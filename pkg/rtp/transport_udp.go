@@ -143,7 +143,7 @@ func (t *UDPTransport) Receive(ctx context.Context) (*rtp.Packet, net.Addr, erro
 	buffer := make([]byte, bufferSize)
 
 	// Устанавливаем таймаут для избежания блокировки
-	conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
+	_ = conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
 
 	n, addr, err := conn.ReadFromUDP(buffer)
 	if err != nil {
@@ -359,11 +359,8 @@ func classifyNetworkError(operation string, err error) error {
 			return classified
 		}
 
-		if netErr.Temporary() {
-			classified.Type = ErrorTypeTemporary
-			classified.Retryable = true
-			return classified
-		}
+		// Temporary() is deprecated - check for specific errors instead
+		// Most "temporary" errors are timeouts, handled above
 	}
 
 	// Проверяем специфичные типы ошибок

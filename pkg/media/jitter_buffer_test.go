@@ -306,7 +306,7 @@ func TestJitterBufferUnderrun(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		seqNum := baseSeq + uint16(i)
 		testPacket := createTestRTPPacket(seqNum, uint32(i*160), generateTestAudioData(160))
-		buffer.Put(testPacket)
+		_ = buffer.Put(testPacket)
 	}
 
 	// Ждем чтобы пакеты стали доступны
@@ -367,7 +367,7 @@ func TestJitterBufferStatistics(t *testing.T) {
 	for i := 0; i < packetCount; i++ {
 		seqNum := baseSeq + uint16(i)
 		packet := createTestRTPPacket(seqNum, uint32(i*160), generateTestAudioData(160))
-		buffer.Put(packet)
+		_ = buffer.Put(packet)
 	}
 
 	// Ждем обработки
@@ -444,7 +444,7 @@ func BenchmarkJitterBufferOperations(b *testing.B) {
 	b.Run("Put", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			packet := createTestRTPPacket(uint16(i), uint32(i*160), audioData)
-			buffer.Put(packet)
+			_ = buffer.Put(packet)
 		}
 	})
 
@@ -452,7 +452,7 @@ func BenchmarkJitterBufferOperations(b *testing.B) {
 		// Предварительно заполняем буфер
 		for i := 0; i < 100; i++ {
 			packet := createTestRTPPacket(uint16(i), uint32(i*160), audioData)
-			buffer.Put(packet)
+			_ = buffer.Put(packet)
 		}
 
 		b.ResetTimer()

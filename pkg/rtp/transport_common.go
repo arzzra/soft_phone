@@ -16,8 +16,6 @@ package rtp
 
 import (
 	"fmt"
-	"net"
-	"syscall"
 	"time"
 )
 
@@ -93,93 +91,6 @@ func (etc *ExtendedTransportConfig) Validate() error {
 	return nil
 }
 
-// setSockOptForVoiceExtended устанавливает оптимизации сокета для голосового трафика
-// Эта функция используется всеми UDP транспортами для устранения дублирования
-func setSockOptForVoiceExtended(conn *net.UDPConn, config ExtendedTransportConfig) error {
-	if conn == nil {
-		return fmt.Errorf("соединение не может быть nil")
-	}
-
-	// Получаем системный сокет для низкоуровневых настроек
-	rawConn, err := conn.SyscallConn()
-	if err != nil {
-		return fmt.Errorf("не удалось получить системный сокет: %w", err)
-	}
-
-	var sockOptErr error
-	err = rawConn.Control(func(fd uintptr) {
-		sockOptErr = applySockOptForVoice(fd, config)
-	})
-
-	if err != nil {
-		return fmt.Errorf("ошибка управления сокетом: %w", err)
-	}
-
-	return sockOptErr
-}
-
-// applySockOptForVoice применяет системные настройки сокета для голоса
-func applySockOptForVoice(fd uintptr, config ExtendedTransportConfig) error {
-	intFd := int(fd)
-
-	// Устанавливаем размеры буферов для оптимальной работы с голосом
-	if err := setSockOptBuffers(intFd, config.BufferSize); err != nil {
-		return fmt.Errorf("ошибка установки буферов: %w", err)
-	}
-
-	// Устанавливаем DSCP для QoS если указан
-	if config.DSCP > 0 {
-		if err := setSockOptDSCP(intFd, config.DSCP); err != nil {
-			return fmt.Errorf("ошибка установки DSCP: %w", err)
-		}
-	}
-
-	// Разрешаем повторное использование порта если нужно
-	if config.ReusePort {
-		if err := setSockOptReusePort(intFd); err != nil {
-			return fmt.Errorf("ошибка установки SO_REUSEPORT: %w", err)
-		}
-	}
-
-	// Привязываем к конкретному интерфейсу если указан
-	if config.BindToDevice != "" {
-		if err := setSockOptBindToDevice(intFd, config.BindToDevice); err != nil {
-			return fmt.Errorf("ошибка привязки к устройству %s: %w", config.BindToDevice, err)
-		}
-	}
-
-	// Дополнительные оптимизации для голоса
-	if err := setSockOptVoiceOptimizations(intFd); err != nil {
-		return fmt.Errorf("ошибка голосовых оптимизаций: %w", err)
-	}
-
-	return nil
-}
-
-// setSockOptBuffers устанавливает размеры буферов сокета
-func setSockOptBuffers(fd, bufferSize int) error {
-	// Вычисляем оптимальные размеры буферов
-	recvBufSize := VoiceOptimizedRecvBuffer
-	sendBufSize := VoiceOptimizedSendBuffer
-
-	// Корректируем под конкретный размер буфера если задан
-	if bufferSize > DefaultBufferSize {
-		recvBufSize = bufferSize * 4 // 4x запас для получения
-		sendBufSize = bufferSize * 2 // 2x запас для отправки
-	}
-
-	// Устанавливаем буфер получения
-	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, recvBufSize); err != nil {
-		return fmt.Errorf("SO_RCVBUF (%d): %w", recvBufSize, err)
-	}
-
-	// Устанавливаем буфер отправки
-	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_SNDBUF, sendBufSize); err != nil {
-		return fmt.Errorf("SO_SNDBUF (%d): %w", sendBufSize, err)
-	}
-
-	return nil
-}
 
 // setSockOptDSCP устанавливает DSCP маркировку для QoS
 // Реализация зависит от платформы (см. transport_socket_*.go файлы)
@@ -193,99 +104,6 @@ func setSockOptBuffers(fd, bufferSize int) error {
 // setSockOptVoiceOptimizations применяет дополнительные оптимизации для голоса
 // Реализация зависит от платформы (см. transport_socket_*.go файлы)
 
-// createUDPAddr создает *net.UDPAddr из строкового адреса с проверкой
-func createUDPAddr(addr string) (*net.UDPAddr, error) {
-	if addr == "" {
-		return nil, fmt.Errorf("адрес не может быть пустым")
-	}
-
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка разрешения UDP адреса '%s': %w", addr, err)
-	}
-
-	return udpAddr, nil
-}
-
-// createUDPConnExtended создает UDP соединение с расширенными оптимизациями для голоса
-func createUDPConnExtended(localAddr, remoteAddr string, config ExtendedTransportConfig) (*net.UDPConn, error) {
-	// Применяем значения по умолчанию
-	config.ApplyDefaults()
-
-	// Валидируем конфигурацию
-	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("неверная конфигурация: %w", err)
-	}
-
-	// Создаем локальный адрес
-	localUDPAddr, err := createUDPAddr(localAddr)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка локального адреса: %w", err)
-	}
-
-	// Создаем UDP соединение
-	var conn *net.UDPConn
-
-	if remoteAddr != "" {
-		// Клиентское соединение с известным удаленным адресом
-		remoteUDPAddr, err := createUDPAddr(remoteAddr)
-		if err != nil {
-			return nil, fmt.Errorf("ошибка удаленного адреса: %w", err)
-		}
-
-		conn, err = net.DialUDP("udp", localUDPAddr, remoteUDPAddr)
-		if err != nil {
-			return nil, fmt.Errorf("ошибка создания клиентского UDP соединения: %w", err)
-		}
-	} else {
-		// Серверное соединение (слушаем на локальном адресе)
-		conn, err = net.ListenUDP("udp", localUDPAddr)
-		if err != nil {
-			return nil, fmt.Errorf("ошибка создания серверного UDP соединения: %w", err)
-		}
-	}
-
-	// Применяем оптимизации для голоса
-	if err := setSockOptForVoiceExtended(conn, config); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("ошибка применения голосовых оптимизаций: %w", err)
-	}
-
-	return conn, nil
-}
-
-// isTemporaryError проверяет является ли ошибка временной (можно повторить операцию)
-func isTemporaryError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	// Проверяем специфичные временные ошибки
-	if netErr, ok := err.(net.Error); ok {
-		return netErr.Temporary()
-	}
-
-	// Проверяем системные ошибки
-	if opErr, ok := err.(*net.OpError); ok {
-		if syscallErr, ok := opErr.Err.(*syscall.Errno); ok {
-			switch *syscallErr {
-			case syscall.EAGAIN, syscall.EINTR:
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// formatTransportError форматирует ошибки транспорта для лучшей диагностики
-func formatTransportError(operation, transportType string, err error) error {
-	if err == nil {
-		return nil
-	}
-
-	return fmt.Errorf("%s [%s транспорт]: %w", operation, transportType, err)
-}
 
 // TransportStatistics общая статистика для всех типов транспортов
 type TransportStatistics struct {

@@ -28,7 +28,7 @@ func TestBasicSDPWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Не удалось создать SDPMediaBuilder: %v", err)
 	}
-	defer caller.Stop()
+	defer func() { _ = caller.Stop() }()
 
 	offer, err := caller.CreateOffer()
 	if err != nil {
@@ -209,7 +209,7 @@ func TestSDPAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Не удалось создать builder: %v", err)
 	}
-	defer builder.Stop()
+	defer func() { _ = builder.Stop() }()
 
 	offer, err := builder.CreateOffer()
 	if err != nil {
@@ -274,7 +274,7 @@ func TestCodecCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Не удалось создать builder: %v", err)
 	}
-	defer builder.Stop()
+	defer func() { _ = builder.Stop() }()
 
 	offer, err := builder.CreateOffer()
 	if err != nil {
@@ -291,7 +291,7 @@ func TestCodecCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Не удалось создать handler: %v", err)
 	}
-	defer handler.Stop()
+	defer func() { _ = handler.Stop() }()
 
 	err = handler.ProcessOffer(offer)
 	if err != nil {

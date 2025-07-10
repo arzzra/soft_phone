@@ -23,7 +23,7 @@ func TestCallbackDebug(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Не удалось создать builder: %v", err)
 	}
-	defer builder.Stop()
+	defer func() { _ = builder.Stop() }()
 
 	// Создаем offer
 	offer, err := builder.CreateOffer()
@@ -42,7 +42,7 @@ func TestCallbackDebug(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Не удалось создать handler: %v", err)
 	}
-	defer handler.Stop()
+	defer func() { _ = handler.Stop() }()
 
 	// Обрабатываем offer
 	err = handler.ProcessOffer(offer)

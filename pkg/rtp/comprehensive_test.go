@@ -72,7 +72,7 @@ func testHighLoadSessionManagement(t *testing.T) {
 			t.Fatalf("Ошибка регистрации сессии %d: %v", i, err)
 		}
 
-		session.Start()
+		_ = session.Start()
 	}
 
 	// Симулируем трафик на всех сессиях параллельно
@@ -132,7 +132,7 @@ func testHighLoadSessionManagement(t *testing.T) {
 
 	// Cleanup
 	for _, session := range sessions {
-		session.Stop()
+		_ = session.Stop()
 	}
 
 	t.Logf("✅ High load test: %d сессий, %d пакетов/сессия, итого обработано %d пакетов",
@@ -156,9 +156,9 @@ func testConcurrentRTPStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
-	session.Start()
+	_ = session.Start()
 
 	// Счетчики для каждого потока
 	packetsReceived := make([]int, numStreams)
@@ -253,9 +253,9 @@ func testErrorRecoveryScenarios(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Ошибка создания сессии: %v", err)
 		}
-		defer session.Stop()
+		defer func() { _ = session.Stop() }()
 
-		session.Start()
+		_ = session.Start()
 
 		// Отправляем нормальные пакеты
 		for i := 0; i < 5; i++ {
@@ -319,9 +319,9 @@ func testErrorRecoveryScenarios(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Ошибка создания сессии: %v", err)
 		}
-		defer session.Stop()
+		defer func() { _ = session.Stop() }()
 
-		session.Start()
+		_ = session.Start()
 
 		// Отправляем пакеты с невалидными заголовками
 		invalidPackets := []*rtp.Packet{
@@ -397,7 +397,7 @@ func testMemoryLeakDetection(t *testing.T) {
 			t.Fatalf("Ошибка создания сессии %d: %v", i, err)
 		}
 
-		session.Start()
+		_ = session.Start()
 
 		// Отправляем несколько пакетов
 		for j := 0; j < 10; j++ {
@@ -414,7 +414,7 @@ func testMemoryLeakDetection(t *testing.T) {
 			transport.SimulateReceive(packet)
 		}
 
-		session.Stop()
+		_ = session.Stop()
 
 		// Принудительная garbage collection каждые 10 итераций
 		if i%10 == 0 {
@@ -458,9 +458,9 @@ func testPerformanceBenchmarks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
-	session.Start()
+	_ = session.Start()
 
 	// Измеряем время обработки пакетов
 	startTime := time.Now()
@@ -513,7 +513,7 @@ func testIntegrationScenarios(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Ошибка создания клиентской сессии: %v", err)
 		}
-		defer clientSession.Stop()
+		defer func() { _ = clientSession.Stop() }()
 
 		serverSession, err := NewSession(SessionConfig{
 			PayloadType: PayloadTypePCMU,
@@ -524,11 +524,11 @@ func testIntegrationScenarios(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Ошибка создания серверной сессии: %v", err)
 		}
-		defer serverSession.Stop()
+		defer func() { _ = serverSession.Stop() }()
 
 		// Запускаем обе сессии
-		clientSession.Start()
-		serverSession.Start()
+		_ = clientSession.Start()
+		_ = serverSession.Start()
 
 		// Симулируем двунаправленный обмен
 		const packetsEachWay = 50
@@ -582,9 +582,9 @@ func testIntegrationScenarios(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Ошибка создания сессии: %v", err)
 		}
-		defer session.Stop()
+		defer func() { _ = session.Stop() }()
 
-		session.Start()
+		_ = session.Start()
 
 		// Отправляем пакеты от множественных источников
 		const numSources = 5

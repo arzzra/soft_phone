@@ -241,9 +241,28 @@ func (mc *MetricsCollector) GetGlobalMetrics() *GlobalMetrics {
 	mc.globalStats.mutex.RLock()
 	defer mc.globalStats.mutex.RUnlock()
 
-	// Возвращаем копию
-	result := *mc.globalStats
-	return &result
+	// Возвращаем копию без мьютекса
+	return &GlobalMetrics{
+		TotalSessions:        mc.globalStats.TotalSessions,
+		ActiveSessions:       mc.globalStats.ActiveSessions,
+		TotalPacketsSent:     mc.globalStats.TotalPacketsSent,
+		TotalPacketsReceived: mc.globalStats.TotalPacketsReceived,
+		TotalBytesSent:       mc.globalStats.TotalBytesSent,
+		TotalBytesReceived:   mc.globalStats.TotalBytesReceived,
+		AvgJitter:            mc.globalStats.AvgJitter,
+		AvgPacketLoss:        mc.globalStats.AvgPacketLoss,
+		AvgRTT:               mc.globalStats.AvgRTT,
+		SystemCPU:            mc.globalStats.SystemCPU,
+		SystemMemory:         mc.globalStats.SystemMemory,
+		GoRoutines:           mc.globalStats.GoRoutines,
+		TotalValidationErrors: mc.globalStats.TotalValidationErrors,
+		TotalNetworkErrors:    mc.globalStats.TotalNetworkErrors,
+		TotalRateLimitEvents:  mc.globalStats.TotalRateLimitEvents,
+		MetricsRequests:       mc.globalStats.MetricsRequests,
+		LastExport:            mc.globalStats.LastExport,
+		OverallHealth:         mc.globalStats.OverallHealth,
+		QualityScore:          mc.globalStats.QualityScore,
+	}
 }
 
 // updateGlobalMetrics обновляет агрегированные метрики
@@ -349,15 +368,42 @@ func (mc *MetricsCollector) GetSessionMetrics(sessionID string) (*SessionMetrics
 	// Обновляем uptime
 	session.Uptime = time.Since(session.lastUpdate)
 
-	// Возвращаем копию
-	result := *session
-	result.RemoteSources = make(map[uint32]*SourceMetrics)
+	// Создаем копию без мьютекса
+	result := &SessionMetrics{
+		SessionID:        session.SessionID,
+		LocalAddr:        session.LocalAddr,
+		RemoteAddr:       session.RemoteAddr,
+		PacketsSent:      session.PacketsSent,
+		PacketsReceived:  session.PacketsReceived,
+		BytesSent:        session.BytesSent,
+		BytesReceived:    session.BytesReceived,
+		PacketsLost:      session.PacketsLost,
+		PacketLossRate:   session.PacketLossRate,
+		Jitter:           session.Jitter,
+		RTT:              session.RTT,
+		JitterP95:        session.JitterP95,
+		JitterP99:        session.JitterP99,
+		RTTPercentiles:   session.RTTPercentiles,
+		State:            session.State,
+		Uptime:           session.Uptime,
+		LastActivity:     session.LastActivity,
+		DTLSHandshakes:   session.DTLSHandshakes,
+		DTLSErrors:       session.DTLSErrors,
+		RemoteSources:    make(map[uint32]*SourceMetrics),
+		CPUUsage:         session.CPUUsage,
+		MemoryUsage:      session.MemoryUsage,
+		RateLimitedSources: session.RateLimitedSources,
+		RateLimitEvents:  session.RateLimitEvents,
+		ValidationErrors: session.ValidationErrors,
+		NetworkErrors:    session.NetworkErrors,
+		lastUpdate:       session.lastUpdate,
+	}
 	for ssrc, source := range session.RemoteSources {
 		sourceCopy := *source
 		result.RemoteSources[ssrc] = &sourceCopy
 	}
 
-	return &result, true
+	return result, true
 }
 
 // GetAllSessionMetrics возвращает метрики всех сессий
@@ -372,16 +418,43 @@ func (mc *MetricsCollector) GetAllSessionMetrics() map[string]*SessionMetrics {
 		// Обновляем uptime
 		session.Uptime = time.Since(session.lastUpdate)
 
-		// Возвращаем копию
-		sessionCopy := *session
-		sessionCopy.RemoteSources = make(map[uint32]*SourceMetrics)
+		// Создаем копию без мьютекса
+		sessionCopy := &SessionMetrics{
+			SessionID:        session.SessionID,
+			LocalAddr:        session.LocalAddr,
+			RemoteAddr:       session.RemoteAddr,
+			PacketsSent:      session.PacketsSent,
+			PacketsReceived:  session.PacketsReceived,
+			BytesSent:        session.BytesSent,
+			BytesReceived:    session.BytesReceived,
+			PacketsLost:      session.PacketsLost,
+			PacketLossRate:   session.PacketLossRate,
+			Jitter:           session.Jitter,
+			RTT:              session.RTT,
+			JitterP95:        session.JitterP95,
+			JitterP99:        session.JitterP99,
+			RTTPercentiles:   session.RTTPercentiles,
+			State:            session.State,
+			Uptime:           session.Uptime,
+			LastActivity:     session.LastActivity,
+			DTLSHandshakes:   session.DTLSHandshakes,
+			DTLSErrors:       session.DTLSErrors,
+			RemoteSources:    make(map[uint32]*SourceMetrics),
+			CPUUsage:         session.CPUUsage,
+			MemoryUsage:      session.MemoryUsage,
+			RateLimitedSources: session.RateLimitedSources,
+			RateLimitEvents:  session.RateLimitEvents,
+			ValidationErrors: session.ValidationErrors,
+			NetworkErrors:    session.NetworkErrors,
+			lastUpdate:       session.lastUpdate,
+		}
 		for ssrc, source := range session.RemoteSources {
 			sourceCopy := *source
 			sessionCopy.RemoteSources[ssrc] = &sourceCopy
 		}
 		
 		session.mutex.RUnlock()
-		result[sessionID] = &sessionCopy
+		result[sessionID] = sessionCopy
 	}
 
 	return result
@@ -531,7 +604,7 @@ func (mc *MetricsCollector) handlePrometheusMetrics(w http.ResponseWriter, r *ht
 	output.WriteString("# TYPE rtp_goroutines gauge\n")
 	output.WriteString(fmt.Sprintf("rtp_goroutines %d\n", global.GoRoutines))
 
-	w.Write([]byte(output.String()))
+	_, _ = w.Write([]byte(output.String()))
 }
 
 // handleHealth возвращает статус здоровья системы
@@ -554,7 +627,7 @@ func (mc *MetricsCollector) handleHealth(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(health)
+	_ = json.NewEncoder(w).Encode(health)
 }
 
 // handleDebugSessions возвращает детальную информацию о сессиях
@@ -565,13 +638,13 @@ func (mc *MetricsCollector) handleDebugSessions(w http.ResponseWriter, r *http.R
 	if sessionID != "" {
 		// Возвращаем конкретную сессию
 		if metrics, exists := mc.GetSessionMetrics(sessionID); exists {
-			json.NewEncoder(w).Encode(metrics)
+			_ = json.NewEncoder(w).Encode(metrics)
 		} else {
 			http.Error(w, "Сессия не найдена", http.StatusNotFound)
 		}
 	} else {
 		// Возвращаем все сессии
-		json.NewEncoder(w).Encode(mc.GetAllSessionMetrics())
+		_ = json.NewEncoder(w).Encode(mc.GetAllSessionMetrics())
 	}
 }
 
@@ -580,12 +653,9 @@ func (mc *MetricsCollector) periodicTasks() {
 	healthTicker := time.NewTicker(mc.config.HealthCheckInterval)
 	defer healthTicker.Stop()
 
-	for {
-		select {
-		case <-healthTicker.C:
-			mc.healthMonitor.PerformHealthCheck()
-			mc.cleanupOldSessions()
-		}
+	for range healthTicker.C {
+		mc.healthMonitor.PerformHealthCheck()
+		mc.cleanupOldSessions()
 	}
 }
 

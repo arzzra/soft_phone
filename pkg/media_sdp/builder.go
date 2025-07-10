@@ -117,7 +117,7 @@ func (b *sdpMediaBuilder) createMediaSession() error {
 	// Регистрируем RTP сессию в медиа сессии
 	err = mediaSession.AddRTPSession("primary", b.rtpSession)
 	if err != nil {
-		mediaSession.Stop()
+		_ = mediaSession.Stop()
 		return WrapSDPError(ErrorCodeMediaSessionCreation, b.config.SessionID, err,
 			"Не удалось зарегистрировать RTP сессию в медиа сессии")
 	}
@@ -411,7 +411,7 @@ func (b *sdpMediaBuilder) recreateTransportWithRemoteAddr(remoteAddr string) err
 	// Если сессия уже запущена, нужно обновить транспорт в RTP сессии
 	if b.started && b.rtpSession != nil {
 		// Останавливаем старую сессию
-		b.rtpSession.Stop()
+		_ = b.rtpSession.Stop()
 
 		// Пересоздаем RTP сессию с новым транспортом
 		err = b.recreateRTPSession()

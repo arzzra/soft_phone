@@ -21,7 +21,7 @@ func TestSessionRTPIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	// Создаем продвинутый mock SessionRTP
 	mockRTP := NewMockSessionRTP("integration-test", "PCMU")
@@ -93,10 +93,10 @@ func TestSessionRTPRTCPFeatures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	mockRTP := NewMockSessionRTP("rtcp-test", "PCMU")
-	session.AddRTPSession("rtcp", mockRTP)
+	_ = session.AddRTPSession("rtcp", mockRTP)
 
 	t.Run("Включение RTCP", func(t *testing.T) {
 		// Изначально RTCP отключен
@@ -118,7 +118,7 @@ func TestSessionRTPRTCPFeatures(t *testing.T) {
 
 	t.Run("RTCP статистика", func(t *testing.T) {
 		// Включаем RTCP
-		session.EnableRTCP(true)
+		_ = session.EnableRTCP(true)
 
 		// Получаем RTCP статистику
 		rtcpStats := mockRTP.GetRTCPStatistics()
@@ -142,8 +142,8 @@ func TestSessionRTPRTCPFeatures(t *testing.T) {
 	})
 
 	t.Run("Отправка RTCP отчетов", func(t *testing.T) {
-		session.EnableRTCP(true)
-		session.Start()
+		_ = session.EnableRTCP(true)
+		_ = session.Start()
 
 		// Отправляем RTCP отчет
 		err = mockRTP.SendRTCPReport()
@@ -152,7 +152,7 @@ func TestSessionRTPRTCPFeatures(t *testing.T) {
 		}
 
 		// Отключаем RTCP и проверяем ошибку
-		mockRTP.EnableRTCP(false)
+		_ = mockRTP.EnableRTCP(false)
 		err = mockRTP.SendRTCPReport()
 		if err == nil {
 			t.Error("Отправка RTCP должна вызывать ошибку когда RTCP отключен")
@@ -169,10 +169,10 @@ func TestSessionRTPErrorHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	mockRTP := NewMockSessionRTP("error-test", "PCMU")
-	session.AddRTPSession("error", mockRTP)
+	_ = session.AddRTPSession("error", mockRTP)
 
 	t.Run("Ошибки запуска", func(t *testing.T) {
 		// Устанавливаем режим ошибки запуска
@@ -188,7 +188,7 @@ func TestSessionRTPErrorHandling(t *testing.T) {
 
 	t.Run("Ошибки отправки", func(t *testing.T) {
 		mockRTP.SetFailureMode(false, true, false)
-		session.Start()
+		_ = session.Start()
 
 		audioData := generateTestAudioData(StandardPCMSamples20ms)
 		err = session.SendAudio(audioData)
@@ -220,11 +220,11 @@ func TestSessionRTPConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	mockRTP := NewMockSessionRTP("concurrency-test", "PCMU")
-	session.AddRTPSession("concurrent", mockRTP)
-	session.Start()
+	_ = session.AddRTPSession("concurrent", mockRTP)
+	_ = session.Start()
 
 	// Проверяем concurrent операции
 	const numGoroutines = 10
@@ -239,7 +239,7 @@ func TestSessionRTPConcurrency(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < operationsPerGoroutine; j++ {
 				audioData := generateTestAudioData(StandardPCMSamples20ms)
-				session.SendAudio(audioData)
+				_ = session.SendAudio(audioData)
 			}
 		}()
 	}
@@ -260,7 +260,7 @@ func TestSessionRTPConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < operationsPerGoroutine; j++ {
-				session.EnableRTCP(j%2 == 0)
+				_ = session.EnableRTCP(j%2 == 0)
 				_ = mockRTP.GetRTCPStatistics()
 			}
 		}()
@@ -290,7 +290,7 @@ func TestSessionRTPMultipleInstances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	// Создаем несколько mock SessionRTP с разными кодеками
 	mockSessions := []*MockSessionRTP{
@@ -376,10 +376,10 @@ func TestSessionRTPCallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	mockRTP := NewMockSessionRTP("callback-test", "PCMU")
-	session.AddRTPSession("callback", mockRTP)
+	_ = session.AddRTPSession("callback", mockRTP)
 
 	t.Run("SendAudio callback", func(t *testing.T) {
 		var callbackCalled bool
@@ -395,7 +395,7 @@ func TestSessionRTPCallbacks(t *testing.T) {
 			return nil
 		})
 
-		session.Start()
+		_ = session.Start()
 
 		audioData := generateTestAudioData(StandardPCMSamples20ms)
 		err = session.SendAudio(audioData)
@@ -467,10 +467,10 @@ func TestSessionRTPNetworkSimulation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	mockRTP := NewMockSessionRTP("network-test", "PCMU")
-	session.AddRTPSession("network", mockRTP)
+	_ = session.AddRTPSession("network", mockRTP)
 	session.Start()
 
 	t.Run("Симуляция сетевой задержки", func(t *testing.T) {

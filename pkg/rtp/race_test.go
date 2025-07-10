@@ -27,7 +27,7 @@ func TestConcurrentHandlerRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	err = session.Start()
 	if err != nil {
@@ -115,9 +115,9 @@ func TestHighFrequencyHandlerRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
-	session.Start()
+	_ = session.Start()
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -153,7 +153,7 @@ func TestHighFrequencyHandlerRegistration(t *testing.T) {
 			case <-done:
 				return
 			default:
-				session.SendAudio(audioData, time.Millisecond*20)
+				_ = session.SendAudio(audioData, time.Millisecond*20)
 				time.Sleep(time.Microsecond * 50)
 			}
 		}
@@ -210,9 +210,9 @@ func TestConcurrentSessionOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
-	session.Start()
+	_ = session.Start()
 
 	var wg sync.WaitGroup
 	numGoroutines := 20
@@ -240,7 +240,7 @@ func TestConcurrentSessionOperations(t *testing.T) {
 			defer wg.Done()
 			audioData := generateTestAudioData(160)
 			for j := 0; j < 50; j++ {
-				session.SendAudio(audioData, time.Millisecond*20)
+				_ = session.SendAudio(audioData, time.Millisecond*20)
 				time.Sleep(time.Microsecond * 100)
 			}
 		}()

@@ -304,12 +304,12 @@ func TestAudioSending(t *testing.T) {
 	}
 
 	t.Log("Тестируем принудительную очистку буфера")
-	session.SendAudio(generateTestAudioData(50)) // Добавляем данные в буфер
+	_ = session.SendAudio(generateTestAudioData(50)) // Добавляем данные в буфер
 
 	initialSize := session.GetBufferedAudioSize()
 	if initialSize == 0 {
 		t.Log("Буфер пуст, добавляем данные для тестирования очистки")
-		session.SendAudio(generateTestAudioData(80))
+		_ = session.SendAudio(generateTestAudioData(80))
 		initialSize = session.GetBufferedAudioSize()
 	}
 
@@ -697,13 +697,13 @@ func BenchmarkAudioSending(b *testing.B) {
 
 	b.Run("SendAudio", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			session.SendAudio(audioData)
+			_ = session.SendAudio(audioData)
 		}
 	})
 
 	b.Run("WriteAudioDirect", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			session.WriteAudioDirect(audioData)
+			_ = session.WriteAudioDirect(audioData)
 		}
 	})
 

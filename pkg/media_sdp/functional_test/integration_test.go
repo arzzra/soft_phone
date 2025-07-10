@@ -84,7 +84,7 @@ func TestFullSDPIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Не удалось создать Caller сессию: %v", err)
 	}
-	defer caller.Stop()
+	defer func() { _ = caller.Stop() }()
 
 	t.Logf("✅ Caller создан, SDP offer сгенерирован")
 	t.Logf("Offer содержит %d медиа описаний", len(offer.MediaDescriptions))
@@ -95,7 +95,7 @@ func TestFullSDPIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Не удалось создать Callee сессию: %v", err)
 	}
-	defer callee.Stop()
+	defer func() { _ = callee.Stop() }()
 
 	t.Logf("✅ Callee создан, SDP answer сгенерирован")
 	t.Logf("Answer содержит %d медиа описаний", len(answer.MediaDescriptions))
@@ -181,7 +181,7 @@ func createCallerSession(t *testing.T, results *TestResults) (media_sdp.SDPMedia
 	// Создаем SDP offer
 	offer, err := caller.CreateOffer()
 	if err != nil {
-		caller.Stop()
+		_ = caller.Stop()
 		return nil, nil, fmt.Errorf("не удалось создать SDP offer: %w", err)
 	}
 
@@ -222,14 +222,14 @@ func createCalleeSession(t *testing.T, results *TestResults, offer *sdp.SessionD
 	// Обрабатываем offer
 	err = callee.ProcessOffer(offer)
 	if err != nil {
-		callee.Stop()
+		_ = callee.Stop()
 		return nil, nil, fmt.Errorf("не удалось обработать SDP offer: %w", err)
 	}
 
 	// Создаем answer
 	answer, err := callee.CreateAnswer()
 	if err != nil {
-		callee.Stop()
+		_ = callee.Stop()
 		return nil, nil, fmt.Errorf("не удалось создать SDP answer: %w", err)
 	}
 

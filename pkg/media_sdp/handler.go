@@ -332,7 +332,7 @@ func (h *sdpMediaHandler) createMediaSession() error {
 	// Регистрируем RTP сессию
 	err = mediaSession.AddRTPSession("primary", h.rtpSession)
 	if err != nil {
-		mediaSession.Stop()
+		_ = mediaSession.Stop()
 		return WrapSDPError(ErrorCodeMediaSessionCreation, h.config.SessionID, err,
 			"Не удалось зарегистрировать RTP сессию в медиа сессии")
 	}

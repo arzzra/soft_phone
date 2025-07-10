@@ -34,7 +34,7 @@ func TestUDPDirectCommunication(t *testing.T) {
 	received := make(chan bool, 1)
 	go func() {
 		buffer := make([]byte, 1500)
-		listener.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_ = listener.SetReadDeadline(time.Now().Add(2 * time.Second))
 		n, addr, err := listener.ReadFromUDP(buffer)
 		if err != nil {
 			t.Logf("Ошибка чтения: %v", err)

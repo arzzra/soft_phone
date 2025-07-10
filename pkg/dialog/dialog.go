@@ -13,7 +13,29 @@ import (
 	"github.com/looplab/fsm"
 )
 
-// Dialog представляет SIP диалог между двумя UA
+// Dialog представляет SIP диалог между двумя User Agent (UA).
+// Диалог - это одноранговые SIP отношения между двумя UA, которые
+// сохраняются в течение некоторого времени. Диалог устанавливается
+// определёнными SIP методами, такими как INVITE, и облегчает
+// последовательность упорядочивания и маршрутизацию SIP сообщений
+// между UA.
+//
+// Dialog реализует интерфейс IDialog и является потокобезопасным.
+//
+// Жизненный цикл диалога:
+//   - StateNone: диалог не существует
+//   - StateEarly: ранний диалог (после 1xx ответа)
+//   - StateConfirmed: подтверждённый диалог (после 2xx ответа)
+//   - StateTerminating: диалог завершается
+//   - StateTerminated: диалог завершён
+//
+// Пример использования:
+//
+//	dialog := NewDialog(uasuac, false, logger) // UAC диалог
+//	err := dialog.SetupFromInviteRequest(inviteReq)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 type Dialog struct {
 	// Идентификация диалога
 	id        string
@@ -72,7 +94,22 @@ type Dialog struct {
 	mu sync.RWMutex
 }
 
-// NewDialog создает новый диалог
+// NewDialog создаёт новый экземпляр диалога.
+//
+// Параметры:
+//   - uasuac: User Agent для отправки и получения SIP сообщений
+//   - isServer: true если диалог создаётся как UAS (сервер), false для UAC (клиент)
+//   - logger: интерфейс для логирования (может быть nil, тогда используется NoOpLogger)
+//
+// Возвращает инициализированный диалог с настроенной машиной состояний.
+//
+// Пример:
+//
+//	// Создание серверного диалога (UAS)
+//	dialog := NewDialog(uasuac, true, logger)
+//	
+//	// Создание клиентского диалога (UAC)
+//	dialog := NewDialog(uasuac, false, logger)
 func NewDialog(uasuac *UASUAC, isServer bool, logger Logger) *Dialog {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -175,21 +212,31 @@ func (d *Dialog) updateDialogID() {
 	d.id = sb.String()
 }
 
-// ID возвращает идентификатор диалога
+// ID возвращает уникальный идентификатор диалога.
+// Идентификатор формируется из Call-ID и тегов From/To.
+// Формат: "callID;from-tag=tag1;to-tag=tag2"
 func (d *Dialog) ID() string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.id
 }
 
-// State возвращает текущее состояние диалога
+// State возвращает текущее состояние диалога.
+// Возможные состояния:
+//   - StateNone: диалог не существует
+//   - StateEarly: ранний диалог (после 1xx ответа)
+//   - StateConfirmed: подтверждённый диалог (после 2xx ответа)
+//   - StateTerminating: диалог в процессе завершения
+//   - StateTerminated: диалог завершён
 func (d *Dialog) State() DialogState {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.stringToDialogState(d.stateMachine.Current())
 }
 
-// CallID возвращает Call-ID заголовок
+// CallID возвращает заголовок Call-ID диалога.
+// Call-ID - это уникальный идентификатор, общий для всех
+// запросов и ответов, отправляемых в рамках диалога.
 func (d *Dialog) CallID() sip.CallIDHeader {
 	d.mu.RLock()
 	defer d.mu.RUnlock()

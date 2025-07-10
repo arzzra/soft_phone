@@ -25,7 +25,6 @@ type RTPSession struct {
 	// RTP счетчики согласно RFC 3550
 	sequenceNumber uint32 // Sequence number (atomic)
 	timestamp      uint32 // RTP timestamp (atomic)
-	rtpClock       uint64 // Внутренние часы RTP
 
 	// Статистика RTP
 	packetsSent     uint64 // Отправлено пакетов (atomic)

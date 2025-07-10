@@ -137,7 +137,7 @@ func TestUDPTransportCommunication(t *testing.T) {
 
 	// Устанавливаем удаленный адрес для первого транспорта
 	addr2 := transport2.LocalAddr().String()
-	transport1.SetRemoteAddr(addr2)
+	_ = transport1.SetRemoteAddr(addr2)
 
 	t.Logf("Настроена связь: %s <-> %s", addr1, addr2)
 
@@ -470,7 +470,7 @@ func BenchmarkTransportOperations(b *testing.B) {
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
-			transport.Send(packet)
+			_ = transport.Send(packet)
 		}
 	})
 
@@ -506,24 +506,10 @@ func BenchmarkTransportOperations(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			// DTLS может требовать установленного соединения
 			if transport.IsHandshakeComplete() {
-				transport.Send(packet)
+				_ = transport.Send(packet)
 			}
 		}
 	})
 }
 
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
-
-// generateTestRTPPacket создает тестовый RTP пакет
-func generateTestRTPPacket(seqNum uint16, timestamp uint32) *rtp.Packet {
-	return &rtp.Packet{
-		Header: rtp.Header{
-			Version:        2,
-			PayloadType:    0, // PCMU
-			SequenceNumber: seqNum,
-			Timestamp:      timestamp,
-			SSRC:           0x12345678,
-		},
-		Payload: []byte("Test RTP payload data"),
-	}
-}

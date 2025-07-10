@@ -259,7 +259,7 @@ func (s *Session) Start() error {
 	// Запускаем RTCP сессию если есть
 	if s.rtcpSession != nil {
 		if err := s.rtcpSession.Start(); err != nil {
-			s.rtpSession.Stop() // Останавливаем RTP если RTCP не запустился
+			_ = s.rtpSession.Stop() // Останавливаем RTP если RTCP не запустился
 			return fmt.Errorf("ошибка запуска RTCP сессии: %w", err)
 		}
 	}
@@ -281,11 +281,11 @@ func (s *Session) Stop() error {
 
 	// Останавливаем компоненты
 	if s.rtpSession != nil {
-		s.rtpSession.Stop()
+		_ = s.rtpSession.Stop()
 	}
 
 	if s.rtcpSession != nil {
-		s.rtcpSession.Stop()
+		_ = s.rtcpSession.Stop()
 	}
 
 	s.wg.Wait()
@@ -680,14 +680,14 @@ func generateSSRC() (uint32, error) {
 // generateRandomUint16 генерирует случайное 16-битное число
 func generateRandomUint16() uint16 {
 	var val uint16
-	binary.Read(rand.Reader, binary.BigEndian, &val)
+	_ = binary.Read(rand.Reader, binary.BigEndian, &val)
 	return val
 }
 
 // generateRandomUint32 генерирует случайное 32-битное число
 func generateRandomUint32() uint32 {
 	var val uint32
-	binary.Read(rand.Reader, binary.BigEndian, &val)
+	_ = binary.Read(rand.Reader, binary.BigEndian, &val)
 	return val
 }
 

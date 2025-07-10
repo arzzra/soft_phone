@@ -566,7 +566,6 @@ func (u *UASUAC) GetDialogByCallID(callID *sip.CallIDHeader) (IDialog, error) {
 	return u.dialogManager.GetDialogByCallID(callID)
 }
 
-// Close закрывает UASUAC и освобождает ресурсы
 // GetTransport возвращает текущую конфигурацию транспорта
 func (u *UASUAC) GetTransport() TransportConfig {
 	u.mu.RLock()
@@ -700,19 +699,6 @@ func WithWebSocketSecure(path string) UASUACOption {
 	}
 }
 
-// WithEndpoints устанавливает конфигурацию endpoints для UASUAC
-func WithEndpoints(config *EndpointConfig) UASUACOption {
-	return func(u *UASUAC) error {
-		if config == nil {
-			return fmt.Errorf("конфигурация endpoints не может быть nil")
-		}
-		if err := config.Validate(); err != nil {
-			return fmt.Errorf("некорректная конфигурация endpoints: %w", err)
-		}
-		u.endpoints = config
-		return nil
-	}
-}
 
 // callConfig конфигурация для исходящего вызова
 // Позволяет гибко настраивать различные параметры INVITE запроса
@@ -839,19 +825,6 @@ func WithSubject(subject string) CallOption {
 	}
 }
 
-// WithEndpoint выбирает конкретный endpoint по имени
-func WithEndpoint(name string) CallOption {
-	return func(c *callConfig) {
-		c.endpointName = name
-	}
-}
-
-// WithRemoteURI устанавливает полный remote URI (игнорирует target)
-func WithRemoteURI(uri sip.Uri) CallOption {
-	return func(c *callConfig) {
-		c.remoteURI = &uri
-	}
-}
 
 // WithAssertedIdentity устанавливает P-Asserted-Identity заголовок с SIP URI
 // uri должен иметь схему sip или sips

@@ -576,7 +576,7 @@ func (ms *MediaSession) Stop() error {
 	// Останавливаем все RTP сессии
 	ms.sessionsMutex.Lock()
 	for _, rtpSession := range ms.rtpSessions {
-		rtpSession.Stop() // Игнорируем ошибки при принудительной остановке
+		_ = rtpSession.Stop() // Игнорируем ошибки при принудительной остановке
 	}
 	ms.sessionsMutex.Unlock()
 
@@ -1469,11 +1469,6 @@ func (ms *MediaSession) processIncomingPacketWithID(packet *rtp.Packet, rtpSessi
 	ms.processDecodedPacketWithID(packet, rtpSessionID)
 }
 
-// processDecodedPacket обрабатывает аудио пакет с декодированием
-func (ms *MediaSession) processDecodedPacket(packet *rtp.Packet) {
-	// Вызываем новый метод с пустым ID для обратной совместимости
-	ms.processDecodedPacketWithID(packet, "")
-}
 
 // processDecodedPacketWithID обрабатывает аудио пакет с декодированием и ID сессии
 func (ms *MediaSession) processDecodedPacketWithID(packet *rtp.Packet, rtpSessionID string) {

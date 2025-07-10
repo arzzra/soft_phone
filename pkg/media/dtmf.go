@@ -90,7 +90,6 @@ type DTMFSender struct {
 	payloadType uint8
 	ssrc        uint32
 	seqNum      uint16
-	timestamp   uint32
 }
 
 // NewDTMFSender создает новый DTMF sender

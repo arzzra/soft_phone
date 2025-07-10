@@ -24,7 +24,7 @@ func TestJitterBufferAdvancedIntegration(t *testing.T) {
 	defer session.Stop()
 
 	mockRTP := NewMockSessionRTP("jitter-test", "PCMU")
-	session.AddRTPSession("test", mockRTP)
+	_ = session.AddRTPSession("test", mockRTP)
 	session.Start()
 
 	t.Run("Jitter buffer обработка пакетов", func(t *testing.T) {
@@ -275,7 +275,7 @@ func TestDTMFIntegration(t *testing.T) {
 	}
 
 	mockRTP := NewMockSessionRTP("dtmf-test", "PCMU")
-	session.AddRTPSession("test", mockRTP)
+	_ = session.AddRTPSession("test", mockRTP)
 	session.Start()
 
 	t.Run("Отправка DTMF событий", func(t *testing.T) {
@@ -435,7 +435,7 @@ func TestComplexScenarios(t *testing.T) {
 		defer session.Stop()
 
 		mockRTP := NewMockSessionRTP("complex-test", "PCMU")
-		session.AddRTPSession("test", mockRTP)
+		_ = session.AddRTPSession("test", mockRTP)
 		session.Start()
 
 		// Включаем RTCP

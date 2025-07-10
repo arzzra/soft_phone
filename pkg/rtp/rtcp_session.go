@@ -454,7 +454,8 @@ func (rs *RTCPSession) processReceiverReport(rr *ReceiverReport) {
 	// Обрабатываем reception reports о нашей передаче
 	for _, report := range rr.ReceptionReports {
 		if report.SSRC == rs.ssrc {
-			// Это отчет о нашей передаче - можем использовать для адаптации качества
+			// TODO: Это отчет о нашей передаче - можем использовать для адаптации качества
+			// В будущем здесь можно реализовать адаптацию битрейта на основе отчетов
 		}
 	}
 }

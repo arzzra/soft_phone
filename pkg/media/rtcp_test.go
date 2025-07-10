@@ -785,13 +785,13 @@ func BenchmarkRTCPOperations(b *testing.B) {
 
 	b.Run("EnableRTCP", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			session.EnableRTCP(true)
-			session.EnableRTCP(false)
+			_ = session.EnableRTCP(true)
+			_ = session.EnableRTCP(false)
 		}
 	})
 
 	b.Run("GetRTCPStatistics", func(b *testing.B) {
-		session.EnableRTCP(true)
+		_ = session.EnableRTCP(true)
 		for i := 0; i < b.N; i++ {
 			_ = session.GetRTCPStatistics()
 		}
@@ -828,13 +828,13 @@ func BenchmarkAudioProcessing(b *testing.B) {
 
 	b.Run("SendAudio", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			session.SendAudio(audioData)
+			_ = session.SendAudio(audioData)
 		}
 	})
 
 	b.Run("WriteAudioDirect", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			session.WriteAudioDirect(audioData)
+			_ = session.WriteAudioDirect(audioData)
 		}
 	})
 

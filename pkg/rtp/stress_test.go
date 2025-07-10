@@ -524,7 +524,7 @@ func BenchmarkMetricsCollection(b *testing.B) {
 	})
 	defer session.Stop()
 
-	collector.RegisterSession("bench-session", session)
+	_ = collector.RegisterSession("bench-session", session)
 
 	update := SessionMetricsUpdate{
 		PacketsReceived: 1,

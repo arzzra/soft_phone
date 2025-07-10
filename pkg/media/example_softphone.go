@@ -163,7 +163,7 @@ func ExampleRawAudioSending() error {
 	}
 
 	for _, ptime := range ptimes {
-		session.SetPtime(ptime)
+		_ = session.SetPtime(ptime)
 		expectedSize := session.GetExpectedPayloadSize()
 		fmt.Printf("   Ptime %v: ожидаемый размер payload %d байт для %s\n",
 			ptime, expectedSize, session.GetPayloadTypeName())
@@ -182,7 +182,7 @@ func ExampleRawAudioSending() error {
 	}
 
 	// Восстанавливаем ptime по умолчанию
-	session.SetPtime(time.Millisecond * 20)
+	_ = session.SetPtime(time.Millisecond * 20)
 
 	// 6. Тестирование RTP timing
 	fmt.Println("6. Тестирование правильного RTP timing:")
@@ -314,7 +314,7 @@ func ExampleRawPacketHandling() error {
 	if err != nil {
 		return err
 	}
-	defer rawSession.Stop()
+	defer func() { _ = rawSession.Stop() }()
 
 	if err := rawSession.Start(); err != nil {
 		return err

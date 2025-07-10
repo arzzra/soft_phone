@@ -95,10 +95,10 @@ func (t *UDPRTCPTransport) ReceiveRTCP(ctx context.Context) ([]byte, net.Addr, e
 	// Устанавливаем таймаут для операции чтения
 	deadline, hasDeadline := ctx.Deadline()
 	if hasDeadline {
-		t.conn.SetReadDeadline(deadline)
+		_ = t.conn.SetReadDeadline(deadline)
 	} else {
 		// Устанавливаем разумный таймаут по умолчанию
-		t.conn.SetReadDeadline(time.Now().Add(time.Second))
+		_ = t.conn.SetReadDeadline(time.Now().Add(time.Second))
 	}
 
 	// Читаем пакет

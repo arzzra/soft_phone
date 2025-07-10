@@ -332,7 +332,9 @@ func RunErrorExamples() {
 	fmt.Println("=" + fmt.Sprintf("%50s", "") + "=")
 
 	// Запускаем все примеры
-	ExampleErrorHandling()
+	if err := ExampleErrorHandling(); err != nil {
+		fmt.Printf("Ошибка в примере обработки ошибок: %v\n", err)
+	}
 
 	if err := ExampleErrorsInMediaSession(); err != nil {
 		fmt.Printf("Ошибка в примере интеграции: %v\n", err)

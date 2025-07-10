@@ -24,7 +24,7 @@ func TestCallbackSafety(t *testing.T) {
 	defer session.Stop()
 
 	mockRTP := NewMockSessionRTP("callback-safety", "PCMU")
-	session.AddRTPSession("test", mockRTP)
+	_ = session.AddRTPSession("test", mockRTP)
 	session.Start()
 
 	t.Run("Concurrent callback operations", func(t *testing.T) {
@@ -129,7 +129,7 @@ func TestRawPacketHandling(t *testing.T) {
 	defer session.Stop()
 
 	mockRTP := NewMockSessionRTP("raw-packet-test", "PCMU")
-	session.AddRTPSession("test", mockRTP)
+	_ = session.AddRTPSession("test", mockRTP)
 
 	t.Run("Raw packet callback", func(t *testing.T) {
 		var receivedPackets []*rtp.Packet
@@ -380,7 +380,7 @@ func TestErrorCallbacks(t *testing.T) {
 	defer session.Stop()
 
 	mockRTP := NewMockSessionRTP("error-callback-test", "PCMU")
-	session.AddRTPSession("test", mockRTP)
+	_ = session.AddRTPSession("test", mockRTP)
 
 	t.Run("Error callback при ошибке отправки", func(t *testing.T) {
 		// Устанавливаем режим ошибки в mock

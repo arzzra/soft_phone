@@ -152,7 +152,7 @@ func BenchmarkSimpleRTPPacketWrite(b *testing.B) {
 	
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		transport.Send(packet)
+		_ = transport.Send(packet)
 	}
 }
 

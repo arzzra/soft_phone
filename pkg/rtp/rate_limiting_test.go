@@ -171,7 +171,7 @@ func TestRateLimitingWindowReset(t *testing.T) {
 	}
 
 	// Проверяем что RateLimited флаг сброшен
-	if source.RateLimited {
+	if source != nil && source.RateLimited {
 		t.Error("RateLimited флаг должен быть сброшен после окна")
 	}
 
@@ -336,7 +336,7 @@ func TestRateLimitingIntegration(t *testing.T) {
 		}
 	}
 
-	session.Start()
+	_ = session.Start()
 
 	testSSRC := uint32(0x44444444)
 

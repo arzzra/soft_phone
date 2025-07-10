@@ -67,7 +67,7 @@ func TestSessionRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	// Регистрируем сессию
 	sessionID := "test-session-1"
@@ -131,7 +131,7 @@ func TestCardinalityLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	// Регистрируем 2 сессии (должно пройти)
 	err = collector.RegisterSession("session-1", session)
@@ -171,10 +171,10 @@ func TestMetricsUpdate(t *testing.T) {
 		ClockRate:   8000,
 		Transport:   transport,
 	})
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	sessionID := "test-session"
-	collector.RegisterSession(sessionID, session)
+	_ = collector.RegisterSession(sessionID, session)
 
 	// Обновляем метрики
 	update := SessionMetricsUpdate{
@@ -282,10 +282,10 @@ func TestHealthMonitor(t *testing.T) {
 		ClockRate:   8000,
 		Transport:   transport,
 	})
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	sessionID := "health-test-session"
-	collector.RegisterSession(sessionID, session)
+	_ = collector.RegisterSession(sessionID, session)
 
 	// Добавляем хорошие метрики
 	goodUpdate := SessionMetricsUpdate{
@@ -352,10 +352,10 @@ func TestHTTPEndpoints(t *testing.T) {
 		ClockRate:   8000,
 		Transport:   transport,
 	})
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	sessionID := "http-test-session"
-	collector.RegisterSession(sessionID, session)
+	_ = collector.RegisterSession(sessionID, session)
 
 	// Добавляем тестовые метрики
 	update := SessionMetricsUpdate{
@@ -492,10 +492,10 @@ func TestSampling(t *testing.T) {
 		ClockRate:   8000,
 		Transport:   transport,
 	})
-	defer session.Stop()
+	defer func() { _ = session.Stop() }()
 
 	sessionID := "sampling-test"
-	collector.RegisterSession(sessionID, session)
+	_ = collector.RegisterSession(sessionID, session)
 
 	// Подсчитываем сколько обновлений было обработано
 	initialPacketsSent := uint64(0)

@@ -317,7 +317,7 @@ func (t *DTLSTransport) Receive(ctx context.Context) (*rtp.Packet, net.Addr, err
 	buffer := make([]byte, bufferSize)
 
 	// Устанавливаем таймаут для чтения
-	dtlsConn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
+	_ = dtlsConn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
 
 	n, err := dtlsConn.Read(buffer)
 	if err != nil {
@@ -452,10 +452,8 @@ func (t *DTLSTransport) GetSelectedCipherSuite() dtls.CipherSuiteID {
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
 
-	if t.dtlsConn != nil {
-		// Здесь можно добавить логику получения cipher suite из состояния соединения
-		// В текущей версии pion/dtls это может потребовать дополнительной работы
-	}
+	// TODO: Получить cipher suite из состояния DTLS соединения
+	// В текущей версии pion/dtls это может потребовать дополнительной работы
 
 	return 0
 }
