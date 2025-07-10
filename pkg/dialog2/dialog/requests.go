@@ -1,0 +1,307 @@
+package dialog
+
+import (
+	"context"
+	"fmt"
+	"github.com/emiago/sipgo"
+	"github.com/emiago/sipgo/sip"
+	"github.com/pkg/errors"
+	"log/slog"
+	"net"
+	"strings"
+)
+
+type InviteOptions func()
+
+func (s *Session) makeReq() {
+
+}
+
+func (s *Session) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
+	tx, err := uu.uac.TransactionRequest(ctx, req, sipgo.ClientRequestAddVia)
+	if err != nil {
+		err = errors.Wrapf(err, "failed to send request")
+		return nil, err
+	}
+
+	{
+		slog.Debug("creating new TX", slog.String("request fromTag", GetFromTag(req)))
+	}
+
+	txD, err := newTX(ctx, s, Outgoing, tx, req)
+	if err != nil {
+		err = errors.Wrapf(err, "failed to create TX")
+		return nil, err
+	}
+	return txD, nil
+}
+
+// Invite отправляет INVITE запрос на вызов
+func (s *Session) Invite(ctx context.Context, target *sip.Uri, headers []sip.Header, body *Body) (ITx, error) {
+	if target == nil {
+		return nil, fmt.Errorf("target is nill")
+	}
+
+	s.remoteTarget = *target
+
+	// сначала устаниавливаем все данные
+
+	req := s.makeRequest(sip.INVITE)
+
+	for _, v := range headers {
+		req.AppendHeader(v)
+	}
+
+	fmt.Println("target", req.String())
+
+	setContent(req, body.contentType, body.content)
+
+	{
+		slog.Debug("session.Invite", slog.String("request", req.String()), slog.String("body", string(req.Body())))
+	}
+
+	return s.sendReq(ctx, req)
+}
+
+func (s *Session) Bye(ctx context.Context) error {
+	return nil
+
+}
+
+var (
+	// ErrTagToNotFount ошибка при отсутствии тега to
+	ErrTagToNotFount = errors.New("tag to not found")
+	// ErrTagFromNotFount ошибка при отсутствии тега from
+	ErrTagFromNotFount = errors.New("tag from not found")
+)
+
+func createReferByHeader(contact sip.Uri) sip.Header {
+	builder := strings.Builder{}
+
+	if contact.Wildcard {
+		// Treat the Wildcard URI separately as it must not be contained in < > angle brackets.
+		builder.WriteByte('*')
+	} else {
+		builder.WriteByte('<')
+		builder.WriteString(contact.String())
+		builder.WriteByte('>')
+	}
+
+	return sip.NewHeader("Referred-By", builder.String())
+}
+
+func createReferToHeader(target sip.Uri, callID, toTag, fromTag string) sip.Header {
+	builder := strings.Builder{}
+
+	if target.Wildcard {
+		// Treat the Wildcard URI separately as it must not be contained in < > angle brackets.
+		builder.WriteByte('*')
+	} else {
+		builder.WriteByte('<')
+		builder.WriteString(target.String())
+
+		if callID != "" && toTag != "" && fromTag != "" {
+			builder.WriteString("?Replaces=")
+			builder.WriteString(callID)
+			builder.WriteString("%3bto-tag%3d")
+			builder.WriteString(toTag)
+			builder.WriteString("%3bfrom-tag%3d")
+			builder.WriteString(fromTag)
+		}
+
+		builder.WriteByte('>')
+	}
+
+	return sip.NewHeader("Refer-To", builder.String())
+}
+
+func (s *Session) makeRequest(method sip.RequestMethod) *sip.Request {
+	trg := s.remoteTarget
+	trg.Port = 0
+	newRequest := sip.NewRequest(method, trg)
+
+	ip := net.ParseIP(uu.config.Hosts[0])
+
+	newRequest.Laddr = sip.Addr{IP: ip, Hostname: uu.config.Hosts[0], Port: int(uu.config.Port)}
+
+	fmt.Println("new req", s.remoteTarget.String())
+
+	fromTag := newTag()
+
+	fromHeader := sip.FromHeader{
+		DisplayName: s.profile.DisplayName,
+		Address:     s.profile.Address,
+		Params:      sip.NewParams().Add("tag", fromTag),
+	}
+	newRequest.AppendHeader(&fromHeader)
+
+	toHeader := sip.ToHeader{
+		DisplayName: "",
+		Address:     s.remoteTarget,
+		Params:      nil,
+	}
+	newRequest.AppendHeader(&toHeader)
+	newRequest.Recipient = s.remoteTarget
+
+	newRequest.AppendHeader(s.profile.Contact())
+	//newRequest.AppendHeader(sip.HeaderClone(s.to))
+	//newRequest.AppendHeader(sip.HeaderClone(s.from))
+	newRequest.AppendHeader(&s.callID)
+	newRequest.AppendHeader(&sip.CSeqHeader{SeqNo: s.NextLocalCSeq(), MethodName: method})
+	maxForwards := sip.MaxForwardsHeader(70)
+	newRequest.AppendHeader(&maxForwards)
+
+	if len(s.routeSet) > 0 {
+		for _, val := range s.routeSet {
+			newRequest.AppendHeader(&sip.RouteHeader{Address: val})
+		}
+	}
+
+	return newRequest
+}
+
+///////////////////////////////////////////////////////////
+
+type ReqBuilderOpt func(*sip.Request)
+
+func makeReqWithOpts(name sip.RequestMethod, to sip.Uri, opts ...ReqBuilderOpt) (*sip.Request, error) {
+	return nil, nil
+}
+
+//////////////////////////////////////////////////////////
+
+// Refer возвращает REFER запрос для слепого перевода звонка.
+func (s *Session) Refer(target sip.Uri, headers []sip.Header) *sip.Request {
+	req := s.makeRequest(sip.REFER)
+
+	referBy := createReferByHeader(s.localContact.Address)
+	referTo := createReferToHeader(target, "", "", "")
+	req.AppendHeader(referTo)
+	req.AppendHeader(referBy)
+
+	for _, v := range headers {
+		req.AppendHeader(v)
+	}
+
+	return req
+}
+
+// ReferWithReplace возвращает REFER запрос для перевода звонка с подменой.
+func (s *Session) ReferWithReplace(target sip.Uri, callID sip.CallIDHeader,
+	toTag sip.ToHeader, fromTag sip.FromHeader, headers []sip.Header) (*sip.Request, error) {
+	req := s.makeRequest(sip.REFER)
+
+	tagTo, ok := toTag.Params.Get("tag")
+	if !ok {
+		return nil, ErrTagToNotFount
+	}
+
+	tagFrom, ok := fromTag.Params.Get("tag")
+	if !ok {
+		return nil, ErrTagFromNotFount
+	}
+
+	referBy := createReferByHeader(s.localContact.Address)
+	referTo := createReferToHeader(target, callID.Value(), tagTo, tagFrom)
+
+	req.AppendHeader(referTo)
+	req.AppendHeader(referBy)
+
+	for _, v := range headers {
+		req.AppendHeader(v)
+	}
+
+	return req, nil
+}
+
+// ReferWithReplace возвращает REFER запрос для перевода звонка с подменой.
+//func (s *Session) ReferWithReplace1(targetSess *Session, headers []sip.Header) (*sip.Request, error) {
+//	tagTo, ok := targetSess.to.Params.Get("tag") // todo s.To()
+//	if !ok {
+//		return nil, ErrTagToNotFount
+//	}
+//
+//	tagFrom, ok := targetSess.from.Params.Get("tag") // todo s.From()
+//	if !ok {
+//		return nil, ErrTagFromNotFount
+//	}
+//
+//	req := s.makeRequest(sip.REFER)
+//
+//	referBy := createReferByHeader(s.LocalContact().Address)
+//	referTo := createReferToHeader(targetSess.to.Address, targetSess.CallID().Value(), tagTo, tagFrom)
+//
+//	req.AppendHeader(referTo)
+//	req.AppendHeader(referBy)
+//
+//	for _, v := range headers {
+//		req.AppendHeader(v)
+//	}
+//
+//	return req, nil
+//}
+//
+//// Info возвращает INFO запрос.
+//func (s *Session) Info(content []byte, contentType string) *sip.Request {
+//	req := s.makeRequest(sip.INFO)
+//
+//	req.SetBody(content)
+//	hdr := sip.ContentTypeHeader(contentType)
+//	req.AppendHeader(&hdr)
+//
+//	return req
+//}
+//
+//// ReInvite возвращает INVITE запрос.
+//func (s *Session) ReInvite(body Body, headers []sip.Header) *sip.Request {
+//	req := s.makeRequest(sip.INVITE)
+//
+//	req.SetBody(body.Content())
+//	contentType := sip.ContentTypeHeader(body.ContentType())
+//	req.AppendHeader(&contentType)
+//
+//	for _, v := range headers {
+//		req.AppendHeader(v)
+//	}
+//
+//	return req
+//}
+
+// Cancel возвращает CANCEL запрос.
+//func (s *Session) Cancel(tx *TX) *sip.Request {
+//	requestForCancel := tx.Request()
+//
+//	cancelReq := sip.NewRequest(
+//		sip.CANCEL,
+//		requestForCancel.Recipient,
+//	)
+//	cancelReq.SipVersion = requestForCancel.SipVersion
+//
+//	viaHop := requestForCancel.Via()
+//	cancelReq.AppendHeader(viaHop.Clone())
+//	sip.CopyHeaders("Route", requestForCancel, cancelReq)
+//	maxForwardsHeader := sip.MaxForwardsHeader(70)
+//	cancelReq.AppendHeader(&maxForwardsHeader)
+//
+//	if h := requestForCancel.From(); h != nil {
+//		cancelReq.AppendHeader(sip.HeaderClone(h))
+//	}
+//	if h := requestForCancel.To(); h != nil {
+//		cancelReq.AppendHeader(sip.HeaderClone(h))
+//	}
+//	if h := requestForCancel.CallID(); h != nil {
+//		cancelReq.AppendHeader(sip.HeaderClone(h))
+//	}
+//	if h := requestForCancel.CSeq(); h != nil {
+//		cancelReq.AppendHeader(sip.HeaderClone(h))
+//	}
+//	cseq := cancelReq.CSeq()
+//	cseq.MethodName = sip.CANCEL
+//
+//	// cancelReq.SetBody([]byte{})
+//	cancelReq.SetTransport(requestForCancel.Transport())
+//	cancelReq.SetSource(requestForCancel.Source())
+//	cancelReq.SetDestination(requestForCancel.Destination())
+//
+//	return cancelReq
+//}
