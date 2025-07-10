@@ -26,6 +26,9 @@ type UASUAC struct {
 	listenAddr string
 	contactURI sip.Uri
 
+	// Транспортная конфигурация
+	transport TransportConfig
+
 	// Менеджер диалогов
 	dialogManager *DialogManager
 	
@@ -53,6 +56,7 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 		listenAddr:  "127.0.0.1:5060",
 		logger:      &NoOpLogger{}, // Будет заменен через опцию
 		retryConfig: NetworkRetryConfig(), // Конфигурация по умолчанию для сетевых операций
+		transport:   DefaultTransportConfig(), // Транспорт по умолчанию - UDP
 	}
 
 	// Применяем опции
@@ -104,10 +108,19 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 			portInt = 5060
 		}
 	}
+	// Создаем Contact URI с учетом транспорта
 	uasuac.contactURI = sip.Uri{
-		Scheme: "sip",
+		Scheme: uasuac.transport.GetScheme(),
 		Host:   host,
 		Port:   portInt,
+	}
+	
+	// Добавляем transport параметр если не UDP
+	if uasuac.transport.Type != TransportUDP {
+		if uasuac.contactURI.Headers == nil {
+			uasuac.contactURI.Headers = make(sip.HeaderParams)
+		}
+		uasuac.contactURI.Headers["transport"] = uasuac.transport.GetTransportParam()
 	}
 
 	// Создаем менеджер диалогов
@@ -154,8 +167,24 @@ func (u *UASUAC) Listen(ctx context.Context) error {
 	}
 	u.mu.Unlock()
 
-	// Запускаем сервер
-	return u.server.ListenAndServe(ctx, "udp", u.listenAddr)
+	// Валидируем транспортную конфигурацию
+	if err := u.transport.Validate(); err != nil {
+		return fmt.Errorf("некорректная конфигурация транспорта: %w", err)
+	}
+
+	// Определяем сетевой тип и адрес для прослушивания
+	network := u.transport.GetListenNetwork()
+	
+	// Для WebSocket транспортов может потребоваться дополнительная настройка
+	// В текущей реализации sipgo WebSocket обрабатывается через HTTP сервер
+	
+	u.logger.Info("Запуск SIP сервера",
+		F("transport", u.transport.Type),
+		F("network", network),
+		F("address", u.listenAddr))
+
+	// Запускаем сервер с выбранным транспортом
+	return u.server.ListenAndServe(ctx, network, u.listenAddr)
 }
 
 // CreateDialog создает новый исходящий диалог (UAC)
@@ -412,6 +441,13 @@ func (u *UASUAC) transactionRequestWithRetry(ctx context.Context, req *sip.Reque
 }
 
 // Close закрывает UASUAC и освобождает ресурсы
+// GetTransport возвращает текущую конфигурацию транспорта
+func (u *UASUAC) GetTransport() TransportConfig {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.transport
+}
+
 func (u *UASUAC) Close() error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -475,6 +511,73 @@ func WithLogger(logger Logger) UASUACOption {
 func WithRetryConfig(config RetryConfig) UASUACOption {
 	return func(u *UASUAC) error {
 		u.retryConfig = config
+		return nil
+	}
+}
+
+// WithTransport устанавливает конфигурацию транспорта
+func WithTransport(config TransportConfig) UASUACOption {
+	return func(u *UASUAC) error {
+		if err := config.Validate(); err != nil {
+			return fmt.Errorf("некорректная конфигурация транспорта: %w", err)
+		}
+		u.transport = config
+		return nil
+	}
+}
+
+// WithTransportType устанавливает тип транспорта (упрощенная версия WithTransport)
+func WithTransportType(transportType TransportType) UASUACOption {
+	return func(u *UASUAC) error {
+		config := u.transport // Сохраняем текущую конфигурацию
+		config.Type = transportType
+		if err := config.Validate(); err != nil {
+			return fmt.Errorf("некорректный тип транспорта: %w", err)
+		}
+		u.transport = config
+		return nil
+	}
+}
+
+// WithUDP устанавливает UDP транспорт
+func WithUDP() UASUACOption {
+	return WithTransportType(TransportUDP)
+}
+
+// WithTCP устанавливает TCP транспорт
+func WithTCP() UASUACOption {
+	return WithTransportType(TransportTCP)
+}
+
+// WithTLS устанавливает TLS транспорт
+func WithTLS() UASUACOption {
+	return WithTransportType(TransportTLS)
+}
+
+// WithWebSocket устанавливает WebSocket транспорт
+func WithWebSocket(path string) UASUACOption {
+	return func(u *UASUAC) error {
+		config := u.transport
+		config.Type = TransportWS
+		config.WSPath = path
+		if err := config.Validate(); err != nil {
+			return fmt.Errorf("некорректная конфигурация WebSocket: %w", err)
+		}
+		u.transport = config
+		return nil
+	}
+}
+
+// WithWebSocketSecure устанавливает WebSocket Secure транспорт
+func WithWebSocketSecure(path string) UASUACOption {
+	return func(u *UASUAC) error {
+		config := u.transport
+		config.Type = TransportWSS
+		config.WSPath = path
+		if err := config.Validate(); err != nil {
+			return fmt.Errorf("некорректная конфигурация WebSocket Secure: %w", err)
+		}
+		u.transport = config
 		return nil
 	}
 }
