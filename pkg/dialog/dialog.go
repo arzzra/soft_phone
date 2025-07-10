@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/arzzra/soft_phone/pkg/dialog/headers"
 	"github.com/emiago/sipgo/sip"
 	"github.com/looplab/fsm"
-	"github.com/arzzra/soft_phone/pkg/dialog/headers"
 )
 
 // Dialog представляет SIP диалог между двумя UA
@@ -161,7 +161,7 @@ func (d *Dialog) updateDialogID() {
 	var sb strings.Builder
 	sb.WriteString(d.callID.Value())
 	sb.WriteString(";from-tag=")
-	
+
 	if d.isServer {
 		sb.WriteString(d.remoteTag)
 		sb.WriteString(";to-tag=")
@@ -171,7 +171,7 @@ func (d *Dialog) updateDialogID() {
 		sb.WriteString(";to-tag=")
 		sb.WriteString(d.remoteTag)
 	}
-	
+
 	d.id = sb.String()
 }
 
@@ -516,23 +516,22 @@ func (d *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (si
 	referReq := sip.NewRequest(sip.REFER, d.remoteTarget)
 	d.applyDialogHeaders(referReq)
 
-	// Добавляем Refer-To заголовок
-	var referToBuilder strings.Builder
-	referToBuilder.WriteByte('<')
-	referToBuilder.WriteString(target.String())
-	referToBuilder.WriteByte('>')
-	referToValue := referToBuilder.String()
-
-	// Валидация Refer-To заголовка
-	if err := d.securityValidator.ValidateHeader("Refer-To", referToValue); err != nil {
-		return nil, fmt.Errorf("ошибка валидации Refer-To заголовка: %w", err)
-	}
-
-	// Создаем типизированный Refer-To заголовок
-	referToHeader, err := headers.NewReferTo(referToValue)
+	// Создаем типизированный Refer-To заголовок используя Builder
+	referToHeader, err := headers.NewBuilder(target.String()).Build()
 	if err != nil {
 		return nil, fmt.Errorf("ошибка создания Refer-To заголовка: %w", err)
 	}
+
+	// Валидация Refer-To заголовка
+	if err := referToHeader.Validate(); err != nil {
+		return nil, fmt.Errorf("ошибка валидации Refer-To заголовка: %w", err)
+	}
+
+	// Дополнительная валидация через security validator
+	if err := d.securityValidator.ValidateHeader("Refer-To", referToHeader.Value()); err != nil {
+		return nil, fmt.Errorf("ошибка валидации безопасности Refer-To заголовка: %w", err)
+	}
+
 	referReq.AppendHeader(referToHeader)
 
 	// Применяем опции
@@ -570,31 +569,23 @@ func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts *
 	referReq := sip.NewRequest(sip.REFER, d.remoteTarget)
 	d.applyDialogHeaders(referReq)
 
-	// Формируем Replaces заголовок
+	// Получаем данные для Replaces
 	callID := replaceDialog.CallID()
-	var replacesBuilder strings.Builder
-	replacesBuilder.WriteString(callID.Value())
-	replacesBuilder.WriteString(";to-tag=")
-	replacesBuilder.WriteString(replaceDialog.RemoteTag())
-	replacesBuilder.WriteString(";from-tag=")
-	replacesBuilder.WriteString(replaceDialog.LocalTag())
-	replacesValue := replacesBuilder.String()
-
-	// Формируем Refer-To с Replaces
 	remoteTarget := replaceDialog.RemoteTarget()
-	var referToBuilder strings.Builder
-	referToBuilder.WriteByte('<')
-	referToBuilder.WriteString(remoteTarget.String())
-	referToBuilder.WriteString("?Replaces=")
-	referToBuilder.WriteString(replacesValue)
-	referToBuilder.WriteByte('>')
-	referToValue := referToBuilder.String()
-	
-	// Создаем типизированный Refer-To заголовок с Replaces
-	referToHeader, err := headers.NewReferTo(referToValue)
+
+	// Создаем типизированный Refer-To заголовок с Replaces используя Builder
+	referToHeader, err := headers.NewBuilder(remoteTarget.String()).
+		WithReplaces(callID.Value(), replaceDialog.RemoteTag(), replaceDialog.LocalTag()).
+		Build()
 	if err != nil {
 		return nil, fmt.Errorf("ошибка создания Refer-To заголовка: %w", err)
 	}
+
+	// Валидация заголовка
+	if err := referToHeader.Validate(); err != nil {
+		return nil, fmt.Errorf("ошибка валидации Refer-To заголовка: %w", err)
+	}
+
 	referReq.AppendHeader(referToHeader)
 
 	// Применяем опции, если есть
