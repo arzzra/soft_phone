@@ -198,6 +198,13 @@ func (d *Dialog) RemoteTag() string {
 	return d.remoteTag
 }
 
+// SetID устанавливает новый ID диалога (используется при обновлении ID в менеджере)
+func (d *Dialog) SetID(newID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.id = newID
+}
+
 // LocalURI возвращает локальный URI
 func (d *Dialog) LocalURI() sip.Uri {
 	d.mu.RLock()
@@ -898,11 +905,10 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 	// Создаем подписку для отслеживания статуса
 	subscription := NewReferSubscription(d, referToURI)
 	
-	// Создаем снимок необходимых данных под защитой мьютекса
-	d.mu.RLock()
+	// Получаем необходимые данные без блокировки, так как handleREFER вызывается из OnRequest,
+	// который уже держит блокировку
 	referHandler := d.referHandler
 	uasuac := d.uasuac
-	d.mu.RUnlock()
 	
 	// Проверяем что UASUAC инициализирован
 	if uasuac == nil || uasuac.client == nil {

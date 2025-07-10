@@ -127,94 +127,19 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 // registerHandlers регистрирует обработчики входящих запросов
 func (u *UASUAC) registerHandlers() {
 	// Обработчик INVITE
-	u.server.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
-		// Проверяем лимиты
-		if u.rateLimiter != nil && !u.rateLimiter.Allow("invite") {
-			res := sip.NewResponseFromRequest(req, sip.StatusServiceUnavailable, "Service Unavailable", nil)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = u.respondWithRetry(ctx, tx, res)
-			return
-		}
-		
-		// Создаем новый диалог для входящего INVITE
-		dialog, err := u.dialogManager.CreateServerDialog(req, tx)
-		if err != nil {
-			// Отправляем ошибку
-			res := sip.NewResponseFromRequest(req, sip.StatusInternalServerError, "Internal Server Error", nil)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = u.respondWithRetry(ctx, tx, res)
-			return
-		}
-
-		// Передаем управление диалогу
-		_ = dialog.OnRequest(context.Background(), req, tx)
-	})
+	u.server.OnInvite(u.handleInviteRequest)
 
 	// Обработчик ACK
-	u.server.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
-		dialog, err := u.dialogManager.GetDialogByCallID(req.CallID())
-		if err != nil {
-			// ACK не требует ответа
-			return
-		}
-
-		err = dialog.OnRequest(context.Background(), req, tx)
-		if err != nil {
-			u.logger.Error("ошибка обработки ACK в диалоге",
-				DialogField(dialog.ID()),
-				ErrField(err))
-		}
-	})
+	u.server.OnAck(u.handleAckRequest)
 
 	// Обработчик BYE
-	u.server.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
-		dialog, err := u.dialogManager.GetDialogByCallID(req.CallID())
-		if err != nil {
-			res := sip.NewResponseFromRequest(req, 481, "Call Does Not Exist", nil)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			resErr := u.respondWithRetry(ctx, tx, res)
-			if resErr != nil {
-				u.logger.Error("не удалось отправить ответ 481 на BYE после повторных попыток",
-					CallIDField(req.CallID().Value()),
-					ErrField(resErr))
-			}
-			return
-		}
-
-		err = dialog.OnRequest(context.Background(), req, tx)
-		if err != nil {
-			u.logger.Error("ошибка обработки BYE в диалоге",
-				DialogField(dialog.ID()),
-				ErrField(err))
-		}
-	})
+	u.server.OnBye(u.handleByeRequest)
 
 	// Обработчик CANCEL
-	u.server.OnCancel(func(req *sip.Request, tx sip.ServerTransaction) {
-		// CANCEL обрабатывается на уровне транзакций
-		res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = u.respondWithRetry(ctx, tx, res)
-	})
+	u.server.OnCancel(u.handleCancelRequest)
 
 	// Обработчик OPTIONS
-	u.server.OnOptions(func(req *sip.Request, tx sip.ServerTransaction) {
-		res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-		
-		// Добавляем поддерживаемые методы и расширения
-		hp := NewHeaderProcessor()
-		hp.AddAllowHeaderToResponse(res)
-		hp.AddSupportedHeaderToResponse(res)
-		hp.AddUserAgentToResponse(res, "SoftPhone/1.0")
-		
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = u.respondWithRetry(ctx, tx, res)
-	})
+	u.server.OnOptions(u.handleOptionsRequest)
 }
 
 // Listen запускает прослушивание входящих соединений

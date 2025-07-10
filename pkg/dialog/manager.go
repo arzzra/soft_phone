@@ -235,6 +235,9 @@ func (dm *DialogManager) UpdateDialogID(oldID, newID string, dialog IDialog) err
 	// Сохраняем с новым ID
 	dm.dialogs[newID] = dialog
 	
+	// Обновляем ID внутри самого диалога
+	dialog.SetID(newID)
+	
 	// Обновляем индекс Call-ID
 	callID := dialog.CallID()
 	callIDValue := callID.Value()

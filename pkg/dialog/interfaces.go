@@ -32,6 +32,7 @@ const (
 type IDialog interface {
 	// Core identification
 	ID() string
+	SetID(newID string) // Обновляет ID диалога (используется менеджером)
 	State() DialogState
 	CallID() sip.CallIDHeader
 	LocalTag() string
