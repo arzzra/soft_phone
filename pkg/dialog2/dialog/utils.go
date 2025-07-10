@@ -6,49 +6,49 @@ import (
 )
 
 // NextLocalCSeq возвращает следующий локальный CSeq
-func (s *Session) NextLocalCSeq() uint32 {
+func (s *Dialog) NextLocalCSeq() uint32 {
 	return s.localCSeq.Add(1)
 }
 
 // RemoteCSeq возвращает следующий удаленный CSeq
-func (s *Session) RemoteCSeq() uint32 {
+func (s *Dialog) RemoteCSeq() uint32 {
 	return s.remoteCSeq.Load()
 }
 
 // SetRemoteCSeq устанавливает удаленный CSeq
-func (s *Session) SetRemoteCSeq(cseq uint32) *Session {
+func (s *Dialog) SetRemoteCSeq(cseq uint32) *Dialog {
 	s.remoteCSeq.Store(cseq)
 	return s
 }
 
 // UAType возвращает тип UA (UAS или UAC)
-func (s *Session) UAType() string {
+func (s *Dialog) UAType() string {
 	return s.uaType.String()
 }
 
 // CallID возвращает CallID сессии
-func (s *Session) CallID() *sip.CallIDHeader {
+func (s *Dialog) CallID() *sip.CallIDHeader {
 	return &s.callID
 }
 
 // LocalContact возвращает локальный контакт
-func (s *Session) LocalContact() *sip.ContactHeader {
+func (s *Dialog) LocalContact() *sip.ContactHeader {
 	return s.localContact
 }
 
 // RemoteContact возвращает удаленный контакт
-func (s *Session) RemoteContact() *sip.ContactHeader {
+func (s *Dialog) RemoteContact() *sip.ContactHeader {
 	return s.remoteContact
 }
 
 // LocalURI возвращает локальный URI
-func (s *Session) LocalURI() *sip.Uri {
+func (s *Dialog) LocalURI() *sip.Uri {
 	ret := s.localTarget
 	return &ret
 }
 
 // RemoteURI возвращает удаленный URI
-func (s *Session) RemoteURI() *sip.Uri {
+func (s *Dialog) RemoteURI() *sip.Uri {
 	ret := s.remoteTarget
 	return &ret
 }
@@ -62,24 +62,24 @@ func (s *Session) RemoteURI() *sip.Uri {
 //}
 
 // RemoteSDP возвращает удаленный SDP
-func (s *Session) RemoteSDP() Body {
+func (s *Dialog) RemoteSDP() Body {
 	return s.remoteBody
 }
 
 // LocalSDP возвращает локальный SDP
-func (s *Session) LocalSDP() Body {
+func (s *Dialog) LocalSDP() Body {
 	return s.localBody
 }
 
 // SetRemoteSDP сохраняет тело внешнего участника
-func (s *Session) SetRemoteSDP(contentType string, content []byte) *Session {
+func (s *Dialog) SetRemoteSDP(contentType string, content []byte) *Dialog {
 	s.remoteBody.contentType = contentType
 	s.remoteBody.content = content
 	return s
 }
 
 // SetLocalSDP сохраняет тело локального участника
-func (s *Session) SetLocalSDP(contentType string, content []byte) *Session {
+func (s *Dialog) SetLocalSDP(contentType string, content []byte) *Dialog {
 	s.localBody.contentType = contentType
 	s.localBody.content = content
 	return s

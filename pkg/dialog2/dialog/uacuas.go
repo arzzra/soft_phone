@@ -10,15 +10,16 @@ import (
 )
 
 type Config struct {
-	Hosts   []string
-	Port    uint
-	Network string
-	//Включение режима тестирования
-	TestMode bool `mapstructure:"test_mode"`
+	// Имя контакта для исходящих запросов
+	ContactName string
+	UserAgent   string
+	// Для исходящих запросов
+	Endpoints []Endpoint
+	//Все транспорты которые будут использоваться
+	TransportConfigs []TransportConfig
 }
 
 var (
-	cb CallBacks
 	uu *UACUAS
 )
 
@@ -35,7 +36,7 @@ type callIdGen func() string
 var newTag tagGen
 var newCallId callIdGen
 
-func NewUACUAS(config Config, callbacks CallBacks) (*UACUAS, error) {
+func NewUACUAS(cfg Config) (*UACUAS, error) {
 	if callbacks == nil {
 		return nil, fmt.Errorf("callbacks is nil")
 	}

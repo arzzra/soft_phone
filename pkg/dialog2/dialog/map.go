@@ -35,14 +35,14 @@ func NewDialSessionMap(tagGen func() string) *SessionMap {
 	}
 }
 
-func (dsm *SessionMap) Get(callID sip.CallIDHeader, tag string) (*Session, bool) {
+func (dsm *SessionMap) Get(callID sip.CallIDHeader, tag string) (*Dialog, bool) {
 	if val, is := dsm.sessions.Load(NewDialKSessionKey(callID, tag)); is {
-		return val.(*Session), is
+		return val.(*Dialog), is
 	}
 	return nil, false
 }
 
-func (dsm *SessionMap) Put(callID sip.CallIDHeader, tag string, branchID string, dSession *Session) {
+func (dsm *SessionMap) Put(callID sip.CallIDHeader, tag string, branchID string, dSession *Dialog) {
 	dsm.sessions.Store(NewDialKSessionKey(callID, tag), dSession)
 	dsm.AddWithTX(callID, tag, branchID)
 }
@@ -51,7 +51,7 @@ func (dsm *SessionMap) AddWithTX(callID sip.CallIDHeader, tag string, txID strin
 	dsm.branches.Store(txID, NewDialKSessionKey(callID, tag))
 }
 
-func (dsm *SessionMap) GetWithTX(txID string) (*Session, bool) {
+func (dsm *SessionMap) GetWithTX(txID string) (*Dialog, bool) {
 	if val, is := dsm.branches.Load(txID); is {
 		key := val.(SessionKey)
 		return dsm.Get(key.CallID, key.LocalTag)
@@ -59,7 +59,7 @@ func (dsm *SessionMap) GetWithTX(txID string) (*Session, bool) {
 	return nil, false
 }
 
-func (dsm *SessionMap) Delete(callID sip.CallIDHeader, tag, txID string) (*Session, bool) {
+func (dsm *SessionMap) Delete(callID sip.CallIDHeader, tag, txID string) (*Dialog, bool) {
 	sessKey := NewDialKSessionKey(callID, tag)
 	if txID != "" {
 		if key, is := dsm.branches.Load(txID); is {
@@ -67,7 +67,7 @@ func (dsm *SessionMap) Delete(callID sip.CallIDHeader, tag, txID string) (*Sessi
 		}
 	}
 	if v, is := dsm.sessions.LoadAndDelete(sessKey); is {
-		sess := v.(*Session)
+		sess := v.(*Dialog)
 		//if tx := GetBranchID(sess.Request()); tx != "" {
 		//	dsm.branches.Delete(tx)
 		//}

@@ -42,11 +42,15 @@ func (t *TX) Answer(body *Body) error {
 	return errors.New("not supported for client transactions")
 }
 
-func (t *TX) Reject(code int, reason string, body *Body) error {
+func (t *TX) Reject(code int, reason string, opts ...ResponseOpt) error {
 	if t.IsClient() {
 		return fmt.Errorf("cannot answer client transaction")
 	}
 	resp := newRespFromReq(t.Request(), code, reason, body)
+
+	for _, opt := range opts {
+		opt(resp)
+	}
 
 	if sTx, ok := t.tx.(sip.ServerTransaction); ok {
 		err := sTx.Respond(resp)

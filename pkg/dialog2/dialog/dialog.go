@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 )
 
-type SessionState string
+type DialogState string
 
-func (s SessionState) String() string {
+func (s DialogState) String() string {
 	return string(s)
 }
 
@@ -32,23 +32,21 @@ func (d dualValue) String() string {
 
 const (
 	// IDLE - это начальное состояние
-	IDLE SessionState = "IDLE"
+	IDLE DialogState = "IDLE"
 	// Calling - это состояние когда отправлен invite для исходящего вызова
-	Calling SessionState = "Calling"
+	Calling DialogState = "Calling"
 	// Ringing - это состояние когда получен invite для входящего вызова
-	Ringing SessionState = "Ringing"
+	Ringing DialogState = "Ringing"
 	// InCall - это состояние когда вызов состоялся, то есть на исходящий или входящий invite был ответ 200 OK
-	InCall SessionState = "InCall"
+	InCall DialogState = "InCall"
 	// Terminating - это состояние когда вызов в процессе завершения
-	Terminating SessionState = "Terminating"
+	Terminating DialogState = "Terminating"
 	// Ended - это состояние когда вызов завершен
-	Ended SessionState = "Ended"
+	Ended DialogState = "Ended"
 )
 
-type Session struct {
+type Dialog struct {
 	fsm *fsm.FSM
-
-	Direction
 
 	callBacks CallBacksDialog
 	//Тип сессии: UAS или UAC
@@ -88,14 +86,14 @@ type Session struct {
 	firstTXIncoming *TX
 }
 
-func NewSession(profile *Profile) (*Session, error) {
+func NewDialog(profile *Profile) (*Dialog, error) {
 	if uu == nil {
 		return nil, fmt.Errorf("uac, uas is not initialized")
 	}
 	if profile == nil {
 		return nil, fmt.Errorf("profile  is nil")
 	}
-	session := &Session{}
+	session := &Dialog{}
 	session.localCSeq.Swap(uint32(rand.Int31()))
 	session.initFSM()
 
@@ -105,8 +103,8 @@ func NewSession(profile *Profile) (*Session, error) {
 	return session, nil
 }
 
-func newUAS(req *sip.Request, tx sip.ServerTransaction) *Session {
-	session := new(Session)
+func newUAS(req *sip.Request, tx sip.ServerTransaction) *Dialog {
+	session := new(Dialog)
 	session.uaType = UAS
 	session.callID = *req.CallID()
 
@@ -135,13 +133,10 @@ func newUAS(req *sip.Request, tx sip.ServerTransaction) *Session {
 	}
 	session.remoteContact = req.Contact()
 
-	//session.storeRouteSet(req, false)
-	//todo firstTXBranch save or not???
-
 	return session
 }
 
-func formEventName(src, dst SessionState) string {
+func formEventName(src, dst DialogState) string {
 	builder := strings.Builder{}
 	builder.WriteString(string(src))
 	builder.WriteString("_to_")
@@ -201,7 +196,7 @@ FSM (Конечный автомат) для session:
 [Ringing] → [Terminating] → [Ended]
 */
 
-func (s *Session) initFSM() {
+func (s *Dialog) initFSM() {
 	s.fsm = fsm.NewFSM(
 		string(IDLE),
 		fsm.Events{
@@ -221,11 +216,11 @@ func (s *Session) initFSM() {
 
 //callBacks for FSM
 
-func (s *Session) enterState(ctx context.Context, e *fsm.Event) {
+func (s *Dialog) enterState(ctx context.Context, e *fsm.Event) {
 
 }
 
-func (s *Session) enterRinging(ctx context.Context, e *fsm.Event) {
+func (s *Dialog) enterRinging(ctx context.Context, e *fsm.Event) {
 	// callback о новом звонке
 	if tx, ok := e.Args[0].(*TX); ok && len(e.Args) == 1 {
 		cb.OnIncomingCall(s, tx)
@@ -233,52 +228,52 @@ func (s *Session) enterRinging(ctx context.Context, e *fsm.Event) {
 
 }
 
-func (s *Session) enterCalling(ctx context.Context, e *fsm.Event) {
+func (s *Dialog) enterCalling(ctx context.Context, e *fsm.Event) {
 
 }
 
-func (s *Session) enterInCall(ctx context.Context, e *fsm.Event) {
+func (s *Dialog) enterInCall(ctx context.Context, e *fsm.Event) {
 
 }
 
 //callBacks
 
-func (s *Session) notify(state SessionState) {
+func (s *Dialog) notify(state DialogState) {
 	if s.callBacks != nil {
 		s.callBacks.OnChangeDialogState(state)
 	}
 }
 
-func (s *Session) OnIncomingCall(tx *TX) {}
+func (s *Dialog) OnIncomingCall(tx *TX) {}
 
-func (s *Session) setState(status SessionState, tx *TX) error {
+func (s *Dialog) setState(status DialogState, tx *TX) error {
 
-	return s.fsm.Event(context.TODO(), formEventName(SessionState(s.fsm.Current()), status), tx)
+	return s.fsm.Event(context.TODO(), formEventName(DialogState(s.fsm.Current()), status), tx)
 }
 
-func (s *Session) GetCurrentState() SessionState {
-	return SessionState(s.fsm.Current())
+func (s *Dialog) GetCurrentState() DialogState {
+	return DialogState(s.fsm.Current())
 }
 
-func (s *Session) SetCallBacks(cb CallBacksDialog) {
+func (s *Dialog) SetCallBacks(cb CallBacksDialog) {
 	s.callBacks = cb
 }
 
-func newUAC(profile *sip.Uri) *Session {
-	session := &Session{}
+func newUAC(profile *sip.Uri) *Dialog {
+	session := &Dialog{}
 
 	return session
 }
 
-func (s *Session) saveHeaders(req *sip.Request) {
+func (s *Dialog) saveHeaders(req *sip.Request) {
 
 }
 
-func (s *Session) setFirstIncomingTX(tx *TX) {
+func (s *Dialog) setFirstIncomingTX(tx *TX) {
 	s.firstTXIncoming = tx
 }
 
-func (s *Session) getFirstIncomingTX() *TX {
+func (s *Dialog) getFirstIncomingTX() *TX {
 	return s.firstTXIncoming
 }
 

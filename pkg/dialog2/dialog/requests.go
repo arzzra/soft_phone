@@ -13,11 +13,11 @@ import (
 
 type InviteOptions func()
 
-func (s *Session) makeReq() {
+func (s *Dialog) makeReq() {
 
 }
 
-func (s *Session) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
+func (s *Dialog) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
 	tx, err := uu.uac.TransactionRequest(ctx, req, sipgo.ClientRequestAddVia)
 	if err != nil {
 		err = errors.Wrapf(err, "failed to send request")
@@ -28,7 +28,7 @@ func (s *Session) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
 		slog.Debug("creating new TX", slog.String("request fromTag", GetFromTag(req)))
 	}
 
-	txD, err := newTX(ctx, s, Outgoing, tx, req)
+	txD, err := newTX(c)
 	if err != nil {
 		err = errors.Wrapf(err, "failed to create TX")
 		return nil, err
@@ -37,7 +37,7 @@ func (s *Session) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
 }
 
 // Invite отправляет INVITE запрос на вызов
-func (s *Session) Invite(ctx context.Context, target *sip.Uri, headers []sip.Header, body *Body) (ITx, error) {
+func (s *Dialog) Invite(ctx context.Context, target string, opts ...RequestOpt) (ITx, error) {
 	if target == nil {
 		return nil, fmt.Errorf("target is nill")
 	}
@@ -63,7 +63,7 @@ func (s *Session) Invite(ctx context.Context, target *sip.Uri, headers []sip.Hea
 	return s.sendReq(ctx, req)
 }
 
-func (s *Session) Bye(ctx context.Context) error {
+func (s *Dialog) Bye(ctx context.Context) error {
 	return nil
 
 }
@@ -115,14 +115,15 @@ func createReferToHeader(target sip.Uri, callID, toTag, fromTag string) sip.Head
 	return sip.NewHeader("Refer-To", builder.String())
 }
 
-func (s *Session) makeRequest(method sip.RequestMethod) *sip.Request {
+func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
 	trg := s.remoteTarget
 	trg.Port = 0
 	newRequest := sip.NewRequest(method, trg)
 
 	ip := net.ParseIP(uu.config.Hosts[0])
 
-	newRequest.Laddr = sip.Addr{IP: ip, Hostname: uu.config.Hosts[0], Port: int(uu.config.Port)}
+	//
+	newRequest.Laddr = sip.Addr{IP: ip, Hostname: uu.confi, Port: int(uu.config.Port)}
 
 	fmt.Println("new req", s.remoteTarget.String())
 
@@ -171,7 +172,7 @@ func makeReqWithOpts(name sip.RequestMethod, to sip.Uri, opts ...ReqBuilderOpt) 
 //////////////////////////////////////////////////////////
 
 // Refer возвращает REFER запрос для слепого перевода звонка.
-func (s *Session) Refer(target sip.Uri, headers []sip.Header) *sip.Request {
+func (s *Dialog) Refer(target sip.Uri, headers []sip.Header) *sip.Request {
 	req := s.makeRequest(sip.REFER)
 
 	referBy := createReferByHeader(s.localContact.Address)
@@ -187,7 +188,7 @@ func (s *Session) Refer(target sip.Uri, headers []sip.Header) *sip.Request {
 }
 
 // ReferWithReplace возвращает REFER запрос для перевода звонка с подменой.
-func (s *Session) ReferWithReplace(target sip.Uri, callID sip.CallIDHeader,
+func (s *Dialog) ReferWithReplace(target sip.Uri, callID sip.CallIDHeader,
 	toTag sip.ToHeader, fromTag sip.FromHeader, headers []sip.Header) (*sip.Request, error) {
 	req := s.makeRequest(sip.REFER)
 
@@ -215,7 +216,7 @@ func (s *Session) ReferWithReplace(target sip.Uri, callID sip.CallIDHeader,
 }
 
 // ReferWithReplace возвращает REFER запрос для перевода звонка с подменой.
-//func (s *Session) ReferWithReplace1(targetSess *Session, headers []sip.Header) (*sip.Request, error) {
+//func (s *Dialog) ReferWithReplace1(targetSess *Dialog, headers []sip.Header) (*sip.Request, error) {
 //	tagTo, ok := targetSess.to.Params.Get("tag") // todo s.To()
 //	if !ok {
 //		return nil, ErrTagToNotFount
@@ -242,7 +243,7 @@ func (s *Session) ReferWithReplace(target sip.Uri, callID sip.CallIDHeader,
 //}
 //
 //// Info возвращает INFO запрос.
-//func (s *Session) Info(content []byte, contentType string) *sip.Request {
+//func (s *Dialog) Info(content []byte, contentType string) *sip.Request {
 //	req := s.makeRequest(sip.INFO)
 //
 //	req.SetBody(content)
@@ -253,7 +254,7 @@ func (s *Session) ReferWithReplace(target sip.Uri, callID sip.CallIDHeader,
 //}
 //
 //// ReInvite возвращает INVITE запрос.
-//func (s *Session) ReInvite(body Body, headers []sip.Header) *sip.Request {
+//func (s *Dialog) ReInvite(body Body, headers []sip.Header) *sip.Request {
 //	req := s.makeRequest(sip.INVITE)
 //
 //	req.SetBody(body.Content())
@@ -268,7 +269,7 @@ func (s *Session) ReferWithReplace(target sip.Uri, callID sip.CallIDHeader,
 //}
 
 // Cancel возвращает CANCEL запрос.
-//func (s *Session) Cancel(tx *TX) *sip.Request {
+//func (s *Dialog) Cancel(tx *TX) *sip.Request {
 //	requestForCancel := tx.Request()
 //
 //	cancelReq := sip.NewRequest(
