@@ -5,7 +5,12 @@ import (
 	"github.com/emiago/sipgo/sip"
 )
 
-// Endpoint представляет удалённую точку подключения
+// Endpoint представляет удалённую SIP точку подключения.
+//
+// Endpoint используется для:
+//   - Определения адреса SIP сервера для исходящих вызовов
+//   - Настройки специфичного транспорта для каждого сервера
+//   - Поддержки failover через несколько endpoints
 type Endpoint struct {
 	Name      string          // Имя endpoint'а (например, "main", "backup1")
 	Host      string          // Хост (например, "192.168.1.100")
@@ -13,7 +18,12 @@ type Endpoint struct {
 	Transport TransportConfig // Конфигурация транспорта для этого endpoint'а
 }
 
-// BuildURI создаёт SIP URI из endpoint'а с указанным user
+// BuildURI создаёт SIP URI из endpoint с указанным user.
+//
+// Параметры:
+//   - user: имя пользователя для SIP URI
+//
+// Автоматически выбирает схему "sips" для защищённых транспортов.
 func (e *Endpoint) BuildURI(user string) sip.Uri {
 	scheme := "sip"
 	if e.Transport.Type == TransportTLS || e.Transport.Type == TransportWSS {
@@ -28,7 +38,13 @@ func (e *Endpoint) BuildURI(user string) sip.Uri {
 	}
 }
 
-// Validate проверяет корректность конфигурации endpoint'а
+// Validate проверяет корректность конфигурации endpoint.
+//
+// Проверяет:
+//   - Наличие и корректность имени
+//   - Наличие хоста
+//   - Корректность порта (1-65535)
+//   - Корректность конфигурации транспорта
 func (e *Endpoint) Validate() error {
 	if e.Name == "" {
 		return fmt.Errorf("имя endpoint'а не может быть пустым")
@@ -45,13 +61,36 @@ func (e *Endpoint) Validate() error {
 	return nil
 }
 
-// EndpointConfig содержит конфигурацию удалённых точек подключения
+// EndpointConfig содержит конфигурацию удалённых точек подключения.
+//
+// Поддерживает автоматический failover:
+//   - Primary - основной endpoint, используется по умолчанию
+//   - Fallbacks - резервные endpoints, используются при сбое primary
+//
+// Пример использования:
+//
+//	config := &EndpointConfig{
+//	    Primary: &Endpoint{
+//	        Name: "main",
+//	        Host: "sip.provider.com",
+//	        Port: 5060,
+//	        Transport: TransportConfig{Type: TransportUDP},
+//	    },
+//	    Fallbacks: []*Endpoint{
+//	        {Name: "backup1", Host: "sip-backup.provider.com", Port: 5060},
+//	    },
+//	}
 type EndpointConfig struct {
 	Primary   *Endpoint   // Основной endpoint
 	Fallbacks []*Endpoint // Резервные endpoints
 }
 
-// Validate проверяет корректность конфигурации endpoints
+// Validate проверяет корректность конфигурации endpoints.
+//
+// Проверяет:
+//   - Наличие хотя бы одного endpoint
+//   - Корректность каждого endpoint
+//   - Уникальность имён endpoints
 func (ec *EndpointConfig) Validate() error {
 	if ec.Primary == nil && len(ec.Fallbacks) == 0 {
 		return fmt.Errorf("должен быть указан хотя бы один endpoint")
@@ -83,7 +122,12 @@ func (ec *EndpointConfig) Validate() error {
 	return nil
 }
 
-// GetEndpointByName возвращает endpoint по имени
+// GetEndpointByName возвращает endpoint по имени.
+//
+// Параметры:
+//   - name: имя endpoint для поиска
+//
+// Возвращает nil, если endpoint с таким именем не найден.
 func (ec *EndpointConfig) GetEndpointByName(name string) *Endpoint {
 	if ec.Primary != nil && ec.Primary.Name == name {
 		return ec.Primary
@@ -98,7 +142,8 @@ func (ec *EndpointConfig) GetEndpointByName(name string) *Endpoint {
 	return nil
 }
 
-// GetTotalEndpoints возвращает общее количество endpoint'ов
+// GetTotalEndpoints возвращает общее количество endpoints.
+// Учитывает primary и все fallback endpoints.
 func (ec *EndpointConfig) GetTotalEndpoints() int {
 	count := len(ec.Fallbacks)
 	if ec.Primary != nil {

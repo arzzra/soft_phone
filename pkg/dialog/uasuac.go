@@ -573,6 +573,9 @@ func (u *UASUAC) GetTransport() TransportConfig {
 	return u.transport
 }
 
+// Close закрывает UASUAC и освобождает все ресурсы.
+// Закрывает все активные диалоги, клиент, сервер и User Agent.
+// После вызова Close использование UASUAC невозможно.
 func (u *UASUAC) Close() error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -699,7 +702,6 @@ func WithWebSocketSecure(path string) UASUACOption {
 	}
 }
 
-
 // callConfig конфигурация для исходящего вызова
 // Позволяет гибко настраивать различные параметры INVITE запроса
 type callConfig struct {
@@ -824,7 +826,6 @@ func WithSubject(subject string) CallOption {
 		c.subject = subject
 	}
 }
-
 
 // WithAssertedIdentity устанавливает P-Asserted-Identity заголовок с SIP URI
 // uri должен иметь схему sip или sips

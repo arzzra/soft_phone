@@ -17,7 +17,17 @@ type tagKey struct {
 	remoteTag string
 }
 
-// DialogManager управляет коллекцией диалогов
+// DialogManager управляет коллекцией SIP диалогов.
+//
+// Основные функции:
+//   - Создание и регистрация диалогов
+//   - Поиск диалогов по ID, Call-ID и тегам
+//   - Обновление ID диалога при получении remote tag
+//   - Удаление завершённых диалогов
+//   - Обеспечение безопасности через rate limiting
+//
+// DialogManager является потокобезопасным и использует оптимизированные
+// индексы для быстрого поиска диалогов.
 type DialogManager struct {
 	// Хранилище диалогов по ID
 	dialogs map[string]IDialog
@@ -42,7 +52,12 @@ type DialogManager struct {
 	mu sync.RWMutex
 }
 
-// NewDialogManager создает новый менеджер диалогов
+// NewDialogManager создаёт новый менеджер диалогов.
+//
+// Параметры:
+//   - logger: интерфейс для логирования (может быть nil)
+//
+// Создаёт менеджер с инициализированными индексами и валидатором безопасности.
 func NewDialogManager(logger Logger) *DialogManager {
 	if logger == nil {
 		logger = &NoOpLogger{}
@@ -63,8 +78,18 @@ func (dm *DialogManager) SetUASUAC(uasuac *UASUAC) {
 	dm.uasuac = uasuac
 }
 
-// CreateServerDialog создает новый серверный диалог (UAS)
-// Эта функция только создает новый диалог, не проверяя существование
+// CreateServerDialog создаёт новый серверный диалог (UAS) из входящего INVITE.
+//
+// Параметры:
+//   - req: входящий INVITE запрос
+//   - tx: серверная транзакция для ответа
+//
+// Функция выполняет:
+//   - Проверку rate limit для исходящего адреса
+//   - Валидацию INVITE запроса и Call-ID
+//   - Создание и регистрацию диалога
+//
+// Возвращает ошибку если диалог с таким Call-ID уже существует.
 func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTransaction) (IDialog, error) {
 	// Проверка rate limit до захвата мьютекса
 	remoteAddr := req.Source()
@@ -130,7 +155,13 @@ func (dm *DialogManager) CreateServerDialog(req *sip.Request, tx sip.ServerTrans
 	return dialog, nil
 }
 
-// CreateClientDialog создает новый клиентский диалог (UAC)
+// CreateClientDialog создаёт новый клиентский диалог (UAC) для исходящего INVITE.
+//
+// Параметры:
+//   - inviteReq: исходящий INVITE запрос
+//
+// Создаёт диалог с временным ID, который будет обновлён
+// после получения ответа с remote tag.
 func (dm *DialogManager) CreateClientDialog(inviteReq *sip.Request) (IDialog, error) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
@@ -317,8 +348,13 @@ func (dm *DialogManager) GetDialogByCallID(callID *sip.CallIDHeader) (IDialog, e
 	return dialog, nil
 }
 
-// GetDialogByRequest пытается найти диалог по запросу
-// Сначала пытается найти по тегам (быстрее), затем по Call-ID
+// GetDialogByRequest находит диалог по SIP запросу.
+//
+// Алгоритм поиска:
+//  1. Сначала пытается найти по тегам (O(1) операция)
+//  2. Если не найдено, ищет по Call-ID
+//
+// Это обеспечивает быстрый поиск для большинства запросов в рамках диалога.
 func (dm *DialogManager) GetDialogByRequest(req *sip.Request) (IDialog, error) {
 	// Извлекаем Call-ID
 	callID := req.CallID()
@@ -357,7 +393,15 @@ func (dm *DialogManager) GetDialogByRequest(req *sip.Request) (IDialog, error) {
 	return dm.GetDialogByCallID(callID)
 }
 
-// GetDialogByTags возвращает диалог по Call-ID и тегам с O(1) производительностью
+// GetDialogByTags возвращает диалог по Call-ID и тегам.
+//
+// Параметры:
+//   - callID: идентификатор вызова
+//   - localTag: локальный тег
+//   - remoteTag: удалённый тег
+//
+// Использует оптимизированный индекс для O(1) производительности.
+// Автоматически проверяет оба варианта порядка тегов (UAC/UAS).
 func (dm *DialogManager) GetDialogByTags(callID, localTag, remoteTag string) (IDialog, error) {
 	// Валидация входных параметров
 	if callID == "" {
@@ -490,7 +534,11 @@ func (dm *DialogManager) Close() {
 	dm.tagIndexMu.Unlock()
 }
 
-// CleanupTerminated удаляет завершенные диалоги
+// CleanupTerminated удаляет все завершённые диалоги из менеджера.
+//
+// Возвращает количество удалённых диалогов.
+//
+// Рекомендуется вызывать периодически для освобождения памяти.
 func (dm *DialogManager) CleanupTerminated() int {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()

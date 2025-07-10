@@ -5,7 +5,8 @@ import (
 	"strings"
 )
 
-// TransportType определяет тип транспортного протокола
+// TransportType определяет тип транспортного протокола для SIP сообщений.
+// Пакет поддерживает все основные транспорты согласно RFC 3261.
 type TransportType string
 
 const (
@@ -21,7 +22,19 @@ const (
 	TransportWSS TransportType = "WSS"
 )
 
-// TransportConfig содержит конфигурацию транспортного протокола
+// TransportConfig содержит конфигурацию транспортного протокола.
+//
+// Пример использования:
+//
+//	config := dialog.TransportConfig{
+//	    Type: dialog.TransportTLS,
+//	    KeepAlive: true,
+//	    KeepAlivePeriod: 30,
+//	}
+//
+//	ua, err := dialog.NewUASUAC(
+//	    dialog.WithTransport(config),
+//	)
 type TransportConfig struct {
 	// Type - тип транспорта
 	Type TransportType
@@ -43,7 +56,13 @@ type TransportConfig struct {
 	KeepAlivePeriod int
 }
 
-// DefaultTransportConfig возвращает конфигурацию транспорта по умолчанию (UDP)
+// DefaultTransportConfig возвращает конфигурацию транспорта по умолчанию.
+//
+// По умолчанию используется:
+//   - Транспорт: UDP
+//   - WebSocket путь: "/"
+//   - Keep-alive: включен
+//   - Период keep-alive: 30 секунд
 func DefaultTransportConfig() TransportConfig {
 	return TransportConfig{
 		Type:            TransportUDP,
@@ -53,7 +72,12 @@ func DefaultTransportConfig() TransportConfig {
 	}
 }
 
-// Validate проверяет корректность конфигурации транспорта
+// Validate проверяет корректность конфигурации транспорта.
+//
+// Проверяет:
+//   - Корректность типа транспорта
+//   - Наличие WSPath для WebSocket транспортов
+//   - Корректность KeepAlivePeriod
 func (tc TransportConfig) Validate() error {
 	switch tc.Type {
 	case TransportUDP, TransportTCP, TransportTLS, TransportWS, TransportWSS:
@@ -80,7 +104,11 @@ func (tc TransportConfig) Validate() error {
 	return nil
 }
 
-// GetScheme возвращает SIP схему для данного типа транспорта
+// GetScheme возвращает SIP схему для данного типа транспорта.
+//
+// Возвращает:
+//   - "sips" для защищённых транспортов (TLS, WSS)
+//   - "sip" для остальных транспортов
 func (tc TransportConfig) GetScheme() string {
 	switch tc.Type {
 	case TransportTLS:
@@ -94,7 +122,10 @@ func (tc TransportConfig) GetScheme() string {
 	}
 }
 
-// GetTransportParam возвращает параметр transport для Contact и Via заголовков
+// GetTransportParam возвращает параметр transport для Contact и Via заголовков.
+//
+// Используется для указания транспорта в SIP URI и заголовках.
+// Например: ";transport=tcp" для TCP транспорта.
 func (tc TransportConfig) GetTransportParam() string {
 	switch tc.Type {
 	case TransportUDP:
@@ -112,22 +143,29 @@ func (tc TransportConfig) GetTransportParam() string {
 	}
 }
 
-// RequiresConnection проверяет, требует ли транспорт установления соединения
+// RequiresConnection возвращает true, если транспорт требует установления соединения.
+// UDP является единственным транспортом без соединения.
 func (tc TransportConfig) RequiresConnection() bool {
 	return tc.Type != TransportUDP
 }
 
-// IsSecure проверяет, является ли транспорт защищенным
+// IsSecure возвращает true, если транспорт использует шифрование.
+// Защищёнными считаются TLS и WSS (WebSocket Secure).
 func (tc TransportConfig) IsSecure() bool {
 	return tc.Type == TransportTLS || tc.Type == TransportWSS
 }
 
-// IsWebSocket проверяет, является ли транспорт WebSocket-based
+// IsWebSocket возвращает true, если транспорт основан на WebSocket.
+// WebSocket транспорты включают WS и WSS.
 func (tc TransportConfig) IsWebSocket() bool {
 	return tc.Type == TransportWS || tc.Type == TransportWSS
 }
 
-// GetListenNetwork возвращает сетевой тип для net.Listen
+// GetListenNetwork возвращает сетевой тип для net.Listen.
+//
+// Возвращает:
+//   - "udp" для UDP транспорта
+//   - "tcp" для TCP, TLS, WebSocket транспортов
 func (tc TransportConfig) GetListenNetwork() string {
 	switch tc.Type {
 	case TransportUDP:

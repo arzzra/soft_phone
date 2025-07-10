@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// DialogState определяет возможные состояния диалога.
+// Диалог проходит через несколько состояний в течение
+// своего жизненного цикла, начиная с StateNone и заканчивая StateTerminated.
 type DialogState int
 
 // Состояния диалога
@@ -26,8 +29,14 @@ const (
 	StateTerminated
 )
 
-// IDialog represents a SIP dialog between two UA
-// Implementation must be thread-safe
+// IDialog представляет интерфейс SIP диалога между двумя User Agent.
+//
+// Диалог - это одноранговые SIP отношения между двумя UA,
+// которые сохраняются в течение некоторого времени. Диалог
+// создаётся методами типа INVITE и идентифицируется комбинацией
+// Call-ID, локального и удалённого тегов.
+//
+// Все реализации должны быть потокобезопасными.
 type IDialog interface {
 	// Core identification
 	ID() string
@@ -52,15 +61,23 @@ type IDialog interface {
 	IsServer() bool // UAS role
 	IsClient() bool // UAC role
 
-	// Core operations
-	// ответить на входящий вызов
+	// Core operations - Основные операции
+
+	// Answer отвечает на входящий вызов с кодом 200 OK
 	Answer(body Body, headers map[string]string) error
+
+	// Reject отклоняет входящий вызов с указанным кодом ошибки
 	Reject(statusCode int, reason string, body Body, headers map[string]string) error
-	// отправить bye
+
+	// Terminate завершает диалог, отправляя BYE запрос
 	Terminate() error
 
-	// Transfer operations
+	// Transfer operations - Операции переадресации
+
+	// Refer отправляет REFER запрос для переадресации вызова
 	Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (sip.ClientTransaction, error)
+
+	// ReferReplace отправляет REFER с заменой существующего диалога
 	ReferReplace(ctx context.Context, replaceDialog IDialog, opts *ReqOpts) (sip.ClientTransaction, error)
 
 	SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpts) (sip.ClientTransaction, error)
@@ -74,7 +91,7 @@ type IDialog interface {
 	// Close закрывает диалог и освобождает все ресурсы
 	Close() error
 
-	// Когда приходит новый запрос в рамках диалога
+	// OnRequest обрабатывает входящий запрос в рамках диалога
 	OnRequest(ctx context.Context, req *sip.Request, tx sip.ServerTransaction) error
 
 	// Event handling
@@ -84,21 +101,38 @@ type IDialog interface {
 	OnRefer(handler ReferHandler)
 }
 
-// ICallBacksUA вызывает когда приходит новый вызов и тп
+// OnIncomingCall - тип функции обратного вызова для обработки входящих вызовов.
+// Вызывается когда приходит новый INVITE запрос.
+//
+// Параметры:
+//   - dialog: созданный диалог для входящего вызова
+//   - transaction: серверная транзакция для ответа
 type OnIncomingCall func(dialog IDialog, transaction sip.ServerTransaction)
 
+// ReqOpts - тип функции для модификации исходящих запросов.
+// Позволяет добавлять дополнительные заголовки или изменять
+// существующие перед отправкой.
 type ReqOpts func(req *sip.Request) error
 
-// Event handlers
+// StateChangeHandler - обработчик изменения состояния диалога.
+// Вызывается при переходе диалога между состояниями.
 type StateChangeHandler func(oldState, newState DialogState)
+
+// OnBodyHandler - обработчик получения тела сообщения.
+// Вызывается при получении SIP сообщения с телом.
 type OnBodyHandler func(body Body)
 
-// ReferHandler тип, который импортируется из refer.go
-// Объявляем здесь для избежания циклических зависимостей
+// ReferHandler - обработчик REFER запросов.
+// Вызывается при получении REFER запроса в рамках диалога.
+// ReferEvent содержит информацию о переадресации.
 type ReferHandler func(event *ReferEvent) error
 
-// Body represents message body content
+// Body представляет тело SIP сообщения.
+// Обычно содержит SDP (Session Description Protocol) для медиа-сессий,
+// но может содержать любой тип данных в зависимости от ContentType.
 type Body struct {
-	Content     []byte
+	// Content - содержимое тела сообщения
+	Content []byte
+	// ContentType - MIME тип содержимого (например, "application/sdp")
 	ContentType string
 }
