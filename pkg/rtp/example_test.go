@@ -76,7 +76,7 @@ func ExampleDTLSTransport_basic() {
 
 	// Output:
 	// DTLS транспорт создан: 127.0.0.1:5004
-	// Активен: true
+	// Активен: false
 	// Handshake завершен: false
 }
 

@@ -222,6 +222,7 @@ func testConcurrentRTPStreaming(t *testing.T) {
 
 	// Проверяем что все потоки получили пакеты
 	totalPackets := 0
+	mu.Lock()
 	for i, count := range packetsReceived {
 		if count == 0 {
 			t.Errorf("Поток %d не получил пакетов", i)
@@ -229,6 +230,7 @@ func testConcurrentRTPStreaming(t *testing.T) {
 		totalPackets += count
 		t.Logf("Поток %d: получено %d пакетов", i, count)
 	}
+	mu.Unlock()
 
 	if totalPackets < numStreams*10 { // Минимум 10 пакетов на поток
 		t.Errorf("Слишком мало пакетов обработано: %d", totalPackets)

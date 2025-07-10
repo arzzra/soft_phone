@@ -910,8 +910,6 @@ func (ms *MediaSession) SetPtime(ptime time.Duration) error {
 	}
 
 	ms.bufferMutex.Lock()
-	defer ms.bufferMutex.Unlock()
-
 	ms.ptime = ptime
 	ms.packetDuration = ptime
 
@@ -921,17 +919,20 @@ func (ms *MediaSession) SetPtime(ptime time.Duration) error {
 
 	// Очищаем буфер при изменении ptime
 	ms.audioBuffer = ms.audioBuffer[:0]
+	ms.bufferMutex.Unlock()
 
 	// Обновляем аудио процессор
 	if ms.audioProcessor != nil {
 		ms.audioProcessor.SetPtime(ptime)
 	}
 
-	// Перезапускаем тикер с новым интервалом
+	// Перезапускаем тикер с новым интервалом под защитой stateMutex
+	ms.stateMutex.Lock()
 	if ms.sendTicker != nil && ms.state == MediaStateActive {
 		ms.sendTicker.Stop()
 		ms.sendTicker = time.NewTicker(ptime)
 	}
+	ms.stateMutex.Unlock()
 
 	return nil
 }
@@ -955,6 +956,9 @@ func (ms *MediaSession) SetPtime(ptime time.Duration) error {
 //	    log.Printf("Ошибка включения jitter buffer: %v", err)
 //	}
 func (ms *MediaSession) EnableJitterBuffer(enabled bool) error {
+	ms.stateMutex.Lock()
+	defer ms.stateMutex.Unlock()
+	
 	ms.jitterEnabled = enabled
 
 	if enabled && ms.jitterBuffer == nil {
@@ -1169,8 +1173,11 @@ func (ms *MediaSession) addToAudioBuffer(audioData []byte) error {
 func (ms *MediaSession) audioSendLoop() {
 	defer ms.wg.Done()
 
-	// Сохраняем локальную копию ticker'а чтобы избежать race condition
+	// Получаем ticker под защитой мьютекса
+	ms.stateMutex.RLock()
 	ticker := ms.sendTicker
+	ms.stateMutex.RUnlock()
+	
 	if ticker == nil {
 		return
 	}

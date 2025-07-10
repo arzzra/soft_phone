@@ -512,31 +512,31 @@ func TestPayloadTypes(t *testing.T) {
 	}{
 		{
 			payloadType: PayloadTypePCMU,
-			name:        "PCMU",
+			name:        "G.711 μ-law (PCMU)",
 			sampleRate:  8000,
 			description: "G.711 μ-law - стандартный кодек для телефонии",
 		},
 		{
 			payloadType: PayloadTypePCMA,
-			name:        "PCMA",
+			name:        "G.711 A-law (PCMA)",
 			sampleRate:  8000,
 			description: "G.711 A-law - европейский стандарт телефонии",
 		},
 		{
 			payloadType: PayloadTypeG722,
-			name:        "G722",
+			name:        "G.722",
 			sampleRate:  16000,
 			description: "G.722 - широкополосный кодек высокого качества",
 		},
 		{
 			payloadType: PayloadTypeGSM,
-			name:        "GSM",
+			name:        "GSM 06.10",
 			sampleRate:  8000,
 			description: "GSM 06.10 - кодек сотовой связи",
 		},
 		{
 			payloadType: PayloadTypeG729,
-			name:        "G729",
+			name:        "G.729",
 			sampleRate:  8000,
 			description: "G.729 - низкобитовый кодек для экономии полосы",
 		},
