@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,11 @@ type UASUAC struct {
 	// Логгер
 	logger Logger
 	
+	// Конфигурация endpoints
+	endpoints *EndpointConfig
+	
+	// Индекс текущего endpoint для failover
+	currentEndpointIdx int
 
 	// Мьютекс для синхронизации
 	mu sync.RWMutex
@@ -185,7 +191,10 @@ func (u *UASUAC) Listen(ctx context.Context) error {
 }
 
 // CreateDialog создает новый исходящий диалог (UAC)
-func (u *UASUAC) CreateDialog(ctx context.Context, remoteURI sip.Uri, opts ...CallOption) (IDialog, error) {
+// target может быть:
+//   - полным SIP URI: "sip:alice@example.com:5060"
+//   - именем пользователя: "alice" (будет использован endpoint из конфигурации)
+func (u *UASUAC) CreateDialog(ctx context.Context, target string, opts ...CallOption) (IDialog, error) {
 	u.mu.RLock()
 	if u.closed {
 		u.mu.RUnlock()
@@ -193,9 +202,21 @@ func (u *UASUAC) CreateDialog(ctx context.Context, remoteURI sip.Uri, opts ...Ca
 	}
 	u.mu.RUnlock()
 	
+	// Применяем опции для получения конфигурации
+	cfg := &callConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	
+	// Определяем URI на основе target и опций
+	remoteURI, err := u.resolveTargetURI(target, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка определения URI: %w", err)
+	}
+	
 	// Валидируем URI
 	if err := validateSIPURI(&remoteURI); err != nil {
-		return nil, fmt.Errorf("некорректный remote URI: %w", err)
+		return nil, fmt.Errorf("некорректный URI: %w", err)
 	}
 	
 	// Проверяем лимиты
@@ -228,6 +249,102 @@ func (u *UASUAC) CreateDialog(ctx context.Context, remoteURI sip.Uri, opts ...Ca
 	})
 
 	return dialog, nil
+}
+
+// resolveTargetURI определяет итоговый URI на основе target и конфигурации
+func (u *UASUAC) resolveTargetURI(target string, cfg *callConfig) (sip.Uri, error) {
+	// Если указан полный URI через опцию
+	if cfg.remoteURI != nil {
+		return *cfg.remoteURI, nil
+	}
+	
+	// Проверяем, является ли target полным URI
+	if strings.Contains(target, "@") || strings.HasPrefix(target, "sip:") || strings.HasPrefix(target, "sips:") {
+		var uri sip.Uri
+		err := sip.ParseUri(target, &uri)
+		if err != nil {
+			return sip.Uri{}, fmt.Errorf("некорректный SIP URI: %w", err)
+		}
+		return uri, nil
+	}
+	
+	// Target - это просто user, нужно использовать endpoint
+	endpoint, err := u.selectEndpoint(cfg.endpointName)
+	if err != nil {
+		return sip.Uri{}, err
+	}
+	
+	return endpoint.BuildURI(target), nil
+}
+
+// selectEndpoint выбирает endpoint для использования
+func (u *UASUAC) selectEndpoint(name string) (*Endpoint, error) {
+	if u.endpoints == nil {
+		return nil, fmt.Errorf("endpoints не настроены")
+	}
+	
+	// Если указано имя - ищем конкретный endpoint
+	if name != "" {
+		endpoint := u.endpoints.GetEndpointByName(name)
+		if endpoint == nil {
+			return nil, fmt.Errorf("endpoint '%s' не найден", name)
+		}
+		return endpoint, nil
+	}
+	
+	// Используем текущий endpoint с учётом failover
+	endpoint := u.getNextEndpoint()
+	if endpoint == nil {
+		return nil, fmt.Errorf("нет доступных endpoints")
+	}
+	
+	return endpoint, nil
+}
+
+// getNextEndpoint возвращает следующий доступный endpoint
+func (u *UASUAC) getNextEndpoint() *Endpoint {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	
+	if u.endpoints == nil || (u.endpoints.Primary == nil && len(u.endpoints.Fallbacks) == 0) {
+		return nil
+	}
+	
+	totalEndpoints := u.endpoints.GetTotalEndpoints()
+	if totalEndpoints == 0 {
+		return nil
+	}
+	
+	// Определяем какой endpoint использовать на основе индекса
+	currentIdx := u.currentEndpointIdx % totalEndpoints
+	
+	// Инкрементируем для следующего вызова
+	u.currentEndpointIdx = (u.currentEndpointIdx + 1) % totalEndpoints
+	
+	// Если есть primary и индекс указывает на него
+	if u.endpoints.Primary != nil && currentIdx == 0 {
+		return u.endpoints.Primary
+	}
+	
+	// Иначе выбираем из fallbacks
+	fallbackIdx := currentIdx
+	if u.endpoints.Primary != nil {
+		fallbackIdx = currentIdx - 1
+	}
+	
+	if fallbackIdx < len(u.endpoints.Fallbacks) {
+		return u.endpoints.Fallbacks[fallbackIdx]
+	}
+	
+	// Не должны сюда попасть, но на всякий случай
+	return u.endpoints.Primary
+}
+
+// ResetEndpointFailover сбрасывает счётчик failover на начало
+func (u *UASUAC) ResetEndpointFailover() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.currentEndpointIdx = 0
 }
 
 // buildInviteRequest создает INVITE запрос
@@ -319,6 +436,36 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 		req.SetBody(cfg.body.Content)
 		req.AppendHeader(sip.NewHeader("Content-Type", cfg.body.ContentType))
 		req.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(cfg.body.Content))))
+	}
+
+	// Добавляем P-Asserted-Identity заголовок если настроен
+	if cfg.useFromAsAsserted && fromURI != nil {
+		// Используем From URI как P-Asserted-Identity
+		paiValue := fromURI.String()
+		if cfg.assertedDisplay != "" {
+			paiValue = fmt.Sprintf("\"%s\" <%s>", cfg.assertedDisplay, fromURI.String())
+		} else if cfg.fromDisplay != "" {
+			paiValue = fmt.Sprintf("\"%s\" <%s>", cfg.fromDisplay, fromURI.String())
+		}
+		req.AppendHeader(sip.NewHeader("P-Asserted-Identity", paiValue))
+	} else {
+		// Добавляем SIP URI если указан
+		if cfg.assertedIdentity != nil {
+			paiValue := cfg.assertedIdentity.String()
+			if cfg.assertedDisplay != "" {
+				paiValue = fmt.Sprintf("\"%s\" <%s>", cfg.assertedDisplay, cfg.assertedIdentity.String())
+			}
+			req.AppendHeader(sip.NewHeader("P-Asserted-Identity", paiValue))
+		}
+		
+		// Добавляем TEL URI если указан (может быть несколько значений)
+		if cfg.assertedIdentityTel != "" {
+			telValue := fmt.Sprintf("tel:%s", cfg.assertedIdentityTel)
+			if cfg.assertedDisplay != "" {
+				telValue = fmt.Sprintf("\"%s\" <%s>", cfg.assertedDisplay, telValue)
+			}
+			req.AppendHeader(sip.NewHeader("P-Asserted-Identity", telValue))
+		}
 	}
 
 	// Добавляем дополнительные заголовки
@@ -555,6 +702,20 @@ func WithWebSocketSecure(path string) UASUACOption {
 	}
 }
 
+// WithEndpoints устанавливает конфигурацию endpoints для UASUAC
+func WithEndpoints(config *EndpointConfig) UASUACOption {
+	return func(u *UASUAC) error {
+		if config == nil {
+			return fmt.Errorf("конфигурация endpoints не может быть nil")
+		}
+		if err := config.Validate(); err != nil {
+			return fmt.Errorf("некорректная конфигурация endpoints: %w", err)
+		}
+		u.endpoints = config
+		return nil
+	}
+}
+
 // callConfig конфигурация для исходящего вызова
 // Позволяет гибко настраивать различные параметры INVITE запроса
 type callConfig struct {
@@ -572,6 +733,12 @@ type callConfig struct {
 	toDisplay    string    // Display name для To
 	toParams     map[string]string // Параметры To заголовка
 	
+	// P-Asserted-Identity заголовок
+	assertedIdentity     *sip.Uri  // SIP URI для P-Asserted-Identity
+	assertedIdentityTel  string    // TEL URI для P-Asserted-Identity (например: +1234567890)
+	assertedDisplay      string    // Display name для P-Asserted-Identity
+	useFromAsAsserted    bool      // Использовать From URI как P-Asserted-Identity
+	
 	// Тело и дополнительные заголовки
 	body        *Body
 	headers     map[string]string
@@ -581,6 +748,10 @@ type callConfig struct {
 	
 	// Subject
 	subject     string
+	
+	// Endpoint configuration
+	endpointName string    // Имя конкретного endpoint
+	remoteURI    *sip.Uri  // Полный URI (переопределяет target)
 }
 
 // CallOption опция для исходящего вызова
@@ -667,6 +838,83 @@ func WithUserAgent(userAgent string) CallOption {
 func WithSubject(subject string) CallOption {
 	return func(c *callConfig) {
 		c.subject = subject
+	}
+}
+
+// WithEndpoint выбирает конкретный endpoint по имени
+func WithEndpoint(name string) CallOption {
+	return func(c *callConfig) {
+		c.endpointName = name
+	}
+}
+
+// WithRemoteURI устанавливает полный remote URI (игнорирует target)
+func WithRemoteURI(uri sip.Uri) CallOption {
+	return func(c *callConfig) {
+		c.remoteURI = &uri
+	}
+}
+
+// WithAssertedIdentity устанавливает P-Asserted-Identity заголовок с SIP URI
+// uri должен иметь схему sip или sips
+func WithAssertedIdentity(uri *sip.Uri) CallOption {
+	return func(c *callConfig) {
+		if uri != nil && (uri.Scheme == "sip" || uri.Scheme == "sips") {
+			c.assertedIdentity = uri
+		}
+	}
+}
+
+// WithAssertedIdentityFromString парсит строку и устанавливает P-Asserted-Identity
+// Поддерживает форматы:
+//   - sip:user@domain
+//   - sips:user@domain:port
+//   - <sip:user@domain>
+func WithAssertedIdentityFromString(identity string) CallOption {
+	return func(c *callConfig) {
+		// Убираем угловые скобки если есть
+		identity = strings.TrimSpace(identity)
+		if strings.HasPrefix(identity, "<") && strings.HasSuffix(identity, ">") {
+			identity = identity[1 : len(identity)-1]
+		}
+		
+		var uri sip.Uri
+		if err := sip.ParseUri(identity, &uri); err == nil {
+			if uri.Scheme == "sip" || uri.Scheme == "sips" {
+				c.assertedIdentity = &uri
+			}
+		}
+	}
+}
+
+// WithAssertedIdentityTel устанавливает P-Asserted-Identity с TEL URI
+// Формат номера: +1234567890 (E.164)
+func WithAssertedIdentityTel(telNumber string) CallOption {
+	return func(c *callConfig) {
+		// Проверяем базовый формат E.164
+		telNumber = strings.TrimSpace(telNumber)
+		if telNumber != "" && (strings.HasPrefix(telNumber, "+") || strings.HasPrefix(telNumber, "tel:")) {
+			// Убираем префикс tel: если есть
+			if strings.HasPrefix(telNumber, "tel:") {
+				telNumber = strings.TrimPrefix(telNumber, "tel:")
+			}
+			c.assertedIdentityTel = telNumber
+		}
+	}
+}
+
+// WithAssertedDisplay устанавливает display name для P-Asserted-Identity
+func WithAssertedDisplay(display string) CallOption {
+	return func(c *callConfig) {
+		c.assertedDisplay = display
+	}
+}
+
+// WithFromAsAssertedIdentity использует From URI как P-Asserted-Identity
+// Удобно когда идентичность совпадает с From
+func WithFromAsAssertedIdentity() CallOption {
+	return func(c *callConfig) {
+		c.useFromAsAsserted = true
 	}
 }
 
