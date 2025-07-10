@@ -2,6 +2,8 @@ package dialog
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strconv"
@@ -213,29 +215,78 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 	// Создаем базовый запрос
 	req := sip.NewRequest(sip.INVITE, remoteURI)
 
-	// Добавляем заголовки
-	fromURI := u.contactURI.Clone()
-	if cfg.fromUser != "" {
-		fromURI.User = cfg.fromUser
+	// Настраиваем From заголовок
+	var fromURI *sip.Uri
+	if cfg.fromURI != nil {
+		// Используем полностью переопределенный URI
+		fromURI = cfg.fromURI
+	} else {
+		// Используем базовый URI с возможной модификацией user части
+		fromURI = u.contactURI.Clone()
+		if cfg.fromUser != "" {
+			fromURI.User = cfg.fromUser
+		}
 	}
 
 	fromHeader := &sip.FromHeader{
 		Address: *fromURI,
 		Params:  sip.NewParams(),
 	}
+	
+	// Добавляем display name для From если указан
+	if cfg.fromDisplay != "" {
+		fromHeader.DisplayName = cfg.fromDisplay
+	}
+	
+	// Добавляем параметры From
+	for key, value := range cfg.fromParams {
+		fromHeader.Params = fromHeader.Params.Add(key, value)
+	}
+	
 	req.AppendHeader(fromHeader)
 	
+	// Настраиваем To заголовок
 	toHeader := &sip.ToHeader{
 		Address: remoteURI,
 		Params:  sip.NewParams(),
 	}
+	
+	// Добавляем display name для To если указан
+	if cfg.toDisplay != "" {
+		toHeader.DisplayName = cfg.toDisplay
+	}
+	
+	// Добавляем параметры To
+	for key, value := range cfg.toParams {
+		toHeader.Params = toHeader.Params.Add(key, value)
+	}
+	
 	req.AppendHeader(toHeader)
 	
+	// Настраиваем Contact заголовок
+	var contactURI sip.Uri
+	if cfg.contactURI != nil {
+		contactURI = *cfg.contactURI
+	} else {
+		contactURI = u.contactURI
+	}
+	
 	contactHeader := &sip.ContactHeader{
-		Address: u.contactURI,
+		Address: contactURI,
 		Params:  sip.NewParams(),
 	}
+	
+	// Добавляем параметры Contact
+	for key, value := range cfg.contactParams {
+		contactHeader.Params = contactHeader.Params.Add(key, value)
+	}
+	
 	req.AppendHeader(contactHeader)
+
+	// Добавляем Subject если указан
+	if cfg.subject != "" {
+		req.AppendHeader(sip.NewHeader("Subject", cfg.subject))
+	}
 
 	// Добавляем тело, если есть
 	if cfg.body != nil {
@@ -249,10 +300,47 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 		req.AppendHeader(sip.NewHeader(name, value))
 	}
 
+	// Добавляем обязательные заголовки перед валидацией
+	// Call-ID
+	if req.CallID() == nil {
+		callID := sip.CallIDHeader(generateCallID())
+		req.AppendHeader(&callID)
+	}
+	
+	// CSeq
+	if req.GetHeader("CSeq") == nil {
+		req.AppendHeader(sip.NewHeader("CSeq", "1 INVITE"))
+	}
+	
+	// Max-Forwards
+	if req.GetHeader("Max-Forwards") == nil {
+		req.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
+	}
+	
+	// Via - добавляем минимальный для тестов
+	if req.GetHeader("Via") == nil {
+		via := &sip.ViaHeader{
+			ProtocolName:    "SIP",
+			ProtocolVersion: "2.0",
+			Transport:       "UDP",
+			Host:            u.contactURI.Host,
+			Port:            u.contactURI.Port,
+			Params:          sip.NewParams().Add("branch", "z9hG4bK"+generateBranch()),
+		}
+		req.AppendHeader(via)
+	}
+	
 	// Используем HeaderProcessor для добавления стандартных заголовков
 	hp := NewHeaderProcessor()
 	hp.AddSupportedHeader(req)
-	hp.AddUserAgent(req, "SoftPhone/1.0")
+	
+	// Используем кастомный User-Agent если указан
+	if cfg.userAgent != "" {
+		hp.AddUserAgent(req, cfg.userAgent)
+	} else {
+		hp.AddUserAgent(req, "SoftPhone/1.0")
+	}
+	
 	hp.AddTimestamp(req)
 	
 	// Валидируем запрос
@@ -392,10 +480,31 @@ func WithRetryConfig(config RetryConfig) UASUACOption {
 }
 
 // callConfig конфигурация для исходящего вызова
+// Позволяет гибко настраивать различные параметры INVITE запроса
 type callConfig struct {
-	fromUser string
-	body     *Body
-	headers  map[string]string
+	// From заголовок
+	fromUser     string    // Только часть user в From URI
+	fromURI      *sip.Uri  // Полный From URI (если нужно переопределить весь URI)
+	fromDisplay  string    // Display name для From
+	fromParams   map[string]string // Параметры From заголовка
+	
+	// Contact заголовок
+	contactURI   *sip.Uri  // Переопределить Contact URI
+	contactParams map[string]string // Параметры Contact заголовка
+	
+	// To заголовок
+	toDisplay    string    // Display name для To
+	toParams     map[string]string // Параметры To заголовка
+	
+	// Тело и дополнительные заголовки
+	body        *Body
+	headers     map[string]string
+	
+	// User-Agent
+	userAgent   string
+	
+	// Subject
+	subject     string
 }
 
 // CallOption опция для исходящего вызова
@@ -420,4 +529,99 @@ func WithHeaders(headers map[string]string) CallOption {
 	return func(c *callConfig) {
 		c.headers = headers
 	}
+}
+
+// WithFromURI устанавливает полный From URI
+func WithFromURI(uri *sip.Uri) CallOption {
+	return func(c *callConfig) {
+		c.fromURI = uri
+	}
+}
+
+// WithFromDisplay устанавливает display name для From
+func WithFromDisplay(display string) CallOption {
+	return func(c *callConfig) {
+		c.fromDisplay = display
+	}
+}
+
+// WithFromParams устанавливает параметры From заголовка
+func WithFromParams(params map[string]string) CallOption {
+	return func(c *callConfig) {
+		c.fromParams = params
+	}
+}
+
+// WithContactURI устанавливает Contact URI
+func WithContactURI(uri *sip.Uri) CallOption {
+	return func(c *callConfig) {
+		c.contactURI = uri
+	}
+}
+
+// WithContactParams устанавливает параметры Contact заголовка
+func WithContactParams(params map[string]string) CallOption {
+	return func(c *callConfig) {
+		c.contactParams = params
+	}
+}
+
+// WithToDisplay устанавливает display name для To
+func WithToDisplay(display string) CallOption {
+	return func(c *callConfig) {
+		c.toDisplay = display
+	}
+}
+
+// WithToParams устанавливает параметры To заголовка
+func WithToParams(params map[string]string) CallOption {
+	return func(c *callConfig) {
+		c.toParams = params
+	}
+}
+
+// WithUserAgent устанавливает User-Agent
+func WithUserAgent(userAgent string) CallOption {
+	return func(c *callConfig) {
+		c.userAgent = userAgent
+	}
+}
+
+// WithSubject устанавливает Subject заголовок
+func WithSubject(subject string) CallOption {
+	return func(c *callConfig) {
+		c.subject = subject
+	}
+}
+
+// generateCallID генерирует уникальный Call-ID
+func generateCallID() string {
+	// Генерируем 16 байт случайных данных
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		// В случае ошибки используем timestamp
+		return fmt.Sprintf("%d@localhost", time.Now().UnixNano())
+	}
+	
+	// Формат: случайный_hex@hostname
+	hostname := "localhost"
+	if h, err := net.LookupAddr("127.0.0.1"); err == nil && len(h) > 0 {
+		hostname = h[0]
+	}
+	
+	return fmt.Sprintf("%s@%s", hex.EncodeToString(b), hostname)
+}
+
+// generateBranch генерирует уникальный branch параметр для Via
+func generateBranch() string {
+	// Генерируем 8 байт случайных данных
+	b := make([]byte, 8)
+	_, err := rand.Read(b)
+	if err != nil {
+		// В случае ошибки используем timestamp
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	
+	return hex.EncodeToString(b)
 }
