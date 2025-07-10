@@ -77,8 +77,8 @@ func ExampleWithTransport() {
 	// Requires connection: true
 }
 
-// ExampleListen демонстрирует запуск сервера с различными транспортами
-func ExampleListen() {
+// Example_listen демонстрирует запуск сервера с различными транспортами
+func Example_listen() {
 	ctx := context.Background()
 
 	// UDP сервер

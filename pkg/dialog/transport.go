@@ -25,16 +25,20 @@ const (
 type TransportConfig struct {
 	// Type - тип транспорта
 	Type TransportType
-	
+
+	Host string
+
+	Port int
+
 	// TLSConfig - конфигурация TLS (для TLS и WSS)
 	// TLSConfig *tls.Config // Будет добавлено при необходимости
-	
+
 	// WSPath - путь для WebSocket соединения (по умолчанию "/")
 	WSPath string
-	
+
 	// KeepAlive - включить keep-alive для TCP-based транспортов
 	KeepAlive bool
-	
+
 	// KeepAlivePeriod - период keep-alive (по умолчанию 30 секунд)
 	KeepAlivePeriod int
 }
@@ -57,7 +61,7 @@ func (tc TransportConfig) Validate() error {
 	default:
 		return fmt.Errorf("неизвестный тип транспорта: %s", tc.Type)
 	}
-	
+
 	// Проверяем WSPath для WebSocket транспортов
 	if tc.Type == TransportWS || tc.Type == TransportWSS {
 		if tc.WSPath == "" {
@@ -67,12 +71,12 @@ func (tc TransportConfig) Validate() error {
 			return fmt.Errorf("WSPath должен начинаться с /")
 		}
 	}
-	
+
 	// Проверяем KeepAlivePeriod
 	if tc.KeepAlive && tc.KeepAlivePeriod <= 0 {
 		return fmt.Errorf("KeepAlivePeriod должен быть больше 0 при включенном KeepAlive")
 	}
-	
+
 	return nil
 }
 

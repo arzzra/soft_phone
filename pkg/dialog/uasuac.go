@@ -32,16 +32,16 @@ type UASUAC struct {
 
 	// Менеджер диалогов
 	dialogManager *DialogManager
-	
+
 	// Ограничитель частоты
 	rateLimiter RateLimiter
-	
+
 	// Логгер
 	logger Logger
-	
+
 	// Конфигурация endpoints
 	endpoints *EndpointConfig
-	
+
 	// Индекс текущего endpoint для failover
 	currentEndpointIdx int
 
@@ -56,10 +56,10 @@ type UASUAC struct {
 func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 	// Создаем базовую конфигурацию
 	uasuac := &UASUAC{
-		hostname:    "localhost",
-		listenAddr:  "127.0.0.1:5060",
-		logger:      &NoOpLogger{}, // Будет заменен через опцию
-		transport:   DefaultTransportConfig(), // Транспорт по умолчанию - UDP
+		hostname:   "localhost",
+		listenAddr: "127.0.0.1:5060",
+		logger:     &NoOpLogger{},            // Будет заменен через опцию
+		transport:  DefaultTransportConfig(), // Транспорт по умолчанию - UDP
 	}
 
 	// Применяем опции
@@ -117,7 +117,7 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 		Host:   host,
 		Port:   portInt,
 	}
-	
+
 	// Добавляем transport параметр если не UDP
 	if uasuac.transport.Type != TransportUDP {
 		if uasuac.contactURI.Headers == nil {
@@ -129,7 +129,7 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 	// Создаем менеджер диалогов
 	uasuac.dialogManager = NewDialogManager(uasuac.logger)
 	uasuac.dialogManager.SetUASUAC(uasuac)
-	
+
 	// Создаем ограничитель частоты
 	uasuac.rateLimiter = NewSimpleRateLimiter()
 	// Запускаем периодический сброс счетчиков каждую минуту
@@ -177,10 +177,10 @@ func (u *UASUAC) Listen(ctx context.Context) error {
 
 	// Определяем сетевой тип и адрес для прослушивания
 	network := u.transport.GetListenNetwork()
-	
+
 	// Для WebSocket транспортов может потребоваться дополнительная настройка
 	// В текущей реализации sipgo WebSocket обрабатывается через HTTP сервер
-	
+
 	u.logger.Info("Запуск SIP сервера",
 		F("transport", u.transport.Type),
 		F("network", network),
@@ -201,24 +201,24 @@ func (u *UASUAC) CreateDialog(ctx context.Context, target string, opts ...CallOp
 		return nil, fmt.Errorf("UASUAC закрыт")
 	}
 	u.mu.RUnlock()
-	
+
 	// Применяем опции для получения конфигурации
 	cfg := &callConfig{}
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	
+
 	// Определяем URI на основе target и опций
 	remoteURI, err := u.resolveTargetURI(target, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка определения URI: %w", err)
 	}
-	
+
 	// Валидируем URI
 	if err := validateSIPURI(&remoteURI); err != nil {
 		return nil, fmt.Errorf("некорректный URI: %w", err)
 	}
-	
+
 	// Проверяем лимиты
 	if u.rateLimiter != nil && !u.rateLimiter.Allow("dialog_create") {
 		return nil, fmt.Errorf("превышен лимит создания диалогов")
@@ -257,7 +257,7 @@ func (u *UASUAC) resolveTargetURI(target string, cfg *callConfig) (sip.Uri, erro
 	if cfg.remoteURI != nil {
 		return *cfg.remoteURI, nil
 	}
-	
+
 	// Проверяем, является ли target полным URI
 	if strings.Contains(target, "@") || strings.HasPrefix(target, "sip:") || strings.HasPrefix(target, "sips:") {
 		var uri sip.Uri
@@ -267,13 +267,13 @@ func (u *UASUAC) resolveTargetURI(target string, cfg *callConfig) (sip.Uri, erro
 		}
 		return uri, nil
 	}
-	
+
 	// Target - это просто user, нужно использовать endpoint
 	endpoint, err := u.selectEndpoint(cfg.endpointName)
 	if err != nil {
 		return sip.Uri{}, err
 	}
-	
+
 	return endpoint.BuildURI(target), nil
 }
 
@@ -282,7 +282,7 @@ func (u *UASUAC) selectEndpoint(name string) (*Endpoint, error) {
 	if u.endpoints == nil {
 		return nil, fmt.Errorf("endpoints не настроены")
 	}
-	
+
 	// Если указано имя - ищем конкретный endpoint
 	if name != "" {
 		endpoint := u.endpoints.GetEndpointByName(name)
@@ -291,13 +291,13 @@ func (u *UASUAC) selectEndpoint(name string) (*Endpoint, error) {
 		}
 		return endpoint, nil
 	}
-	
+
 	// Используем текущий endpoint с учётом failover
 	endpoint := u.getNextEndpoint()
 	if endpoint == nil {
 		return nil, fmt.Errorf("нет доступных endpoints")
 	}
-	
+
 	return endpoint, nil
 }
 
@@ -305,37 +305,37 @@ func (u *UASUAC) selectEndpoint(name string) (*Endpoint, error) {
 func (u *UASUAC) getNextEndpoint() *Endpoint {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	
+
 	if u.endpoints == nil || (u.endpoints.Primary == nil && len(u.endpoints.Fallbacks) == 0) {
 		return nil
 	}
-	
+
 	totalEndpoints := u.endpoints.GetTotalEndpoints()
 	if totalEndpoints == 0 {
 		return nil
 	}
-	
+
 	// Определяем какой endpoint использовать на основе индекса
 	currentIdx := u.currentEndpointIdx % totalEndpoints
-	
+
 	// Инкрементируем для следующего вызова
 	u.currentEndpointIdx = (u.currentEndpointIdx + 1) % totalEndpoints
-	
+
 	// Если есть primary и индекс указывает на него
 	if u.endpoints.Primary != nil && currentIdx == 0 {
 		return u.endpoints.Primary
 	}
-	
+
 	// Иначе выбираем из fallbacks
 	fallbackIdx := currentIdx
 	if u.endpoints.Primary != nil {
 		fallbackIdx = currentIdx - 1
 	}
-	
+
 	if fallbackIdx < len(u.endpoints.Fallbacks) {
 		return u.endpoints.Fallbacks[fallbackIdx]
 	}
-	
+
 	// Не должны сюда попасть, но на всякий случай
 	return u.endpoints.Primary
 }
@@ -375,37 +375,37 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 		Address: *fromURI,
 		Params:  sip.NewParams(),
 	}
-	
+
 	// Добавляем display name для From если указан
 	if cfg.fromDisplay != "" {
 		fromHeader.DisplayName = cfg.fromDisplay
 	}
-	
+
 	// Добавляем параметры From
 	for key, value := range cfg.fromParams {
 		fromHeader.Params = fromHeader.Params.Add(key, value)
 	}
-	
+
 	req.AppendHeader(fromHeader)
-	
+
 	// Настраиваем To заголовок
 	toHeader := &sip.ToHeader{
 		Address: remoteURI,
 		Params:  sip.NewParams(),
 	}
-	
+
 	// Добавляем display name для To если указан
 	if cfg.toDisplay != "" {
 		toHeader.DisplayName = cfg.toDisplay
 	}
-	
+
 	// Добавляем параметры To
 	for key, value := range cfg.toParams {
 		toHeader.Params = toHeader.Params.Add(key, value)
 	}
-	
+
 	req.AppendHeader(toHeader)
-	
+
 	// Настраиваем Contact заголовок
 	var contactURI sip.Uri
 	if cfg.contactURI != nil {
@@ -413,17 +413,17 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 	} else {
 		contactURI = u.contactURI
 	}
-	
+
 	contactHeader := &sip.ContactHeader{
 		Address: contactURI,
 		Params:  sip.NewParams(),
 	}
-	
+
 	// Добавляем параметры Contact
 	for key, value := range cfg.contactParams {
 		contactHeader.Params = contactHeader.Params.Add(key, value)
 	}
-	
+
 	req.AppendHeader(contactHeader)
 
 	// Добавляем Subject если указан
@@ -457,7 +457,7 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 			}
 			req.AppendHeader(sip.NewHeader("P-Asserted-Identity", paiValue))
 		}
-		
+
 		// Добавляем TEL URI если указан (может быть несколько значений)
 		if cfg.assertedIdentityTel != "" {
 			telValue := fmt.Sprintf("tel:%s", cfg.assertedIdentityTel)
@@ -479,17 +479,17 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 		callID := sip.CallIDHeader(generateCallID())
 		req.AppendHeader(&callID)
 	}
-	
+
 	// CSeq
 	if req.GetHeader("CSeq") == nil {
 		req.AppendHeader(sip.NewHeader("CSeq", "1 INVITE"))
 	}
-	
+
 	// Max-Forwards
 	if req.GetHeader("Max-Forwards") == nil {
 		req.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
 	}
-	
+
 	// Via - добавляем минимальный для тестов
 	if req.GetHeader("Via") == nil {
 		via := &sip.ViaHeader{
@@ -502,20 +502,20 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 		}
 		req.AppendHeader(via)
 	}
-	
+
 	// Используем HeaderProcessor для добавления стандартных заголовков
 	hp := NewHeaderProcessor()
 	hp.AddSupportedHeader(req)
-	
+
 	// Используем кастомный User-Agent если указан
 	if cfg.userAgent != "" {
 		hp.AddUserAgent(req, cfg.userAgent)
 	} else {
 		hp.AddUserAgent(req, "SoftPhone/1.0")
 	}
-	
+
 	hp.AddTimestamp(req)
-	
+
 	// Валидируем запрос
 	if err := hp.ProcessRequest(req); err != nil {
 		return nil, fmt.Errorf("ошибка валидации запроса: %w", err)
@@ -532,17 +532,17 @@ func (u *UASUAC) handleClientTransaction(dialog IDialog, tx sip.ClientTransactio
 		if d, ok := dialog.(*Dialog); ok {
 			// Вызываем handleResponse который уже защищен мьютексом
 			d.handleResponse(res)
-			
+
 			// Если это финальный успешный ответ на INVITE, ACK будет отправлен автоматически
 			// транзакцией или вручную через диалог после перехода в confirmed
-			
+
 			// Если это финальный ответ, можем выйти
 			if res.StatusCode >= 200 {
 				break
 			}
 		}
 	}
-	
+
 	// Обрабатываем ошибки транзакции
 	if err := tx.Err(); err != nil {
 		// Если диалог еще не в финальном состоянии, переводим его в terminated
@@ -565,7 +565,6 @@ func (u *UASUAC) GetDialog(dialogID string) (IDialog, error) {
 func (u *UASUAC) GetDialogByCallID(callID *sip.CallIDHeader) (IDialog, error) {
 	return u.dialogManager.GetDialogByCallID(callID)
 }
-
 
 // Close закрывает UASUAC и освобождает ресурсы
 // GetTransport возвращает текущую конфигурацию транспорта
@@ -633,7 +632,6 @@ func WithLogger(logger Logger) UASUACOption {
 		return nil
 	}
 }
-
 
 // WithTransport устанавливает конфигурацию транспорта
 func WithTransport(config TransportConfig) UASUACOption {
@@ -720,38 +718,38 @@ func WithEndpoints(config *EndpointConfig) UASUACOption {
 // Позволяет гибко настраивать различные параметры INVITE запроса
 type callConfig struct {
 	// From заголовок
-	fromUser     string    // Только часть user в From URI
-	fromURI      *sip.Uri  // Полный From URI (если нужно переопределить весь URI)
-	fromDisplay  string    // Display name для From
-	fromParams   map[string]string // Параметры From заголовка
-	
+	fromUser    string            // Только часть user в From URI
+	fromURI     *sip.Uri          // Полный From URI (если нужно переопределить весь URI)
+	fromDisplay string            // Display name для From
+	fromParams  map[string]string // Параметры From заголовка
+
 	// Contact заголовок
-	contactURI   *sip.Uri  // Переопределить Contact URI
+	contactURI    *sip.Uri          // Переопределить Contact URI
 	contactParams map[string]string // Параметры Contact заголовка
-	
+
 	// To заголовок
-	toDisplay    string    // Display name для To
-	toParams     map[string]string // Параметры To заголовка
-	
+	toDisplay string            // Display name для To
+	toParams  map[string]string // Параметры To заголовка
+
 	// P-Asserted-Identity заголовок
-	assertedIdentity     *sip.Uri  // SIP URI для P-Asserted-Identity
-	assertedIdentityTel  string    // TEL URI для P-Asserted-Identity (например: +1234567890)
-	assertedDisplay      string    // Display name для P-Asserted-Identity
-	useFromAsAsserted    bool      // Использовать From URI как P-Asserted-Identity
-	
+	assertedIdentity    *sip.Uri // SIP URI для P-Asserted-Identity
+	assertedIdentityTel string   // TEL URI для P-Asserted-Identity (например: +1234567890)
+	assertedDisplay     string   // Display name для P-Asserted-Identity
+	useFromAsAsserted   bool     // Использовать From URI как P-Asserted-Identity
+
 	// Тело и дополнительные заголовки
-	body        *Body
-	headers     map[string]string
-	
+	body    *Body
+	headers map[string]string
+
 	// User-Agent
-	userAgent   string
-	
+	userAgent string
+
 	// Subject
-	subject     string
-	
+	subject string
+
 	// Endpoint configuration
-	endpointName string    // Имя конкретного endpoint
-	remoteURI    *sip.Uri  // Полный URI (переопределяет target)
+	endpointName string   // Имя конкретного endpoint
+	remoteURI    *sip.Uri // Полный URI (переопределяет target)
 }
 
 // CallOption опция для исходящего вызова
@@ -877,7 +875,7 @@ func WithAssertedIdentityFromString(identity string) CallOption {
 		if strings.HasPrefix(identity, "<") && strings.HasSuffix(identity, ">") {
 			identity = identity[1 : len(identity)-1]
 		}
-		
+
 		var uri sip.Uri
 		if err := sip.ParseUri(identity, &uri); err == nil {
 			if uri.Scheme == "sip" || uri.Scheme == "sips" {
@@ -895,9 +893,7 @@ func WithAssertedIdentityTel(telNumber string) CallOption {
 		telNumber = strings.TrimSpace(telNumber)
 		if telNumber != "" && (strings.HasPrefix(telNumber, "+") || strings.HasPrefix(telNumber, "tel:")) {
 			// Убираем префикс tel: если есть
-			if strings.HasPrefix(telNumber, "tel:") {
-				telNumber = strings.TrimPrefix(telNumber, "tel:")
-			}
+			telNumber = strings.TrimPrefix(telNumber, "tel:")
 			c.assertedIdentityTel = telNumber
 		}
 	}
@@ -927,13 +923,13 @@ func generateCallID() string {
 		// В случае ошибки используем timestamp
 		return fmt.Sprintf("%d@localhost", time.Now().UnixNano())
 	}
-	
+
 	// Формат: случайный_hex@hostname
 	hostname := "localhost"
 	if h, err := net.LookupAddr("127.0.0.1"); err == nil && len(h) > 0 {
 		hostname = h[0]
 	}
-	
+
 	return fmt.Sprintf("%s@%s", hex.EncodeToString(b), hostname)
 }
 
@@ -946,6 +942,6 @@ func generateBranch() string {
 		// В случае ошибки используем timestamp
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
-	
+
 	return hex.EncodeToString(b)
 }
