@@ -60,12 +60,16 @@ type TransportConfig struct {
 //
 // По умолчанию используется:
 //   - Транспорт: UDP
+//   - Host: "0.0.0.0"
+//   - Port: 5060
 //   - WebSocket путь: "/"
 //   - Keep-alive: включен
 //   - Период keep-alive: 30 секунд
 func DefaultTransportConfig() TransportConfig {
 	return TransportConfig{
 		Type:            TransportUDP,
+		Host:            "0.0.0.0",
+		Port:            5060,
 		WSPath:          "/",
 		KeepAlive:       true,
 		KeepAlivePeriod: 30,
@@ -76,6 +80,7 @@ func DefaultTransportConfig() TransportConfig {
 //
 // Проверяет:
 //   - Корректность типа транспорта
+//   - Корректность Host и Port
 //   - Наличие WSPath для WebSocket транспортов
 //   - Корректность KeepAlivePeriod
 func (tc TransportConfig) Validate() error {
@@ -84,6 +89,16 @@ func (tc TransportConfig) Validate() error {
 		// Валидные типы транспорта
 	default:
 		return fmt.Errorf("неизвестный тип транспорта: %s", tc.Type)
+	}
+
+	// Проверяем Host
+	if tc.Host == "" {
+		return fmt.Errorf("Host не может быть пустым")
+	}
+
+	// Проверяем Port
+	if tc.Port <= 0 || tc.Port > 65535 {
+		return fmt.Errorf("Port должен быть в диапазоне 1-65535, получен: %d", tc.Port)
 	}
 
 	// Проверяем WSPath для WebSocket транспортов
@@ -177,6 +192,13 @@ func (tc TransportConfig) GetListenNetwork() string {
 	default:
 		return "udp"
 	}
+}
+
+// GetListenAddr возвращает полный адрес для прослушивания в формате "host:port".
+//
+// Пример: "192.168.1.100:5060"
+func (tc TransportConfig) GetListenAddr() string {
+	return fmt.Sprintf("%s:%d", tc.Host, tc.Port)
 }
 
 // TransportOptions для расширения в будущем

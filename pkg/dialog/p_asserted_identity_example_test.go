@@ -69,7 +69,11 @@ func Example_multipleAssertedIdentities() {
 
 	// Создаем UASUAC (в реальном приложении это делается один раз)
 	uasuac, err := dialog.NewUASUAC(
-		dialog.WithListenAddr("192.168.1.100:5060"),
+		dialog.WithTransport(dialog.TransportConfig{
+			Type: dialog.TransportUDP,
+			Host: "192.168.1.100",
+			Port: 5060,
+		}),
 	)
 	if err != nil {
 		log.Fatal(err)

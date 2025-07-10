@@ -24,7 +24,6 @@ type UASUAC struct {
 
 	// Параметры конфигурации
 	hostname   string
-	listenAddr string
 	contactURI sip.Uri
 
 	// Транспортная конфигурация
@@ -52,14 +51,34 @@ type UASUAC struct {
 	closed bool
 }
 
+// updateContactURI обновляет Contact URI на основе текущей конфигурации транспорта
+func (u *UASUAC) updateContactURI() {
+	// Создаем Contact URI с учетом транспорта
+	u.contactURI.Scheme = u.transport.GetScheme()
+	u.contactURI.Host = u.transport.Host
+	u.contactURI.Port = u.transport.Port
+
+	// Добавляем transport параметр если не UDP
+	if u.transport.Type != TransportUDP {
+		if u.contactURI.Headers == nil {
+			u.contactURI.Headers = make(sip.HeaderParams)
+		}
+		u.contactURI.Headers["transport"] = u.transport.GetTransportParam()
+	} else {
+		// Удаляем transport параметр для UDP
+		if u.contactURI.Headers != nil {
+			delete(u.contactURI.Headers, "transport")
+		}
+	}
+}
+
 // NewUASUAC создает новый экземпляр UASUAC
 func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 	// Создаем базовую конфигурацию
 	uasuac := &UASUAC{
-		hostname:   "localhost",
-		listenAddr: "127.0.0.1:5060",
-		logger:     &NoOpLogger{},            // Будет заменен через опцию
-		transport:  DefaultTransportConfig(), // Транспорт по умолчанию - UDP
+		hostname:  "localhost",
+		logger:    &NoOpLogger{},            // Будет заменен через опцию
+		transport: DefaultTransportConfig(), // Транспорт по умолчанию - UDP
 	}
 
 	// Применяем опции
@@ -94,37 +113,8 @@ func NewUASUAC(options ...UASUACOption) (*UASUAC, error) {
 	}
 	uasuac.server = server
 
-	// Создаем Contact URI
-	host, port, err := net.SplitHostPort(uasuac.listenAddr)
-	if err != nil {
-		return nil, fmt.Errorf("неверный формат адреса прослушивания: %w", err)
-	}
-
-	portInt := 5060
-	if port != "" {
-		n, err := fmt.Sscanf(port, "%d", &portInt)
-		if err != nil || n != 1 {
-			// Используем порт по умолчанию при ошибке парсинга
-			uasuac.logger.Warn("не удалось распарсить порт, используется 5060",
-				F("port_str", port),
-				ErrField(err))
-			portInt = 5060
-		}
-	}
-	// Создаем Contact URI с учетом транспорта
-	uasuac.contactURI = sip.Uri{
-		Scheme: uasuac.transport.GetScheme(),
-		Host:   host,
-		Port:   portInt,
-	}
-
-	// Добавляем transport параметр если не UDP
-	if uasuac.transport.Type != TransportUDP {
-		if uasuac.contactURI.Headers == nil {
-			uasuac.contactURI.Headers = make(sip.HeaderParams)
-		}
-		uasuac.contactURI.Headers["transport"] = uasuac.transport.GetTransportParam()
-	}
+	// Обновляем Contact URI после применения всех опций
+	uasuac.updateContactURI()
 
 	// Создаем менеджер диалогов
 	uasuac.dialogManager = NewDialogManager(uasuac.logger)
@@ -181,13 +171,14 @@ func (u *UASUAC) Listen(ctx context.Context) error {
 	// Для WebSocket транспортов может потребоваться дополнительная настройка
 	// В текущей реализации sipgo WebSocket обрабатывается через HTTP сервер
 
+	listenAddr := fmt.Sprintf("%s:%d", u.transport.Host, u.transport.Port)
 	u.logger.Info("Запуск SIP сервера",
 		F("transport", u.transport.Type),
 		F("network", network),
-		F("address", u.listenAddr))
+		F("address", listenAddr))
 
 	// Запускаем сервер с выбранным транспортом
-	return u.server.ListenAndServe(ctx, network, u.listenAddr)
+	return u.server.ListenAndServe(ctx, network, listenAddr)
 }
 
 // CreateDialog создает новый исходящий диалог (UAC)
@@ -616,14 +607,6 @@ func WithHostname(hostname string) UASUACOption {
 	}
 }
 
-// WithListenAddr устанавливает адрес прослушивания
-func WithListenAddr(addr string) UASUACOption {
-	return func(u *UASUAC) error {
-		u.listenAddr = addr
-		return nil
-	}
-}
-
 // WithLogger устанавливает логгер
 func WithLogger(logger Logger) UASUACOption {
 	return func(u *UASUAC) error {
@@ -642,6 +625,8 @@ func WithTransport(config TransportConfig) UASUACOption {
 			return fmt.Errorf("некорректная конфигурация транспорта: %w", err)
 		}
 		u.transport = config
+		// Обновляем Contact URI при изменении транспорта
+		u.updateContactURI()
 		return nil
 	}
 }
@@ -655,49 +640,8 @@ func WithTransportType(transportType TransportType) UASUACOption {
 			return fmt.Errorf("некорректный тип транспорта: %w", err)
 		}
 		u.transport = config
-		return nil
-	}
-}
-
-// WithUDP устанавливает UDP транспорт
-func WithUDP() UASUACOption {
-	return WithTransportType(TransportUDP)
-}
-
-// WithTCP устанавливает TCP транспорт
-func WithTCP() UASUACOption {
-	return WithTransportType(TransportTCP)
-}
-
-// WithTLS устанавливает TLS транспорт
-func WithTLS() UASUACOption {
-	return WithTransportType(TransportTLS)
-}
-
-// WithWebSocket устанавливает WebSocket транспорт
-func WithWebSocket(path string) UASUACOption {
-	return func(u *UASUAC) error {
-		config := u.transport
-		config.Type = TransportWS
-		config.WSPath = path
-		if err := config.Validate(); err != nil {
-			return fmt.Errorf("некорректная конфигурация WebSocket: %w", err)
-		}
-		u.transport = config
-		return nil
-	}
-}
-
-// WithWebSocketSecure устанавливает WebSocket Secure транспорт
-func WithWebSocketSecure(path string) UASUACOption {
-	return func(u *UASUAC) error {
-		config := u.transport
-		config.Type = TransportWSS
-		config.WSPath = path
-		if err := config.Validate(); err != nil {
-			return fmt.Errorf("некорректная конфигурация WebSocket Secure: %w", err)
-		}
-		u.transport = config
+		// Обновляем Contact URI при изменении транспорта
+		u.updateContactURI()
 		return nil
 	}
 }
@@ -743,7 +687,6 @@ func WithRateLimiter(limiter RateLimiter) UASUACOption {
 
 // OnIncomingCallHandler - обработчик входящих вызовов
 type OnIncomingCallHandler func(dialog IDialog, transaction sip.ServerTransaction)
-
 
 // WithOnIncomingCall устанавливает обработчик входящих вызовов
 func WithOnIncomingCall(handler OnIncomingCallHandler) UASUACOption {

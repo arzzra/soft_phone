@@ -14,7 +14,11 @@ func TestPAssertedIdentityIntegration(t *testing.T) {
 	// Создаем UASUAC
 	ua, err := NewUASUAC(
 		WithHostname("test.example.com"),
-		WithListenAddr("127.0.0.1:5060"),
+		WithTransport(TransportConfig{
+			Type: TransportUDP,
+			Host: "127.0.0.1",
+			Port: 5060,
+		}),
 		WithLogger(&NoOpLogger{}),
 	)
 	require.NoError(t, err)

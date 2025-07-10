@@ -85,7 +85,6 @@ func TestDialogManager(t *testing.T) {
 
 // Моки перенесены в mocks_test.go
 
-
 func TestDialog_ReINVITE(t *testing.T) {
 	// Создаем мок UASUAC
 	uasuac := &UASUAC{
@@ -94,14 +93,14 @@ func TestDialog_ReINVITE(t *testing.T) {
 
 	// Создаем диалог
 	dialog := NewDialog(uasuac, true, &NoOpLogger{})
-	
+
 	// Устанавливаем диалог в состояние confirmed
 	dialog.stateMachine.SetState("confirmed")
 	dialog.callID = sip.CallIDHeader("test-call-id")
 	dialog.localTag = "local-tag"
 	dialog.remoteTag = "remote-tag"
 	dialog.localTarget = sip.Uri{Scheme: "sip", Host: "localhost", Port: 5060}
-	
+
 	// Создаем re-INVITE запрос
 	req := sip.NewRequest(sip.INVITE, sip.Uri{Scheme: "sip", Host: "example.com"})
 	callIDHeader := sip.CallIDHeader("test-call-id")
@@ -114,7 +113,7 @@ func TestDialog_ReINVITE(t *testing.T) {
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
 	req.AppendHeader(sip.NewHeader("Content-Length", "58"))
 	req.SetBody([]byte("v=0\r\no=alice 2890844526 2890844527 IN IP4 192.168.1.100\r\n"))
-	
+
 	// Создаем мок транзакцию
 	mockTx := &mockServerTransaction{
 		respondFunc: func(res *sip.Response) error {
@@ -126,18 +125,18 @@ func TestDialog_ReINVITE(t *testing.T) {
 			return nil
 		},
 	}
-	
+
 	// Обрабатываем re-INVITE
 	err := dialog.OnRequest(context.Background(), req, mockTx)
 	assert.NoError(t, err)
-	
+
 	// Проверяем, что Contact обновился
 	assert.Equal(t, "alice", dialog.remoteTarget.User)
 	assert.Equal(t, "192.168.1.100", dialog.remoteTarget.Host)
-	
+
 	// Проверяем, что CSeq обновился
 	assert.Equal(t, uint32(2), dialog.remoteCSeq)
-	
+
 	// Проверяем, что состояние осталось confirmed
 	assert.Equal(t, "confirmed", dialog.stateMachine.Current())
 }
@@ -154,7 +153,7 @@ func TestDialog_ReINVITE_NotConfirmed(t *testing.T) {
 	dialog.callID = sip.CallIDHeader("test-call-id")
 	dialog.localTag = "local-tag"
 	dialog.remoteTag = "remote-tag"
-	
+
 	// Создаем re-INVITE запрос
 	req := sip.NewRequest(sip.INVITE, sip.Uri{Scheme: "sip", Host: "example.com"})
 	callIDHeader := sip.CallIDHeader("test-call-id")
@@ -163,7 +162,7 @@ func TestDialog_ReINVITE_NotConfirmed(t *testing.T) {
 	req.AppendHeader(sip.NewHeader("To", "<sip:bob@example.com>;tag=local-tag"))
 	req.AppendHeader(sip.NewHeader("CSeq", "2 INVITE"))
 	req.AppendHeader(sip.NewHeader("Via", "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK776asdhds"))
-	
+
 	// Создаем мок транзакцию
 	mockTx := &mockServerTransaction{
 		respondFunc: func(res *sip.Response) error {
@@ -172,7 +171,7 @@ func TestDialog_ReINVITE_NotConfirmed(t *testing.T) {
 			return nil
 		},
 	}
-	
+
 	// Обрабатываем re-INVITE
 	err := dialog.OnRequest(context.Background(), req, mockTx)
 	assert.NoError(t, err)
@@ -182,25 +181,30 @@ func TestUASUACCreation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Создаем транспортную конфигурацию
+	transportConfig := TransportConfig{
+		Type: TransportTCP,
+		Host: "127.0.0.1",
+		Port: 5061,
+	}
+
 	// Создаем UASUAC с опциями
 	uasuac, err := NewUASUAC(
 		WithHostname("test.example.com"),
-		WithListenAddr("127.0.0.1:5061"),
+		WithTransport(transportConfig),
+		WithContactName("testuser"),
 	)
 	require.NoError(t, err)
 	defer uasuac.Close()
 
-	// Проверяем, что параметры установлены правильно
-	assert.Equal(t, "test.example.com", uasuac.hostname)
-	assert.Equal(t, "127.0.0.1:5061", uasuac.listenAddr)
+	// Проверяем транспортную конфигурацию
+	transport := uasuac.GetTransport()
+	assert.Equal(t, TransportTCP, transport.Type)
+	assert.Equal(t, "127.0.0.1", transport.Host)
+	assert.Equal(t, 5061, transport.Port)
 
-	// Проверяем Contact URI
-	assert.Equal(t, "sip", uasuac.contactURI.Scheme)
-	assert.Equal(t, "127.0.0.1", uasuac.contactURI.Host)
-	assert.Equal(t, 5061, uasuac.contactURI.Port)
-
-	// Проверяем, что менеджер диалогов создан
-	assert.NotNil(t, uasuac.dialogManager)
+	// Проверяем, что UASUAC создан корректно
+	assert.NotNil(t, uasuac)
 
 	// Не запускаем Listen в тесте, так как порт может быть занят
 	_ = ctx

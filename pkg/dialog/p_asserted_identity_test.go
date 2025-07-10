@@ -12,10 +12,10 @@ import (
 // TestPAssertedIdentityOptions проверяет работу CallOption функций для P-Asserted-Identity
 func TestPAssertedIdentityOptions(t *testing.T) {
 	tests := []struct {
-		name          string
-		options       []CallOption
-		checkConfig   func(t *testing.T, cfg *callConfig)
-		checkHeaders  func(t *testing.T, req *sip.Request)
+		name         string
+		options      []CallOption
+		checkConfig  func(t *testing.T, cfg *callConfig)
+		checkHeaders func(t *testing.T, req *sip.Request)
 	}{
 		{
 			name: "WithAssertedIdentity с SIP URI",
@@ -103,7 +103,7 @@ func TestPAssertedIdentityOptions(t *testing.T) {
 			for _, opt := range tt.options {
 				opt(cfg)
 			}
-			
+
 			if tt.checkConfig != nil {
 				tt.checkConfig(t, cfg)
 			}
@@ -116,7 +116,11 @@ func TestPAssertedIdentityInRequest(t *testing.T) {
 	// Создаем тестовый UASUAC
 	ua, err := NewUASUAC(
 		WithHostname("test.example.com"),
-		WithListenAddr("127.0.0.1:5060"),
+		WithTransport(TransportConfig{
+			Type: TransportUDP,
+			Host: "127.0.0.1",
+			Port: 5060,
+		}),
 	)
 	require.NoError(t, err)
 	defer ua.Close()
@@ -170,7 +174,7 @@ func TestPAssertedIdentityInRequest(t *testing.T) {
 			checkHeaders: func(t *testing.T, headers []sip.Header) {
 				paiHeaders := filterHeaders(headers, "P-Asserted-Identity")
 				require.Len(t, paiHeaders, 2)
-				
+
 				// Проверяем что есть и SIP и TEL
 				var hasSIP, hasTEL bool
 				for _, h := range paiHeaders {
@@ -229,11 +233,11 @@ func TestPAssertedIdentityInRequest(t *testing.T) {
 				User:   "target",
 				Host:   "remote.com",
 			}
-			
+
 			req, err := ua.buildInviteRequest(remoteURI, tt.options...)
 			require.NoError(t, err)
 			require.NotNil(t, req)
-			
+
 			if tt.checkHeaders != nil {
 				tt.checkHeaders(t, req.Headers())
 			}

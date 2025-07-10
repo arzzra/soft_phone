@@ -21,36 +21,46 @@ func TestUASUACTransportOptions(t *testing.T) {
 
 	// Проверяем установку различных типов транспорта
 	transportTests := []struct {
-		name      string
-		option    UASUACOption
-		wantType  TransportType
+		name       string
+		option     UASUACOption
+		wantType   TransportType
 		wantWSPath string
 	}{
 		{
 			name:     "WithUDP",
-			option:   WithUDP(),
+			option:   WithTransportType(TransportUDP),
 			wantType: TransportUDP,
 		},
 		{
 			name:     "WithTCP",
-			option:   WithTCP(),
+			option:   WithTransportType(TransportTCP),
 			wantType: TransportTCP,
 		},
 		{
 			name:     "WithTLS",
-			option:   WithTLS(),
+			option:   WithTransportType(TransportTLS),
 			wantType: TransportTLS,
 		},
 		{
-			name:      "WithWebSocket",
-			option:    WithWebSocket("/sip"),
-			wantType:  TransportWS,
+			name: "WithWebSocket",
+			option: WithTransport(TransportConfig{
+				Type:   TransportWS,
+				Host:   "0.0.0.0",
+				Port:   5060,
+				WSPath: "/sip",
+			}),
+			wantType:   TransportWS,
 			wantWSPath: "/sip",
 		},
 		{
-			name:      "WithWebSocketSecure",
-			option:    WithWebSocketSecure("/secure"),
-			wantType:  TransportWSS,
+			name: "WithWebSocketSecure",
+			option: WithTransport(TransportConfig{
+				Type:   TransportWSS,
+				Host:   "0.0.0.0",
+				Port:   5060,
+				WSPath: "/secure",
+			}),
+			wantType:   TransportWSS,
 			wantWSPath: "/secure",
 		},
 	}
@@ -92,6 +102,8 @@ func TestUASUACTransportOptions(t *testing.T) {
 	t.Run("WithTransport full config", func(t *testing.T) {
 		config := TransportConfig{
 			Type:            TransportTCP,
+			Host:            "192.168.1.100",
+			Port:            5061,
 			KeepAlive:       true,
 			KeepAlivePeriod: 60,
 		}
@@ -105,6 +117,12 @@ func TestUASUACTransportOptions(t *testing.T) {
 		transport := uasuac.GetTransport()
 		if transport.Type != TransportTCP {
 			t.Errorf("Expected transport type TCP, got %v", transport.Type)
+		}
+		if transport.Host != "192.168.1.100" {
+			t.Errorf("Expected host 192.168.1.100, got %v", transport.Host)
+		}
+		if transport.Port != 5061 {
+			t.Errorf("Expected port 5061, got %v", transport.Port)
 		}
 		if transport.KeepAlivePeriod != 60 {
 			t.Errorf("Expected KeepAlivePeriod 60, got %v", transport.KeepAlivePeriod)
@@ -133,19 +151,19 @@ func TestUASUACTransportOptions(t *testing.T) {
 		}{
 			{
 				name:       "UDP - no transport param",
-				option:     WithUDP(),
+				option:     WithTransportType(TransportUDP),
 				wantScheme: "sip",
 				wantParam:  false,
 			},
 			{
 				name:       "TCP - with transport param",
-				option:     WithTCP(),
+				option:     WithTransportType(TransportTCP),
 				wantScheme: "sip",
 				wantParam:  true,
 			},
 			{
 				name:       "TLS - sips scheme",
-				option:     WithTLS(),
+				option:     WithTransportType(TransportTLS),
 				wantScheme: "sips",
 				wantParam:  true,
 			},
@@ -153,7 +171,15 @@ func TestUASUACTransportOptions(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				uasuac, err := NewUASUAC(tt.option, WithListenAddr("127.0.0.1:5060"))
+				// Сначала применяем WithTransport с базовыми настройками, потом tt.option
+				uasuac, err := NewUASUAC(
+					WithTransport(TransportConfig{
+						Type: TransportUDP,
+						Host: "127.0.0.1",
+						Port: 5060,
+					}),
+					tt.option, // Применяем после базовой конфигурации
+				)
 				if err != nil {
 					t.Fatalf("Failed to create UASUAC: %v", err)
 				}

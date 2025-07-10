@@ -6,60 +6,70 @@ import (
 
 func TestTransportConfig(t *testing.T) {
 	tests := []struct {
-		name      string
-		config    TransportConfig
-		wantErr   bool
+		name       string
+		config     TransportConfig
+		wantErr    bool
 		wantScheme string
-		wantParam string
+		wantParam  string
 	}{
 		{
 			name: "UDP transport",
 			config: TransportConfig{
 				Type: TransportUDP,
+				Host: "0.0.0.0",
+				Port: 5060,
 			},
-			wantErr:   false,
+			wantErr:    false,
 			wantScheme: "sip",
-			wantParam: "udp",
+			wantParam:  "udp",
 		},
 		{
 			name: "TCP transport",
 			config: TransportConfig{
-				Type:      TransportTCP,
-				KeepAlive: true,
+				Type:            TransportTCP,
+				Host:            "0.0.0.0",
+				Port:            5061,
+				KeepAlive:       true,
 				KeepAlivePeriod: 30,
 			},
-			wantErr:   false,
+			wantErr:    false,
 			wantScheme: "sip",
-			wantParam: "tcp",
+			wantParam:  "tcp",
 		},
 		{
 			name: "TLS transport",
 			config: TransportConfig{
 				Type: TransportTLS,
+				Host: "0.0.0.0",
+				Port: 5062,
 			},
-			wantErr:   false,
+			wantErr:    false,
 			wantScheme: "sips",
-			wantParam: "tls",
+			wantParam:  "tls",
 		},
 		{
 			name: "WebSocket transport",
 			config: TransportConfig{
 				Type:   TransportWS,
+				Host:   "0.0.0.0",
+				Port:   8080,
 				WSPath: "/sip",
 			},
-			wantErr:   false,
+			wantErr:    false,
 			wantScheme: "sip",
-			wantParam: "ws",
+			wantParam:  "ws",
 		},
 		{
 			name: "WebSocket Secure transport",
 			config: TransportConfig{
 				Type:   TransportWSS,
+				Host:   "0.0.0.0",
+				Port:   8443,
 				WSPath: "/sip",
 			},
-			wantErr:   false,
+			wantErr:    false,
 			wantScheme: "sips",
-			wantParam: "wss",
+			wantParam:  "wss",
 		},
 		{
 			name: "Invalid transport type",
@@ -72,6 +82,8 @@ func TestTransportConfig(t *testing.T) {
 			name: "WebSocket without path",
 			config: TransportConfig{
 				Type:   TransportWS,
+				Host:   "0.0.0.0",
+				Port:   8080,
 				WSPath: "",
 			},
 			wantErr: true,
@@ -80,7 +92,36 @@ func TestTransportConfig(t *testing.T) {
 			name: "WebSocket with invalid path",
 			config: TransportConfig{
 				Type:   TransportWS,
+				Host:   "0.0.0.0",
+				Port:   8080,
 				WSPath: "sip", // Should start with /
+			},
+			wantErr: true,
+		},
+		{
+			name: "Empty host",
+			config: TransportConfig{
+				Type: TransportUDP,
+				Host: "",
+				Port: 5060,
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid port - zero",
+			config: TransportConfig{
+				Type: TransportUDP,
+				Host: "0.0.0.0",
+				Port: 0,
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid port - too high",
+			config: TransportConfig{
+				Type: TransportUDP,
+				Host: "0.0.0.0",
+				Port: 70000,
 			},
 			wantErr: true,
 		},
@@ -108,52 +149,52 @@ func TestTransportConfig(t *testing.T) {
 
 func TestTransportConfigMethods(t *testing.T) {
 	tests := []struct {
-		name          string
-		transport     TransportType
+		name           string
+		transport      TransportType
 		wantConnection bool
-		wantSecure    bool
-		wantWebSocket bool
-		wantNetwork   string
+		wantSecure     bool
+		wantWebSocket  bool
+		wantNetwork    string
 	}{
 		{
-			name:          "UDP",
-			transport:     TransportUDP,
+			name:           "UDP",
+			transport:      TransportUDP,
 			wantConnection: false,
-			wantSecure:    false,
-			wantWebSocket: false,
-			wantNetwork:   "udp",
+			wantSecure:     false,
+			wantWebSocket:  false,
+			wantNetwork:    "udp",
 		},
 		{
-			name:          "TCP",
-			transport:     TransportTCP,
+			name:           "TCP",
+			transport:      TransportTCP,
 			wantConnection: true,
-			wantSecure:    false,
-			wantWebSocket: false,
-			wantNetwork:   "tcp",
+			wantSecure:     false,
+			wantWebSocket:  false,
+			wantNetwork:    "tcp",
 		},
 		{
-			name:          "TLS",
-			transport:     TransportTLS,
+			name:           "TLS",
+			transport:      TransportTLS,
 			wantConnection: true,
-			wantSecure:    true,
-			wantWebSocket: false,
-			wantNetwork:   "tcp",
+			wantSecure:     true,
+			wantWebSocket:  false,
+			wantNetwork:    "tcp",
 		},
 		{
-			name:          "WebSocket",
-			transport:     TransportWS,
+			name:           "WebSocket",
+			transport:      TransportWS,
 			wantConnection: true,
-			wantSecure:    false,
-			wantWebSocket: true,
-			wantNetwork:   "tcp",
+			wantSecure:     false,
+			wantWebSocket:  true,
+			wantNetwork:    "tcp",
 		},
 		{
-			name:          "WebSocket Secure",
-			transport:     TransportWSS,
+			name:           "WebSocket Secure",
+			transport:      TransportWSS,
 			wantConnection: true,
-			wantSecure:    true,
-			wantWebSocket: true,
-			wantNetwork:   "tcp",
+			wantSecure:     true,
+			wantWebSocket:  true,
+			wantNetwork:    "tcp",
 		},
 	}
 
@@ -182,19 +223,19 @@ func TestTransportConfigMethods(t *testing.T) {
 
 func TestDefaultTransportConfig(t *testing.T) {
 	config := DefaultTransportConfig()
-	
+
 	if config.Type != TransportUDP {
 		t.Errorf("Default transport type = %v, want %v", config.Type, TransportUDP)
 	}
-	
+
 	if config.WSPath != "/" {
 		t.Errorf("Default WSPath = %v, want /", config.WSPath)
 	}
-	
+
 	if !config.KeepAlive {
 		t.Errorf("Default KeepAlive = %v, want true", config.KeepAlive)
 	}
-	
+
 	if config.KeepAlivePeriod != 30 {
 		t.Errorf("Default KeepAlivePeriod = %v, want 30", config.KeepAlivePeriod)
 	}

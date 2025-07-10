@@ -90,12 +90,17 @@ func Example_complexCall() {
 	// Контекст для примера
 	ctx := context.Background()
 
-	// Создаем logger для примера
-	logger := dialog.NewDevelopmentLogger()
+	// Создаем NoOpLogger для примера, чтобы не выводить логи
+	logger := &dialog.NoOpLogger{}
 
 	// Создаем UASUAC (в реальном приложении это делается один раз)
+	transportConfig := dialog.TransportConfig{
+		Type: dialog.TransportUDP,
+		Host: "192.168.1.100",
+		Port: 5060,
+	}
 	uasuac, err := dialog.NewUASUAC(
-		dialog.WithListenAddr("192.168.1.100:5060"),
+		dialog.WithTransport(transportConfig),
 		dialog.WithLogger(logger),
 	)
 	if err != nil {

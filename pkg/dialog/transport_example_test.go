@@ -12,7 +12,11 @@ import (
 func ExampleWithTransport() {
 	// Создание UASUAC с UDP транспортом (по умолчанию)
 	uasUDP, err := dialog.NewUASUAC(
-		dialog.WithListenAddr("0.0.0.0:5060"),
+		dialog.WithTransport(dialog.TransportConfig{
+			Type: dialog.TransportUDP,
+			Host: "0.0.0.0",
+			Port: 5060,
+		}),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -21,8 +25,11 @@ func ExampleWithTransport() {
 
 	// Создание UASUAC с TCP транспортом
 	uasTCP, err := dialog.NewUASUAC(
-		dialog.WithTCP(),
-		dialog.WithListenAddr("0.0.0.0:5061"),
+		dialog.WithTransport(dialog.TransportConfig{
+			Type: dialog.TransportTCP,
+			Host: "0.0.0.0",
+			Port: 5061,
+		}),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -31,8 +38,11 @@ func ExampleWithTransport() {
 
 	// Создание UASUAC с TLS транспортом
 	uasTLS, err := dialog.NewUASUAC(
-		dialog.WithTLS(),
-		dialog.WithListenAddr("0.0.0.0:5062"),
+		dialog.WithTransport(dialog.TransportConfig{
+			Type: dialog.TransportTLS,
+			Host: "0.0.0.0",
+			Port: 5062,
+		}),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -41,8 +51,12 @@ func ExampleWithTransport() {
 
 	// Создание UASUAC с WebSocket транспортом
 	uasWS, err := dialog.NewUASUAC(
-		dialog.WithWebSocket("/sip"),
-		dialog.WithListenAddr("0.0.0.0:8080"),
+		dialog.WithTransport(dialog.TransportConfig{
+			Type:   dialog.TransportWS,
+			Host:   "0.0.0.0",
+			Port:   8080,
+			WSPath: "/sip",
+		}),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -52,13 +66,14 @@ func ExampleWithTransport() {
 	// Создание UASUAC с полной конфигурацией транспорта
 	transportConfig := dialog.TransportConfig{
 		Type:            dialog.TransportTCP,
+		Host:            "0.0.0.0",
+		Port:            5063,
 		KeepAlive:       true,
 		KeepAlivePeriod: 60,
 	}
 
 	uasCustom, err := dialog.NewUASUAC(
 		dialog.WithTransport(transportConfig),
-		dialog.WithListenAddr("0.0.0.0:5063"),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -83,8 +98,11 @@ func Example_listen() {
 
 	// UDP сервер
 	uasUDP, _ := dialog.NewUASUAC(
-		dialog.WithUDP(),
-		dialog.WithListenAddr("0.0.0.0:5060"),
+		dialog.WithTransport(dialog.TransportConfig{
+			Type: dialog.TransportUDP,
+			Host: "0.0.0.0",
+			Port: 5060,
+		}),
 	)
 	go func() {
 		if err := uasUDP.Listen(ctx); err != nil {
@@ -94,8 +112,11 @@ func Example_listen() {
 
 	// TCP сервер
 	uasTCP, _ := dialog.NewUASUAC(
-		dialog.WithTCP(),
-		dialog.WithListenAddr("0.0.0.0:5061"),
+		dialog.WithTransport(dialog.TransportConfig{
+			Type: dialog.TransportTCP,
+			Host: "0.0.0.0",
+			Port: 5061,
+		}),
 	)
 	go func() {
 		if err := uasTCP.Listen(ctx); err != nil {
@@ -105,8 +126,12 @@ func Example_listen() {
 
 	// WebSocket сервер
 	uasWS, _ := dialog.NewUASUAC(
-		dialog.WithWebSocket("/sip"),
-		dialog.WithListenAddr("0.0.0.0:8080"),
+		dialog.WithTransport(dialog.TransportConfig{
+			Type:   dialog.TransportWS,
+			Host:   "0.0.0.0",
+			Port:   8080,
+			WSPath: "/sip",
+		}),
 	)
 	go func() {
 		if err := uasWS.Listen(ctx); err != nil {
