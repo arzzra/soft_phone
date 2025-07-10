@@ -3,6 +3,8 @@ package dialog
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -155,11 +157,21 @@ func (d *Dialog) stringToDialogState(state string) DialogState {
 // для предотвращения race conditions при обновлении ID диалога
 func (d *Dialog) updateDialogID() {
 	// Формируем ID диалога из Call-ID и тегов
+	var sb strings.Builder
+	sb.WriteString(d.callID.Value())
+	sb.WriteString(";from-tag=")
+	
 	if d.isServer {
-		d.id = fmt.Sprintf("%s;from-tag=%s;to-tag=%s", d.callID.Value(), d.remoteTag, d.localTag)
+		sb.WriteString(d.remoteTag)
+		sb.WriteString(";to-tag=")
+		sb.WriteString(d.localTag)
 	} else {
-		d.id = fmt.Sprintf("%s;from-tag=%s;to-tag=%s", d.callID.Value(), d.localTag, d.remoteTag)
+		sb.WriteString(d.localTag)
+		sb.WriteString(";to-tag=")
+		sb.WriteString(d.remoteTag)
 	}
+	
+	d.id = sb.String()
 }
 
 // ID возвращает идентификатор диалога
@@ -309,7 +321,7 @@ func (d *Dialog) Answer(body Body, headers map[string]string) error {
 		res.AppendHeader(contactHeader)
 		if body.Content != nil {
 			res.AppendHeader(sip.NewHeader("Content-Type", body.ContentType))
-			res.AppendHeader(sip.NewHeader("Content-Length", fmt.Sprintf("%d", len(body.Content))))
+			res.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(body.Content))))
 		}
 
 		for name, value := range headers {
@@ -374,7 +386,7 @@ func (d *Dialog) Reject(statusCode int, reason string, body Body, headers map[st
 		// Добавляем заголовки
 		if body.Content != nil {
 			res.AppendHeader(sip.NewHeader("Content-Type", body.ContentType))
-			res.AppendHeader(sip.NewHeader("Content-Length", fmt.Sprintf("%d", len(body.Content))))
+			res.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(body.Content))))
 		}
 
 		for name, value := range headers {
@@ -504,7 +516,11 @@ func (d *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (si
 	d.applyDialogHeaders(referReq)
 
 	// Добавляем Refer-To заголовок
-	referToValue := fmt.Sprintf("<%s>", target.String())
+	var referToBuilder strings.Builder
+	referToBuilder.WriteByte('<')
+	referToBuilder.WriteString(target.String())
+	referToBuilder.WriteByte('>')
+	referToValue := referToBuilder.String()
 
 	// Валидация Refer-To заголовка
 	if err := d.securityValidator.ValidateHeader("Refer-To", referToValue); err != nil {
@@ -550,15 +566,23 @@ func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts *
 
 	// Формируем Replaces заголовок
 	callID := replaceDialog.CallID()
-	replacesValue := fmt.Sprintf("%s;to-tag=%s;from-tag=%s",
-		callID.Value(),
-		replaceDialog.RemoteTag(),
-		replaceDialog.LocalTag(),
-	)
+	var replacesBuilder strings.Builder
+	replacesBuilder.WriteString(callID.Value())
+	replacesBuilder.WriteString(";to-tag=")
+	replacesBuilder.WriteString(replaceDialog.RemoteTag())
+	replacesBuilder.WriteString(";from-tag=")
+	replacesBuilder.WriteString(replaceDialog.LocalTag())
+	replacesValue := replacesBuilder.String()
 
 	// Формируем Refer-To с Replaces
 	remoteTarget := replaceDialog.RemoteTarget()
-	referToValue := fmt.Sprintf("<%s?Replaces=%s>", remoteTarget.String(), replacesValue)
+	var referToBuilder strings.Builder
+	referToBuilder.WriteByte('<')
+	referToBuilder.WriteString(remoteTarget.String())
+	referToBuilder.WriteString("?Replaces=")
+	referToBuilder.WriteString(replacesValue)
+	referToBuilder.WriteByte('>')
+	referToValue := referToBuilder.String()
 	referReq.AppendHeader(sip.NewHeader("Refer-To", referToValue))
 
 	// Применяем опции, если есть
@@ -760,7 +784,11 @@ func (d *Dialog) applyDialogHeaders(req *sip.Request) {
 
 	// CSeq
 	d.localSeq++
-	req.ReplaceHeader(sip.NewHeader("CSeq", fmt.Sprintf("%d %s", d.localSeq, req.Method)))
+	var cseqBuilder strings.Builder
+	cseqBuilder.WriteString(strconv.FormatUint(uint64(d.localSeq), 10))
+	cseqBuilder.WriteByte(' ')
+	cseqBuilder.WriteString(string(req.Method))
+	req.ReplaceHeader(sip.NewHeader("CSeq", cseqBuilder.String()))
 
 	// Contact
 	contactHeader := &sip.ContactHeader{
@@ -1032,7 +1060,7 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 	if req.Body() != nil {
 		if contentType := req.GetHeader("Content-Type"); contentType != nil {
 			res.AppendHeader(sip.NewHeader("Content-Type", contentType.Value()))
-			res.AppendHeader(sip.NewHeader("Content-Length", fmt.Sprintf("%d", len(req.Body()))))
+			res.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(req.Body()))))
 		}
 	}
 
@@ -1192,7 +1220,13 @@ func (d *Dialog) SetupFromInvite(req *sip.Request, tx sip.ServerTransaction) err
 	}
 
 	// Формируем ID диалога
-	d.id = fmt.Sprintf("%s-%s-%s", d.callID.Value(), d.localTag, d.remoteTag)
+	var idBuilder strings.Builder
+	idBuilder.WriteString(d.callID.Value())
+	idBuilder.WriteByte('-')
+	idBuilder.WriteString(d.localTag)
+	idBuilder.WriteByte('-')
+	idBuilder.WriteString(d.remoteTag)
+	d.id = idBuilder.String()
 
 	// Переходим в состояние early
 	return d.stateMachine.Event(context.Background(), "early")

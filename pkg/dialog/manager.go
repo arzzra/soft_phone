@@ -2,6 +2,8 @@ package dialog
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -168,7 +170,12 @@ func (dm *DialogManager) CreateClientDialog(inviteReq *sip.Request) (IDialog, er
 	}
 
 	// Генерируем временный ID для диалога
-	tempID := fmt.Sprintf("temp_%s_%d", callIDValue, time.Now().UnixNano())
+	var tempIDBuilder strings.Builder
+	tempIDBuilder.WriteString("temp_")
+	tempIDBuilder.WriteString(callIDValue)
+	tempIDBuilder.WriteByte('_')
+	tempIDBuilder.WriteString(strconv.FormatInt(time.Now().UnixNano(), 10))
+	tempID := tempIDBuilder.String()
 	dialog.id = tempID
 	
 	// Сохраняем диалог с временным ID

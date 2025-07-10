@@ -3,6 +3,7 @@ package dialog
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -147,7 +148,7 @@ func (rs *ReferSubscription) SendNotify(ctx context.Context) error {
 	
 	notifyReq.SetBody(body)
 	notifyReq.AppendHeader(sip.NewHeader("Content-Type", contentType))
-	notifyReq.AppendHeader(sip.NewHeader("Content-Length", fmt.Sprintf("%d", len(body))))
+	notifyReq.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(body))))
 	
 	// Отправляем NOTIFY с повторными попытками
 	tx, err := rs.dialog.uasuac.transactionRequestWithRetry(ctx, notifyReq)

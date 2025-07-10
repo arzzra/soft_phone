@@ -250,8 +250,22 @@ func (h *HeaderProcessor) AddAllowHeaderToResponse(res *sip.Response) {
 
 // AddTimestamp добавляет заголовок Timestamp
 func (h *HeaderProcessor) AddTimestamp(req *sip.Request) {
-	timestamp := fmt.Sprintf("%.3f", float64(time.Now().UnixNano())/1e9)
-	req.AppendHeader(sip.NewHeader("Timestamp", timestamp))
+	// Вычисляем timestamp с точностью до 3 знаков после запятой
+	nanoTime := time.Now().UnixNano()
+	seconds := nanoTime / 1e9
+	milliseconds := (nanoTime % 1e9) / 1e6
+	
+	var timestampBuilder strings.Builder
+	timestampBuilder.WriteString(strconv.FormatInt(seconds, 10))
+	timestampBuilder.WriteByte('.')
+	// Добавляем ведущие нули для миллисекунд
+	ms := strconv.FormatInt(milliseconds, 10)
+	for i := len(ms); i < 3; i++ {
+		timestampBuilder.WriteByte('0')
+	}
+	timestampBuilder.WriteString(ms)
+	
+	req.AppendHeader(sip.NewHeader("Timestamp", timestampBuilder.String()))
 }
 
 // AddUserAgent добавляет заголовок User-Agent к запросу
@@ -370,15 +384,31 @@ func (h *HeaderProcessor) IsMethodSupported(method sip.RequestMethod) bool {
 // AddAuthorizationHeader добавляет заголовок авторизации
 func AddAuthorizationHeader(req *sip.Request, username, password, realm, nonce, uri string) {
 	// Упрощенная реализация - в реальности нужно использовать MD5 и правильный digest
-	auth := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="calculated_response"`,
-		username, realm, nonce, uri)
-	req.AppendHeader(sip.NewHeader("Authorization", auth))
+	var authBuilder strings.Builder
+	authBuilder.WriteString(`Digest username="`)
+	authBuilder.WriteString(username)
+	authBuilder.WriteString(`", realm="`)
+	authBuilder.WriteString(realm)
+	authBuilder.WriteString(`", nonce="`)
+	authBuilder.WriteString(nonce)
+	authBuilder.WriteString(`", uri="`)
+	authBuilder.WriteString(uri)
+	authBuilder.WriteString(`", response="calculated_response"`)
+	req.AppendHeader(sip.NewHeader("Authorization", authBuilder.String()))
 }
 
 // AddProxyAuthorizationHeader добавляет заголовок прокси-авторизации
 func AddProxyAuthorizationHeader(req *sip.Request, username, password, realm, nonce, uri string) {
 	// Упрощенная реализация
-	auth := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="calculated_response"`,
-		username, realm, nonce, uri)
-	req.AppendHeader(sip.NewHeader("Proxy-Authorization", auth))
+	var authBuilder strings.Builder
+	authBuilder.WriteString(`Digest username="`)
+	authBuilder.WriteString(username)
+	authBuilder.WriteString(`", realm="`)
+	authBuilder.WriteString(realm)
+	authBuilder.WriteString(`", nonce="`)
+	authBuilder.WriteString(nonce)
+	authBuilder.WriteString(`", uri="`)
+	authBuilder.WriteString(uri)
+	authBuilder.WriteString(`", response="calculated_response"`)
+	req.AppendHeader(sip.NewHeader("Proxy-Authorization", authBuilder.String()))
 }

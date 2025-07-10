@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -240,7 +241,7 @@ func (u *UASUAC) buildInviteRequest(remoteURI sip.Uri, opts ...CallOption) (*sip
 	if cfg.body != nil {
 		req.SetBody(cfg.body.Content)
 		req.AppendHeader(sip.NewHeader("Content-Type", cfg.body.ContentType))
-		req.AppendHeader(sip.NewHeader("Content-Length", fmt.Sprintf("%d", len(cfg.body.Content))))
+		req.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(cfg.body.Content))))
 	}
 
 	// Добавляем дополнительные заголовки
