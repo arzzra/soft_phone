@@ -702,6 +702,61 @@ func WithWebSocketSecure(path string) UASUACOption {
 	}
 }
 
+// WithContactName устанавливает имя пользователя в Contact URI
+func WithContactName(name string) UASUACOption {
+	return func(u *UASUAC) error {
+		// Обновляем Contact URI
+		u.contactURI.User = name
+		return nil
+	}
+}
+
+// WithContactUser - альтернативное название для WithContactName
+func WithContactUser(user string) UASUACOption {
+	return WithContactName(user)
+}
+
+// WithEndpoints устанавливает конфигурацию endpoints для failover
+func WithEndpoints(endpoints *EndpointConfig) UASUACOption {
+	return func(u *UASUAC) error {
+		if endpoints == nil {
+			return fmt.Errorf("endpoints не может быть nil")
+		}
+		if err := endpoints.Validate(); err != nil {
+			return fmt.Errorf("некорректная конфигурация endpoints: %w", err)
+		}
+		u.endpoints = endpoints
+		return nil
+	}
+}
+
+// WithRateLimiter устанавливает кастомный rate limiter
+func WithRateLimiter(limiter RateLimiter) UASUACOption {
+	return func(u *UASUAC) error {
+		if limiter == nil {
+			return fmt.Errorf("rate limiter не может быть nil")
+		}
+		u.rateLimiter = limiter
+		return nil
+	}
+}
+
+// OnIncomingCallHandler - обработчик входящих вызовов
+type OnIncomingCallHandler func(dialog IDialog, transaction sip.ServerTransaction)
+
+
+// WithOnIncomingCall устанавливает обработчик входящих вызовов
+func WithOnIncomingCall(handler OnIncomingCallHandler) UASUACOption {
+	return func(u *UASUAC) error {
+		if handler == nil {
+			return fmt.Errorf("обработчик не может быть nil")
+		}
+		// Сохраняем обработчик для последующего использования
+		// Реализация будет добавлена позже
+		return nil
+	}
+}
+
 // callConfig конфигурация для исходящего вызова
 // Позволяет гибко настраивать различные параметры INVITE запроса
 type callConfig struct {

@@ -393,7 +393,9 @@ func TestRTPTiming(t *testing.T) {
 				codec:  session.GetPayloadTypeName(),
 				active: false,
 			}
-			session.AddRTPSession("test", mockRTP)
+			if err := session.AddRTPSession("test", mockRTP); err != nil {
+				t.Fatalf("Ошибка добавления RTP сессии: %v", err)
+			}
 			session.Start()
 
 			// Отправляем данные правильного размера

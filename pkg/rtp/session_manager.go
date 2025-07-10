@@ -250,7 +250,7 @@ func (sm *SessionManager) CleanupInactiveSessions() int {
 	// Удаляем найденные сессии
 	for _, id := range toRemove {
 		session := sm.sessions[id]
-		session.Stop() // Игнорируем ошибки при принудительной остановке
+		_ = session.Stop() // Игнорируем ошибки при принудительной остановке
 		delete(sm.sessions, id)
 		sm.activeSessions--
 	}

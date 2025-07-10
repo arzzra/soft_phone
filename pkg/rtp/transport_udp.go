@@ -359,8 +359,12 @@ func classifyNetworkError(operation string, err error) error {
 			return classified
 		}
 
-		// Temporary() is deprecated - check for specific errors instead
-		// Most "temporary" errors are timeouts, handled above
+		// Проверяем Temporary() даже если он deprecated - для совместимости с тестами
+		if netErr.Temporary() {
+			classified.Type = ErrorTypeTemporary
+			classified.Retryable = true
+			return classified
+		}
 	}
 
 	// Проверяем специфичные типы ошибок

@@ -324,7 +324,11 @@ func TestRateLimitingIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Logf("Ошибка остановки сессии: %v", err)
+		}
+	}()
 
 	// Настраиваем rate limiting через SourceManager
 	if session.sourceManager != nil {

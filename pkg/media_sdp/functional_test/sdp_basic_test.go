@@ -67,7 +67,11 @@ func TestBasicSDPWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Не удалось создать SDPMediaHandler: %v", err)
 	}
-	defer callee.Stop()
+	defer func() {
+		if err := callee.Stop(); err != nil {
+			t.Logf("Ошибка остановки callee: %v", err)
+		}
+	}()
 
 	err = callee.ProcessOffer(offer)
 	if err != nil {

@@ -219,7 +219,11 @@ func TestSessionCreation(t *testing.T) {
 				t.Fatalf("Неожиданная ошибка создания сессии: %v", err)
 			}
 
-			defer session.Stop()
+			defer func() {
+				if err := session.Stop(); err != nil {
+					t.Logf("Ошибка остановки сессии: %v", err)
+				}
+			}()
 
 			// Проверяем базовые параметры
 			if session.GetPayloadType() != tt.config.PayloadType {
@@ -464,6 +468,7 @@ func TestRTPPacketReceiving(t *testing.T) {
 	transport := NewMockTransport()
 	transport.SetActive(true)
 
+	var mu sync.Mutex
 	var receivedPackets []*rtp.Packet
 	var receivedAddrs []net.Addr
 
@@ -473,8 +478,10 @@ func TestRTPPacketReceiving(t *testing.T) {
 		ClockRate:   8000,
 		Transport:   transport,
 		OnPacketReceived: func(packet *rtp.Packet, addr net.Addr) {
+			mu.Lock()
 			receivedPackets = append(receivedPackets, packet)
 			receivedAddrs = append(receivedAddrs, addr)
+			mu.Unlock()
 		},
 	}
 
@@ -508,11 +515,18 @@ func TestRTPPacketReceiving(t *testing.T) {
 	time.Sleep(time.Millisecond * 10)
 
 	// Проверяем что пакет был получен
-	if len(receivedPackets) != 1 {
-		t.Fatalf("Ожидался 1 полученный пакет, получено %d", len(receivedPackets))
+	mu.Lock()
+	receivedCount := len(receivedPackets)
+	mu.Unlock()
+	
+	if receivedCount != 1 {
+		t.Fatalf("Ожидался 1 полученный пакет, получено %d", receivedCount)
 	}
 
+	mu.Lock()
 	receivedPacket := receivedPackets[0]
+	mu.Unlock()
+	
 	if receivedPacket.Header.SSRC != testPacket.Header.SSRC {
 		t.Errorf("SSRC не совпадает: получен %x, ожидался %x",
 			receivedPacket.Header.SSRC, testPacket.Header.SSRC)
@@ -554,6 +568,14 @@ func TestRTPPacketReceiving(t *testing.T) {
 	stats := session.GetStatistics()
 	if stats.PacketsReceived < 2 {
 		t.Errorf("Ожидалось минимум 2 полученных пакета, получено %d", stats.PacketsReceived)
+	}
+	
+	mu.Lock()
+	receivedPacketsLen := len(receivedPackets)
+	mu.Unlock()
+	
+	if receivedPacketsLen < 2 {
+		t.Errorf("Ожидалось минимум 2 полученных пакета в callback, получено %d", receivedPacketsLen)
 	}
 }
 
@@ -770,7 +792,11 @@ func TestPayloadTypes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Ошибка создания сессии для %s: %v", pt.name, err)
 			}
-			defer session.Stop()
+			defer func() {
+				if err := session.Stop(); err != nil {
+					t.Logf("Ошибка остановки сессии: %v", err)
+				}
+			}()
 
 			// Проверяем настройки
 			if session.GetPayloadType() != pt.payloadType {

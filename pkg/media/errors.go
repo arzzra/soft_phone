@@ -23,6 +23,7 @@ const (
 	ErrorCodeAudioCodecUnsupported
 	ErrorCodeAudioTimingInvalid
 	ErrorCodeAudioBufferFull
+	ErrorCodePayloadTypeUnsupported
 
 	// Ошибки RTP
 	ErrorCodeRTPSessionNotFound
@@ -71,6 +72,8 @@ func (code MediaErrorCode) String() string {
 		return "AudioTimingInvalid"
 	case ErrorCodeAudioBufferFull:
 		return "AudioBufferFull"
+	case ErrorCodePayloadTypeUnsupported:
+		return "PayloadTypeUnsupported"
 	case ErrorCodeRTPSessionNotFound:
 		return "RTPSessionNotFound"
 	case ErrorCodeRTPSendFailed:

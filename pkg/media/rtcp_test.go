@@ -603,7 +603,9 @@ func TestAudioProcessorIntegration(t *testing.T) {
 				codec:  pt.name,
 				active: false,
 			}
-			session.AddRTPSession("test", mockRTP)
+			if err := session.AddRTPSession("test", mockRTP); err != nil {
+				t.Fatalf("Ошибка добавления RTP сессии: %v", err)
+			}
 
 			err = session.SendAudio(audioData)
 			if err != nil {
@@ -798,7 +800,9 @@ func BenchmarkRTCPOperations(b *testing.B) {
 	})
 
 	b.Run("UpdateRTCPStats", func(b *testing.B) {
-		session.EnableRTCP(true)
+		if err := session.EnableRTCP(true); err != nil {
+			b.Errorf("Ошибка включения RTCP: %v", err)
+		}
 		for i := 0; i < b.N; i++ {
 			session.updateRTCPStats(1, 160)
 		}
@@ -820,7 +824,9 @@ func BenchmarkAudioProcessing(b *testing.B) {
 
 	// Добавляем mock RTP сессию
 	mockRTP := &MockRTPSession{id: "benchmark", codec: "PCMU", active: true}
-	session.AddRTPSession("benchmark", mockRTP)
+	if err := session.AddRTPSession("benchmark", mockRTP); err != nil {
+		b.Fatalf("Ошибка добавления RTP сессии: %v", err)
+	}
 
 	audioData := generateTestAudio(160)
 

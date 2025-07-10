@@ -460,6 +460,7 @@ func (b *sdpMediaBuilder) recreateRTPSession() error {
 		err = b.mediaSession.RemoveRTPSession("primary")
 		if err != nil {
 			// Игнорируем ошибку если сессия не найдена
+			_ = err // Подавляем предупреждение линтера о пустой ветке
 		}
 	}
 

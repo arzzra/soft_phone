@@ -27,10 +27,18 @@ Package dialog предоставляет полную реализацию уп
 
 Создание UASUAC и исходящий звонок:
 
+	// Настройка транспорта
+	transportConfig := dialog.TransportConfig{
+		Type: dialog.TransportUDP,
+		Host: "0.0.0.0",
+		Port: 5060,
+	}
+
 	// Создаём User Agent
 	ua, err := dialog.NewUASUAC(
+		dialog.WithTransport(transportConfig),
 		dialog.WithHostname("myphone.example.com"),
-		dialog.WithListenAddr("0.0.0.0:5060"),
+		dialog.WithContactName("alice"),
 		dialog.WithLogger(logger),
 	)
 	if err != nil {
@@ -95,8 +103,17 @@ Package dialog предоставляет полную реализацию уп
 		},
 	}
 
+	// Настройка транспорта для UASUAC
+	transportConfig := dialog.TransportConfig{
+		Type: dialog.TransportUDP,
+		Host: "192.168.1.100",
+		Port: 5060,
+	}
+
 	ua, err := dialog.NewUASUAC(
+		dialog.WithTransport(transportConfig),
 		dialog.WithEndpoints(endpointConfig),
+		dialog.WithContactName("softphone"),
 	)
 
 	// Звонок с использованием только username
@@ -148,20 +165,44 @@ Package dialog предоставляет полную реализацию уп
 
 Поддерживаются следующие транспорты:
 
-	// UDP (по умолчанию)
-	dialog.WithUDP()
+	// UDP транспорт
+	udpConfig := dialog.TransportConfig{
+		Type: dialog.TransportUDP,
+		Host: "0.0.0.0",
+		Port: 5060,
+	}
 
-	// TCP
-	dialog.WithTCP()
+	// TCP транспорт с keep-alive
+	tcpConfig := dialog.TransportConfig{
+		Type:            dialog.TransportTCP,
+		Host:            "0.0.0.0",
+		Port:            5061,
+		KeepAlive:       true,
+		KeepAlivePeriod: 30,
+	}
 
-	// TLS
-	dialog.WithTLS()
+	// TLS транспорт
+	tlsConfig := dialog.TransportConfig{
+		Type: dialog.TransportTLS,
+		Host: "0.0.0.0",
+		Port: 5062,
+	}
 
-	// WebSocket
-	dialog.WithWebSocket("/sip")
+	// WebSocket транспорт
+	wsConfig := dialog.TransportConfig{
+		Type:   dialog.TransportWS,
+		Host:   "0.0.0.0",
+		Port:   8080,
+		WSPath: "/sip",
+	}
 
-	// WebSocket Secure
-	dialog.WithWebSocketSecure("/sip")
+	// WebSocket Secure транспорт
+	wssConfig := dialog.TransportConfig{
+		Type:   dialog.TransportWSS,
+		Host:   "0.0.0.0",
+		Port:   8443,
+		WSPath: "/sip",
+	}
 
 # Безопасность
 

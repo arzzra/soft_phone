@@ -13,10 +13,18 @@ import (
 // Example_basicCall демонстрирует базовый исходящий вызов
 func Example_basicCall() {
 	// Создаём UASUAC с базовой конфигурацией
+	transportConfig := dialog.TransportConfig{
+		Type:       dialog.TransportUDP,
+		Host:       "192.168.1.100",
+		Port:       5060,
+		KeepAlive:  true,
+		KeepAlivePeriod: 30,
+	}
+	
 	ua, err := dialog.NewUASUAC(
+		dialog.WithTransport(transportConfig),
 		dialog.WithHostname("softphone.example.com"),
-		dialog.WithListenAddr("192.168.1.100:5060"),
-		dialog.WithUDP(), // Используем UDP транспорт
+		dialog.WithContactName("alice"),
 	)
 	if err != nil {
 		log.Fatal("Ошибка создания UASUAC:", err)
@@ -79,8 +87,16 @@ func Example_withEndpoints() {
 	}
 
 	// Создаём UASUAC с endpoints
+	transportConfig := dialog.TransportConfig{
+		Type: dialog.TransportUDP,
+		Host: "192.168.1.100",
+		Port: 5060,
+	}
+	
 	ua, err := dialog.NewUASUAC(
-		// dialog.WithEndpoints(endpoints), // TODO: Добавить после реализации
+		dialog.WithTransport(transportConfig),
+		dialog.WithEndpoints(endpoints),
+		dialog.WithContactName("softphone"),
 		dialog.WithLogger(&customLogger{}),
 	)
 	if err != nil {
@@ -95,7 +111,6 @@ func Example_withEndpoints() {
 		log.Println("Ошибка создания диалога:", err)
 	}
 	_ = dialog
-	_ = endpoints // TODO: Использовать после реализации WithEndpoints
 }
 
 // Example_customHeaders демонстрирует добавление кастомных заголовков
@@ -137,47 +152,68 @@ func Example_customHeaders() {
 // Example_transportTypes демонстрирует различные типы транспорта
 func Example_transportTypes() {
 	// UDP транспорт (по умолчанию)
-	uaUDP, _ := dialog.NewUASUAC(
-		dialog.WithUDP(),
-		dialog.WithListenAddr("0.0.0.0:5060"),
-	)
+	udpConfig := dialog.TransportConfig{
+		Type: dialog.TransportUDP,
+		Host: "0.0.0.0",
+		Port: 5060,
+	}
+	uaUDP, _ := dialog.NewUASUAC(dialog.WithTransport(udpConfig))
 	defer uaUDP.Close()
 
 	// TCP транспорт
-	uaTCP, _ := dialog.NewUASUAC(
-		dialog.WithTCP(),
-		dialog.WithListenAddr("0.0.0.0:5061"),
-	)
+	tcpConfig := dialog.TransportConfig{
+		Type:      dialog.TransportTCP,
+		Host:      "0.0.0.0",
+		Port:      5061,
+		KeepAlive: true,
+		KeepAlivePeriod: 30,
+	}
+	uaTCP, _ := dialog.NewUASUAC(dialog.WithTransport(tcpConfig))
 	defer uaTCP.Close()
 
 	// TLS транспорт
-	uaTLS, _ := dialog.NewUASUAC(
-		dialog.WithTLS(),
-		dialog.WithListenAddr("0.0.0.0:5062"),
-	)
+	tlsConfig := dialog.TransportConfig{
+		Type: dialog.TransportTLS,
+		Host: "0.0.0.0",
+		Port: 5062,
+	}
+	uaTLS, _ := dialog.NewUASUAC(dialog.WithTransport(tlsConfig))
 	defer uaTLS.Close()
 
 	// WebSocket транспорт
-	uaWS, _ := dialog.NewUASUAC(
-		dialog.WithWebSocket("/sip"),
-		dialog.WithListenAddr("0.0.0.0:8080"),
-	)
+	wsConfig := dialog.TransportConfig{
+		Type:   dialog.TransportWS,
+		Host:   "0.0.0.0",
+		Port:   8080,
+		WSPath: "/sip",
+	}
+	uaWS, _ := dialog.NewUASUAC(dialog.WithTransport(wsConfig))
 	defer uaWS.Close()
 
 	// WebSocket Secure транспорт
-	uaWSS, _ := dialog.NewUASUAC(
-		dialog.WithWebSocketSecure("/sip"),
-		dialog.WithListenAddr("0.0.0.0:8443"),
-	)
+	wssConfig := dialog.TransportConfig{
+		Type:   dialog.TransportWSS,
+		Host:   "0.0.0.0",
+		Port:   8443,
+		WSPath: "/sip",
+	}
+	uaWSS, _ := dialog.NewUASUAC(dialog.WithTransport(wssConfig))
 	defer uaWSS.Close()
 }
 
 // Example_incomingCall демонстрирует обработку входящих вызовов
 func Example_incomingCall() {
 	// Создаём UASUAC
+	transportConfig := dialog.TransportConfig{
+		Type: dialog.TransportUDP,
+		Host: "0.0.0.0",
+		Port: 5060,
+	}
+	
 	ua, err := dialog.NewUASUAC(
+		dialog.WithTransport(transportConfig),
 		dialog.WithHostname("softphone.example.com"),
-		dialog.WithListenAddr("0.0.0.0:5060"),
+		dialog.WithContactName("softphone"),
 	)
 	if err != nil {
 		log.Fatal("Ошибка создания UASUAC:", err)

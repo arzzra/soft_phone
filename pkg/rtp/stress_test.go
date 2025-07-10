@@ -38,7 +38,9 @@ func TestStressHighConcurrency(t *testing.T) {
 	}
 	defer session.Stop()
 
-	session.Start()
+	if err := session.Start(); err != nil {
+		t.Fatalf("Ошибка запуска сессии: %v", err)
+	}
 
 	// Счетчики операций
 	var (
@@ -177,7 +179,9 @@ func TestStressMemoryPressure(t *testing.T) {
 
 		sessions[i] = session
 		transports[i] = transport
-		session.Start()
+		if err := session.Start(); err != nil {
+		t.Fatalf("Ошибка запуска сессии: %v", err)
+	}
 	}
 
 	// Обрабатываем пакеты под memory pressure
@@ -265,7 +269,9 @@ func TestStressLongRunning(t *testing.T) {
 	}
 	defer session.Stop()
 
-	session.Start()
+	if err := session.Start(); err != nil {
+		t.Fatalf("Ошибка запуска сессии: %v", err)
+	}
 
 	// Счетчики для мониторинга
 	var (
@@ -484,7 +490,9 @@ func BenchmarkRTPPacketProcessing(b *testing.B) {
 	}
 	defer session.Stop()
 
-	session.Start()
+	if err := session.Start(); err != nil {
+		b.Fatalf("Ошибка запуска сессии: %v", err)
+	}
 
 	packet := &rtp.Packet{
 		Header: rtp.Header{

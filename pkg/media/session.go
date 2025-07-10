@@ -319,6 +319,18 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 		}
 	}
 
+	// Проверяем поддерживается ли payload type
+	if !isSupportedPayloadType(config.PayloadType) {
+		return nil, &MediaError{
+			Code:      ErrorCodePayloadTypeUnsupported,
+			Message:   fmt.Sprintf("неподдерживаемый payload type: %d", config.PayloadType),
+			SessionID: config.SessionID,
+			Context: map[string]interface{}{
+				"payload_type": config.PayloadType,
+			},
+		}
+	}
+
 	// Устанавливаем значения по умолчанию
 	if config.Ptime == 0 {
 		config.Ptime = time.Millisecond * 20
@@ -1070,6 +1082,16 @@ func (ms *MediaSession) updateDTMFReceiveStats() {
 	defer ms.statsMutex.Unlock()
 
 	ms.stats.DTMFEventsReceived++
+}
+
+// isSupportedPayloadType проверяет поддерживается ли данный payload type
+func isSupportedPayloadType(pt PayloadType) bool {
+	switch pt {
+	case PayloadTypePCMU, PayloadTypePCMA, PayloadTypeGSM, PayloadTypeG728, PayloadTypeG729, PayloadTypeG722:
+		return true
+	default:
+		return false
+	}
 }
 
 // getSampleRateForPayloadType возвращает частоту дискретизации для payload типа
