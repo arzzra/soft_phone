@@ -8,6 +8,12 @@ import (
 
 // Менеджер диалогов, хандлер в одном объекте
 type IUU interface {
+	NewDialog(ctx context.Context) error
+	// устанавливаем хендлер
+	OnIncomingCall(handler OnIncomingCall)
+
+	Start(ctx context.Context) error
+	Terminate() error
 }
 
 type IDialog interface {
@@ -63,6 +69,8 @@ type IDialog interface {
 type RequestOpt func(request sip.Message)
 
 type ResponseOpt func(resp sip.Message)
+
+type OptDialog func(dialog *Dialog)
 
 type ITx interface {
 	// Возвращает запрос который создал транзакцию

@@ -9,27 +9,27 @@ import (
 func newRespFromReq(req *sip.Request,
 	statusCode int, reason string, body *Body) *sip.Response {
 
-	var b []byte
-	var contentType string
+	resp := sip.NewResponseFromRequest(req, statusCode, reason, nil)
+
 	if body != nil {
-		b = body.Content()
-		contentType = body.ContentType()
-	}
-	resp := sip.NewResponseFromRequest(req, statusCode, reason, b)
-	if len(contentType) > 0 {
-		ct := sip.ContentTypeHeader(contentType)
-		resp.AppendHeader(&ct)
+		head := sip.ContentTypeHeader(body.contentType)
+		resp.SetBody(body.Content())
+		resp.AppendHeader(&head)
 	}
 
 	return resp
 }
 
-func (t *TX) Answer(body *Body) error {
+func (t *TX) Answer(body *Body, opts ...ResponseOpt) error {
 	if t.IsClient() {
 		return fmt.Errorf("cannot answer client transaction")
 	}
 
 	resp := newRespFromReq(t.Request(), sip.StatusOK, "OK", body)
+
+	for _, opt := range opts {
+		opt(resp)
+	}
 
 	if sTx, ok := t.tx.(sip.ServerTransaction); ok {
 		err := sTx.Respond(resp)
@@ -46,7 +46,7 @@ func (t *TX) Reject(code int, reason string, opts ...ResponseOpt) error {
 	if t.IsClient() {
 		return fmt.Errorf("cannot answer client transaction")
 	}
-	resp := newRespFromReq(t.Request(), code, reason, body)
+	resp := newRespFromReq(t.Request(), code, reason, nil)
 
 	for _, opt := range opts {
 		opt(resp)

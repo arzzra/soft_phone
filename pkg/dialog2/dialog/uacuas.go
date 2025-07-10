@@ -3,10 +3,11 @@ package dialog
 import (
 	"context"
 	"fmt"
-	"github.com/emiago/sipgo"
-	"github.com/emiago/sipgo/sip"
 	"net"
 	"strconv"
+	
+	"github.com/emiago/sipgo"
+	"github.com/emiago/sipgo/sip"
 )
 
 type Config struct {
@@ -19,6 +20,10 @@ type Config struct {
 	TransportConfigs []TransportConfig
 	// Тестовый режим
 	TestMode bool
+	// Хосты для прослушивания
+	Hosts []string
+	// Порт для прослушивания
+	Port uint16
 }
 
 var (
@@ -30,6 +35,7 @@ type UACUAS struct {
 	uas    *sipgo.Server
 	uac    *sipgo.Client
 	config Config
+	cb     OnIncomingCall
 }
 
 type tagGen func() string
@@ -39,11 +45,18 @@ var newTag tagGen
 var newCallId callIdGen
 
 func NewUACUAS(cfg Config) (*UACUAS, error) {
-	// TODO: callbacks пока не используется
-	// if callbacks == nil {
-	// 	return nil, fmt.Errorf("callbacks is nil")
-	// }
-	ua, err := sipgo.NewUA(sipgo.WithUserAgent("sss"), sipgo.WithUserAgentHostname(cfg.Hosts[0]))
+	// Проверяем конфигурацию
+	if len(cfg.Hosts) == 0 {
+		return nil, fmt.Errorf("конфигурация должна содержать хотя бы один хост")
+	}
+	
+	// Устанавливаем значения по умолчанию
+	userAgent := cfg.UserAgent
+	if userAgent == "" {
+		userAgent = "SoftPhone/1.0"
+	}
+	
+	ua, err := sipgo.NewUA(sipgo.WithUserAgent(userAgent), sipgo.WithUserAgentHostname(cfg.Hosts[0]))
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +101,11 @@ func NewUACUAS(cfg Config) (*UACUAS, error) {
 // ServeUDP serves a UDP connection or mock for tests
 func (u *UACUAS) ServeUDP(c net.PacketConn) error {
 	if c == nil {
-		return u.uas.ListenAndServe(context.Background(), "udp", u.config.Hosts[0]+":"+strconv.Itoa(int(u.config.Port)))
+		port := u.config.Port
+		if port == 0 {
+			port = 5060 // Порт SIP по умолчанию
+		}
+		return u.uas.ListenAndServe(context.Background(), "udp", u.config.Hosts[0]+":"+strconv.Itoa(int(port)))
 	}
 	return u.uas.ServeUDP(c)
 }
@@ -102,6 +119,10 @@ func (u *UACUAS) onRequests() {
 	u.uas.OnCancel(handleCancel)
 	u.uas.OnBye(handleBye)
 	u.uas.OnAck(handleACK)
+	u.uas.OnUpdate(handleUpdate)
+	u.uas.OnOptions(handleOptions)
+	u.uas.OnNotify(handleNotify)
+	u.uas.OnRegister(handleRegister)
 }
 
 func initSessionsMap(f func() string) {
@@ -114,4 +135,9 @@ func (u *UACUAS) createDefaultDialog() *Dialog {
 		profile: &u.config.profile,
 	}
 	return dialog
+}
+
+// OnIncomingCall устанавливает обработчик для входящих вызовов
+func (u *UACUAS) OnIncomingCall(handler OnIncomingCall) {
+	u.cb = handler
 }

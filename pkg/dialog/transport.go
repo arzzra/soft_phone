@@ -201,6 +201,52 @@ func (tc TransportConfig) GetListenAddr() string {
 	return fmt.Sprintf("%s:%d", tc.Host, tc.Port)
 }
 
+// GetDefaultPort возвращает порт по умолчанию для типа транспорта.
+//
+// Стандартные порты:
+//   - UDP: 5060
+//   - TCP: 5060
+//   - TLS: 5061
+//   - WS: 5060
+//   - WSS: 5061
+func (tc TransportConfig) GetDefaultPort() int {
+	switch tc.Type {
+	case TransportTLS, TransportWSS:
+		return 5061
+	default:
+		return 5060
+	}
+}
+
+// GetTransportString возвращает строковое представление транспорта.
+//
+// Используется для логирования и отладки.
+// Формат: "TYPE://host:port[/path]"
+func (tc TransportConfig) GetTransportString() string {
+	scheme := strings.ToLower(string(tc.Type))
+	addr := fmt.Sprintf("%s:%d", tc.Host, tc.Port)
+	
+	if tc.IsWebSocket() && tc.WSPath != "" && tc.WSPath != "/" {
+		return fmt.Sprintf("%s://%s%s", scheme, addr, tc.WSPath)
+	}
+	
+	return fmt.Sprintf("%s://%s", scheme, addr)
+}
+
+// Clone создаёт глубокую копию конфигурации транспорта.
+//
+// Используется для создания независимых копий конфигурации.
+func (tc TransportConfig) Clone() TransportConfig {
+	return TransportConfig{
+		Type:            tc.Type,
+		Host:            tc.Host,
+		Port:            tc.Port,
+		WSPath:          tc.WSPath,
+		KeepAlive:       tc.KeepAlive,
+		KeepAlivePeriod: tc.KeepAlivePeriod,
+	}
+}
+
 // TransportOptions для расширения в будущем
 type TransportOptions struct {
 	// Дополнительные опции могут быть добавлены здесь

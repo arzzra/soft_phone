@@ -107,7 +107,7 @@ type Dialog struct {
 	handlersMu         sync.Mutex
 
 	// Нужно хранить первую транзакцию
-	firstTXIncoming *TX
+	firstTX *TX
 }
 
 // ID возвращает уникальный идентификатор диалога.
@@ -210,7 +210,7 @@ func (s *Dialog) Terminate() error {
 		slog.String("dialogID", s.id),
 		slog.String("state", s.State().String()),
 		slog.String("callID", string(s.callID)))
-	
+
 	if s.State() != InCall {
 		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
 		slog.Debug("Dialog.Terminate failed", slog.String("error", err.Error()))
@@ -222,11 +222,11 @@ func (s *Dialog) Terminate() error {
 	if s.ctx != nil {
 		ctx = s.ctx
 	}
-	
+
 	req := s.makeRequest(sip.BYE)
 	slog.Debug("Dialog.Terminate creating BYE request",
 		slog.String("request", req.String()))
-	
+
 	// Отправляем запрос
 	tx, err := s.sendReq(ctx, req)
 	if err != nil {
@@ -234,17 +234,17 @@ func (s *Dialog) Terminate() error {
 			slog.String("error", err.Error()))
 		return errors.Wrap(err, "failed to send BYE request")
 	}
-	
+
 	slog.Debug("Dialog.Terminate BYE sent successfully",
 		slog.String("txID", tx.Request().TransactionID()))
-	
+
 	// Переводим диалог в состояние завершения
 	if err := s.setState(Terminating, tx); err != nil {
 		slog.Debug("Dialog.Terminate setState failed",
 			slog.String("error", err.Error()))
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -259,7 +259,7 @@ func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (
 		slog.String("dialogID", s.id),
 		slog.String("target", target),
 		slog.String("state", s.State().String()))
-	
+
 	if s.State() != IDLE {
 		err := fmt.Errorf("dialog already started, state: %s", s.State())
 		slog.Debug("Dialog.Start failed", slog.String("error", err.Error()))
@@ -274,48 +274,31 @@ func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (
 			slog.String("error", err.Error()))
 		return nil, errors.Wrap(err, "failed to parse target URI")
 	}
-	
+
 	// Устанавливаем удаленный адрес
 	s.uriMu.Lock()
 	s.remoteTarget = targetURI
 	s.remoteURI = targetURI
 	s.uriMu.Unlock()
-	
-	// Инициализируем заголовки From и To для UAC
-	if s.from == nil {
-		s.from = &sip.FromHeader{
-			DisplayName: s.profile.DisplayName,
-			Address:     s.profile.Address,
-			Params:      sip.NewParams().Add("tag", s.localTag),
-		}
-	}
-	
-	if s.to == nil {
-		s.to = &sip.ToHeader{
-			DisplayName: "",
-			Address:     targetURI,
-			Params:      sip.NewParams(),
-		}
-	}
-	
+
 	// Создаем INVITE запрос
 	req := s.makeRequest(sip.INVITE)
-	
+
 	// Применяем опции
 	for _, opt := range opts {
 		opt(req)
 	}
-	
+
 	slog.Debug("Dialog.Start creating INVITE",
 		slog.String("request", req.String()))
-	
+
 	// Переводим диалог в состояние вызова
 	if err := s.setState(Calling, nil); err != nil {
 		slog.Debug("Dialog.Start setState failed",
 			slog.String("error", err.Error()))
 		return nil, err
 	}
-	
+
 	// Отправляем запрос
 	tx, err := s.sendReq(ctx, req)
 	if err != nil {
@@ -325,10 +308,10 @@ func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (
 		s.setState(IDLE, nil)
 		return nil, errors.Wrap(err, "failed to send INVITE")
 	}
-	
+
 	slog.Debug("Dialog.Start INVITE sent successfully",
 		slog.String("txID", tx.Request().TransactionID()))
-	
+
 	return tx, nil
 }
 
@@ -342,24 +325,24 @@ func (s *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...RequestOpt) 
 		slog.String("dialogID", s.id),
 		slog.String("target", target.String()),
 		slog.String("state", s.State().String()))
-	
+
 	if s.State() != InCall {
 		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
 		slog.Debug("Dialog.Refer failed", slog.String("error", err.Error()))
 		return nil, err
 	}
-	
+
 	// Создаем REFER запрос
 	req := s.ReferRequest(target, nil)
-	
+
 	// Применяем опции
 	for _, opt := range opts {
 		opt(req)
 	}
-	
+
 	slog.Debug("Dialog.Refer creating REFER request",
 		slog.String("request", req.String()))
-	
+
 	// Отправляем запрос
 	tx, err := s.sendReq(ctx, req)
 	if err != nil {
@@ -367,10 +350,10 @@ func (s *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...RequestOpt) 
 			slog.String("error", err.Error()))
 		return nil, errors.Wrap(err, "failed to send REFER")
 	}
-	
+
 	slog.Debug("Dialog.Refer sent successfully",
 		slog.String("txID", tx.Request().TransactionID()))
-	
+
 	return tx, nil
 }
 
@@ -384,7 +367,7 @@ func (s *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts .
 		slog.String("dialogID", s.id),
 		slog.String("replaceDialogID", replaceDialog.ID()),
 		slog.String("state", s.State().String()))
-	
+
 	if s.State() != InCall {
 		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
 		slog.Debug("Dialog.ReferReplace failed", slog.String("error", err.Error()))
@@ -396,35 +379,35 @@ func (s *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts .
 		slog.Debug("Dialog.ReferReplace failed", slog.String("error", err.Error()))
 		return nil, err
 	}
-	
+
 	// Получаем информацию для Replaces заголовка
 	callID := replaceDialog.CallID()
 	localTag := replaceDialog.LocalTag()
 	remoteTag := replaceDialog.RemoteTag()
-	
+
 	slog.Debug("Dialog.ReferReplace replace info",
 		slog.String("callID", string(callID)),
 		slog.String("localTag", localTag),
 		slog.String("remoteTag", remoteTag))
-	
+
 	// Создаем REFER запрос с Replaces
 	// TODO: Нужно создать метод ReferWithReplace с правильными параметрами
 	// Пока используем обычный REFER
 	req := s.ReferRequest(replaceDialog.RemoteURI(), nil)
-	
+
 	// Добавляем Replaces информацию в Refer-To заголовок
 	replaces := fmt.Sprintf("%s;to-tag=%s;from-tag=%s", callID, remoteTag, localTag)
 	replacesHeader := sip.NewHeader("Replaces", replaces)
 	req.AppendHeader(replacesHeader)
-	
+
 	// Применяем опции
 	for _, opt := range opts {
 		opt(req)
 	}
-	
+
 	slog.Debug("Dialog.ReferReplace creating REFER with Replaces",
 		slog.String("request", req.String()))
-	
+
 	// Отправляем запрос
 	tx, err := s.sendReq(ctx, req)
 	if err != nil {
@@ -432,10 +415,10 @@ func (s *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts .
 			slog.String("error", err.Error()))
 		return nil, errors.Wrap(err, "failed to send REFER with Replaces")
 	}
-	
+
 	slog.Debug("Dialog.ReferReplace sent successfully",
 		slog.String("txID", tx.Request().TransactionID()))
-	
+
 	return tx, nil
 }
 
@@ -447,7 +430,7 @@ func (s *Dialog) SendRequest(ctx context.Context, opts ...RequestOpt) (IClientTX
 	slog.Debug("Dialog.SendRequest",
 		slog.String("dialogID", s.id),
 		slog.String("state", s.State().String()))
-	
+
 	if s.State() == Ended {
 		err := fmt.Errorf("dialog has ended")
 		slog.Debug("Dialog.SendRequest failed", slog.String("error", err.Error()))
@@ -457,22 +440,22 @@ func (s *Dialog) SendRequest(ctx context.Context, opts ...RequestOpt) (IClientTX
 	// Определяем метод запроса из опций
 	method := sip.INFO // По умолчанию INFO
 	var req *sip.Request
-	
+
 	// Создаем запрос
 	req = s.makeRequest(method)
-	
+
 	// Применяем все опции
 	for _, opt := range opts {
 		opt(req)
 	}
-	
+
 	// Получаем актуальный метод после применения опций
 	method = req.Method
-	
+
 	slog.Debug("Dialog.SendRequest creating request",
 		slog.String("method", string(method)),
 		slog.String("request", req.String()))
-	
+
 	// Отправляем запрос
 	tx, err := s.sendReq(ctx, req)
 	if err != nil {
@@ -480,11 +463,11 @@ func (s *Dialog) SendRequest(ctx context.Context, opts ...RequestOpt) (IClientTX
 			slog.String("error", err.Error()))
 		return nil, errors.Wrap(err, "failed to send request")
 	}
-	
+
 	slog.Debug("Dialog.SendRequest sent successfully",
 		slog.String("method", string(method)),
 		slog.String("txID", tx.Request().TransactionID()))
-	
+
 	return tx, nil
 }
 
@@ -584,13 +567,13 @@ func NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, error) {
 
 	// Генерируем localTag
 	di.localTag = generateTag()
-	
+
 	// Устанавливаем локальный URI из профиля
 	if di.profile != nil {
 		di.localURI = di.profile.Address
 		di.localTarget = di.profile.Address
 	}
-	
+
 	// Инициализируем локальный контакт
 	if di.localContact == nil && di.profile != nil {
 		di.localContact = &sip.ContactHeader{
@@ -793,12 +776,12 @@ func (s *Dialog) saveHeaders(req *sip.Request) {
 
 }
 
-func (s *Dialog) setFirstIncomingTX(tx *TX) {
-	s.firstTXIncoming = tx
+func (s *Dialog) setFirstTX(tx *TX) {
+	s.firstTX = tx
 }
 
 func (s *Dialog) getFirstIncomingTX() *TX {
-	return s.firstTXIncoming
+	return s.firstTX
 }
 
 // generateTag генерирует уникальный тег для диалога
@@ -808,52 +791,68 @@ func generateTag() string {
 
 // makeRequest создает новый SIP запрос в рамках диалога.
 // Автоматически добавляет необходимые заголовки: From, To, Call-ID, CSeq, Route.
+// Устанавливает локальный адрес (Laddr) в зависимости от типа диалога (UAS/UAC).
 func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
-	s.uriMu.Lock()
-	target := s.remoteTarget
-	s.uriMu.Unlock()
-	
-	// Создаем запрос с целевым URI
-	req := sip.NewRequest(method, target)
-	
-	// Добавляем заголовки диалога
-	if s.from != nil {
-		req.AppendHeader(sip.HeaderClone(s.from))
+	trg := s.remoteTarget
+	trg.Port = 0
+	newRequest := sip.NewRequest(method, trg)
+
+	// Получаем адрес из заголовка To входящего запроса для UAS
+	if s.uaType == UAS && s.initReq != nil {
+		toHeader := s.initReq.To()
+		if toHeader != nil {
+			newRequest.Laddr = sip.Addr{
+				Hostname: toHeader.Address.Host,
+				Port:     toHeader.Address.Port,
+			}
+		}
+	} else {
+		// Для исходящих вызовов (UAC) использовать первый транспорт
+		if len(uu.config.TransportConfigs) > 0 {
+			tc := uu.config.TransportConfigs[0]
+			newRequest.Laddr = sip.Addr{
+				Hostname: tc.Host,
+				Port:     tc.Port,
+			}
+		}
 	}
-	if s.to != nil {
-		req.AppendHeader(sip.HeaderClone(s.to))
+
+	fromTag := newTag()
+
+	fromHeader := sip.FromHeader{
+		DisplayName: s.profile.DisplayName,
+		Address:     s.profile.Address,
+		Params:      sip.NewParams().Add("tag", fromTag),
 	}
-	
-	// Call-ID
-	req.AppendHeader(&s.callID)
-	
-	// CSeq с увеличением локального счетчика
-	cseq := sip.CSeqHeader{
-		SeqNo:      s.localCSeq.Add(1),
-		MethodName: method,
+	newRequest.AppendHeader(&fromHeader)
+
+	toHeader := sip.ToHeader{
+		DisplayName: "",
+		Address:     s.remoteTarget,
+		Params:      nil,
 	}
-	req.AppendHeader(&cseq)
-	
-	// Contact
-	if s.localContact != nil {
-		req.AppendHeader(sip.HeaderClone(s.localContact))
-	}
-	
-	// Route set
-	for _, route := range s.routeHeaders {
-		req.AppendHeader(&route)
-	}
-	
-	// Max-Forwards
+	newRequest.AppendHeader(&toHeader)
+	newRequest.Recipient = s.remoteTarget
+
+	newRequest.AppendHeader(s.profile.Contact())
+	newRequest.AppendHeader(&s.callID)
+	newRequest.AppendHeader(&sip.CSeqHeader{SeqNo: s.NextLocalCSeq(), MethodName: method})
 	maxForwards := sip.MaxForwardsHeader(70)
-	req.AppendHeader(&maxForwards)
-	
+	newRequest.AppendHeader(&maxForwards)
+
+	if len(s.routeSet) > 0 {
+		for _, val := range s.routeSet {
+			newRequest.AppendHeader(&sip.RouteHeader{Address: val})
+		}
+	}
+
 	slog.Debug("Dialog.makeRequest created",
 		slog.String("method", string(method)),
 		slog.String("callID", string(s.callID)),
-		slog.Uint64("cseq", uint64(cseq.SeqNo)))
-	
-	return req
+		slog.String("fromTag", fromTag),
+		slog.String("localAddr", fmt.Sprintf("%s:%d", newRequest.Laddr.Hostname, newRequest.Laddr.Port)))
+
+	return newRequest
 }
 
 // sendReq отправляет запрос через транспортный уровень и создает транзакцию.
@@ -862,17 +861,17 @@ func (s *Dialog) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
 	s.activityMu.Lock()
 	s.lastActivity = time.Now()
 	s.activityMu.Unlock()
-	
+
 	// Отправляем через глобальный UAC
 	tx, err := uu.uac.TransactionRequest(ctx, req, sipgo.ClientRequestAddVia)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to send request")
 	}
-	
+
 	slog.Debug("Dialog.sendReq sent",
 		slog.String("method", string(req.Method)),
 		slog.String("txID", req.TransactionID()))
-	
+
 	// Создаем обертку транзакции
 	txWrapper := newTX(req, tx, s)
 	return txWrapper, nil

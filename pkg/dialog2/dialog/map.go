@@ -6,64 +6,64 @@ import (
 )
 
 var (
-	sessionsMap *SessionMap
+	dialogs *dialogsMap
 )
 
-type SessionKey struct {
+type dialogKey struct {
 	CallID   sip.CallIDHeader
 	LocalTag string
 }
 
-func NewDialKSessionKey(callID sip.CallIDHeader, localTag string) SessionKey {
-	return SessionKey{
+func newDialogKey(callID sip.CallIDHeader, localTag string) dialogKey {
+	return dialogKey{
 		CallID:   callID,
 		LocalTag: localTag,
 	}
 }
 
-type SessionMap struct {
+type dialogsMap struct {
 	sessions *sync.Map
 	branches *sync.Map
 	tagGen   func() string
 }
 
-func NewDialSessionMap(tagGen func() string) *SessionMap {
-	return &SessionMap{
+func newDialogsMap(tagGen func() string) *dialogsMap {
+	return &dialogsMap{
 		sessions: new(sync.Map),
 		branches: new(sync.Map),
 		tagGen:   tagGen,
 	}
 }
 
-func (dsm *SessionMap) Get(callID sip.CallIDHeader, tag string) (*Dialog, bool) {
-	if val, is := dsm.sessions.Load(NewDialKSessionKey(callID, tag)); is {
+func (dsm *dialogsMap) Get(callID sip.CallIDHeader, tag string) (*Dialog, bool) {
+	if val, is := dsm.sessions.Load(newDialogKey(callID, tag)); is {
 		return val.(*Dialog), is
 	}
 	return nil, false
 }
 
-func (dsm *SessionMap) Put(callID sip.CallIDHeader, tag string, branchID string, dSession *Dialog) {
-	dsm.sessions.Store(NewDialKSessionKey(callID, tag), dSession)
+func (dsm *dialogsMap) Put(callID sip.CallIDHeader, tag string, branchID string, dSession *Dialog) {
+	dsm.sessions.Store(newDialogKey(callID, tag), dSession)
 	dsm.AddWithTX(callID, tag, branchID)
 }
 
-func (dsm *SessionMap) AddWithTX(callID sip.CallIDHeader, tag string, txID string) {
-	dsm.branches.Store(txID, NewDialKSessionKey(callID, tag))
+func (dsm *dialogsMap) AddWithTX(callID sip.CallIDHeader, tag string, txID string) {
+	dsm.branches.Store(txID, newDialogKey(callID, tag))
 }
 
-func (dsm *SessionMap) GetWithTX(txID string) (*Dialog, bool) {
+func (dsm *dialogsMap) GetWithTX(txID string) (*Dialog, bool) {
 	if val, is := dsm.branches.Load(txID); is {
-		key := val.(SessionKey)
+		key := val.(dialogKey)
 		return dsm.Get(key.CallID, key.LocalTag)
 	}
 	return nil, false
 }
 
-func (dsm *SessionMap) Delete(callID sip.CallIDHeader, tag, txID string) (*Dialog, bool) {
-	sessKey := NewDialKSessionKey(callID, tag)
+func (dsm *dialogsMap) Delete(callID sip.CallIDHeader, tag, txID string) (*Dialog, bool) {
+	sessKey := newDialogKey(callID, tag)
 	if txID != "" {
 		if key, is := dsm.branches.Load(txID); is {
-			sessKey = key.(SessionKey)
+			sessKey = key.(dialogKey)
 		}
 	}
 	if v, is := dsm.sessions.LoadAndDelete(sessKey); is {
