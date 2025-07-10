@@ -313,21 +313,35 @@ func (d *Dialog) RemoteSeq() uint32 {
 	return d.remoteSeq
 }
 
-// IsServer возвращает true, если диалог в роли UAS
+// IsServer возвращает true, если диалог в роли UAS (сервер).
+// UAS (User Agent Server) - это роль, которую принимает UA при получении входящего INVITE.
 func (d *Dialog) IsServer() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.isServer
 }
 
-// IsClient возвращает true, если диалог в роли UAC
+// IsClient возвращает true, если диалог в роли UAC (клиент).
+// UAC (User Agent Client) - это роль, которую принимает UA при отправке INVITE.
 func (d *Dialog) IsClient() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.isClient
 }
 
-// Answer отвечает на входящий вызов
+// Answer отвечает на входящий вызов с кодом 200 OK.
+// Может быть вызван только для серверных диалогов (UAS) в состоянии early.
+//
+// Параметры:
+//   - body: тело ответа (обычно SDP для медиа-сессии)
+//   - headers: дополнительные заголовки для ответа
+//
+// Пример:
+//
+//	err := dialog.Answer(dialog.Body{
+//	    ContentType: "application/sdp",
+//	    Content: []byte(sdpAnswer),
+//	}, nil)
 func (d *Dialog) Answer(body Body, headers map[string]string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -390,7 +404,18 @@ func (d *Dialog) Answer(body Body, headers map[string]string) error {
 	return nil
 }
 
-// Reject отклоняет входящий вызов
+// Reject отклоняет входящий вызов с указанным кодом ошибки.
+// Может быть вызван только для серверных диалогов (UAS) в состоянии early.
+//
+// Параметры:
+//   - statusCode: SIP код ответа (400-699)
+//   - reason: текстовое описание отказа
+//   - body: тело ответа (опционально)
+//   - headers: дополнительные заголовки
+//
+// Пример:
+//
+//	err := dialog.Reject(486, "Busy Here", dialog.Body{}, nil)
 func (d *Dialog) Reject(statusCode int, reason string, body Body, headers map[string]string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -453,7 +478,16 @@ func (d *Dialog) Reject(statusCode int, reason string, body Body, headers map[st
 	return nil
 }
 
-// Terminate отправляет BYE и завершает диалог
+// Terminate завершает диалог, отправляя BYE запрос.
+// Может быть вызван только для диалогов в состоянии confirmed.
+// После успешной отправки BYE диалог переходит в состояние terminated.
+//
+// Пример:
+//
+//	err := dialog.Terminate()
+//	if err != nil {
+//	    log.Printf("Ошибка завершения диалога: %v", err)
+//	}
 func (d *Dialog) Terminate() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -495,7 +529,9 @@ func (d *Dialog) Terminate() error {
 	return nil
 }
 
-// Close закрывает диалог и освобождает все ресурсы
+// Close закрывает диалог и освобождает все ресурсы.
+// Отменяет контекст диалога и переводит его в состояние terminated.
+// Если диалог был в состоянии confirmed, сначала пытается отправить BYE.
 func (d *Dialog) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
