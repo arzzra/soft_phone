@@ -3,1449 +3,932 @@ package dialog
 import (
 	"context"
 	"fmt"
-	"strconv"
+	"github.com/emiago/sipgo"
+	"github.com/emiago/sipgo/sip"
+	"github.com/looplab/fsm"
+	"github.com/pkg/errors"
+	"log/slog"
+	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/arzzra/soft_phone/pkg/dialog/headers"
-	"github.com/emiago/sipgo/sip"
-	"github.com/looplab/fsm"
 )
 
-// Dialog представляет SIP диалог между двумя User Agent (UA).
-// Диалог - это одноранговые SIP отношения между двумя UA, которые
-// сохраняются в течение некоторого времени. Диалог устанавливается
-// определёнными SIP методами, такими как INVITE, и облегчает
-// последовательность упорядочивания и маршрутизацию SIP сообщений
-// между UA.
-//
-// Dialog реализует интерфейс IDialog и является потокобезопасным.
-//
-// Жизненный цикл диалога:
-//   - StateNone: диалог не существует
-//   - StateEarly: ранний диалог (после 1xx ответа)
-//   - StateConfirmed: подтверждённый диалог (после 2xx ответа)
-//   - StateTerminating: диалог завершается
-//   - StateTerminated: диалог завершён
-//
-// Пример использования:
-//
-//	dialog := NewDialog(uasuac, false, logger) // UAC диалог
-//	err := dialog.SetupFromInviteRequest(inviteReq)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
+// Проверяем, что Dialog реализует интерфейс IDialog
+var _ IDialog = (*Dialog)(nil)
+
+type DialogState string
+
+func (s DialogState) String() string {
+	return string(s)
+}
+
+type dualValue struct {
+	value string
+}
+
+var (
+	UAC = dualValue{"UAC"}
+	UAS = dualValue{"UAS"}
+)
+
+func (d dualValue) String() string {
+	return d.value
+}
+
+const (
+	// IDLE - это начальное состояние
+	IDLE DialogState = "IDLE"
+	// Calling - это состояние когда отправлен invite для исходящего вызова
+	Calling DialogState = "Calling"
+	// Ringing - это состояние когда получен invite для входящего вызова
+	Ringing DialogState = "Ringing"
+	// InCall - это состояние когда вызов состоялся, то есть на исходящий или входящий invite был ответ 200 OK
+	InCall DialogState = "InCall"
+	// Terminating - это состояние когда вызов в процессе завершения
+	Terminating DialogState = "Terminating"
+	// Ended - это состояние когда вызов завершен
+	Ended DialogState = "Ended"
+)
+
 type Dialog struct {
+	fsm *fsm.FSM
+
 	// Идентификация диалога
 	id        string
-	callID    sip.CallIDHeader
 	localTag  string
 	remoteTag string
 
-	// Адресация
-	localURI     sip.Uri
-	remoteURI    sip.Uri
-	localTarget  sip.Uri // Contact URI
-	remoteTarget sip.Uri // Contact URI
-	routeSet     []sip.RouteHeader
+	//Тип сессии: UAS или UAC
+	uaType dualValue
 
-	// Последовательность
-	localSeq   atomic.Uint32
-	remoteSeq  uint32
-	remoteCSeq uint32 // CSeq из последнего полученного запроса
+	//Профиль Локальный
+	profile *Profile
 
-	// Роль в диалоге
-	isServer bool // UAS роль
-	isClient bool // UAC роль
+	initReq *sip.Request
+
+	//RemotePeer
+	remoteCSeq atomic.Uint32
+	//Local
+	localCSeq atomic.Uint32
+
+	callID sip.CallIDHeader
+
+	localContact  *sip.ContactHeader
+	remoteContact *sip.ContactHeader
+
+	from *sip.FromHeader
+	to   *sip.ToHeader
+
+	uriMu        sync.Mutex
+	remoteTarget sip.Uri
+	localTarget  sip.Uri
+
+	remoteURI sip.Uri
+	localURI  sip.Uri
+
+	localBody  Body
+	remoteBody Body
+
+	routeSet     []sip.Uri
+	routeHeaders []sip.RouteHeader
 
 	// Контекст и время жизни
 	ctx          context.Context
-	cancel       context.CancelFunc
 	createdAt    time.Time
 	lastActivity time.Time
-
-	// FSM для управления состояниями
-	stateMachine *fsm.FSM
+	activityMu   sync.Mutex
 
 	// Обработчики событий
-	stateChangeHandler StateChangeHandler
-	bodyHandler        OnBodyHandler
-	requestHandler     func(*sip.Request, sip.ServerTransaction) // Обработчик входящих запросов
-	referHandler       ReferHandler                              // Обработчик REFER запросов
+	stateChangeHandler func(DialogState)
+	bodyHandler        func(*Body)
+	requestHandler     func(IServerTX)
+	handlersMu         sync.Mutex
 
-	// Транзакции и запросы
-	inviteTx      sip.Transaction // Исходная INVITE транзакция
-	inviteRequest *sip.Request    // Сохраненный INVITE запрос
+	// Нужно хранить первую транзакцию
+	firstTX *TX
 
-	// UASUAC для отправки запросов
-	uasuac *UASUAC
-
-	// Обработчик заголовков
-	headerProcessor *HeaderProcessor
-
-	// Валидатор безопасности
-	securityValidator *SecurityValidator
-
-	// Логгер для структурированного логирования
-	logger Logger
-
-	// Мьютекс для синхронизации
-	mu sync.RWMutex
-}
-
-// NewDialog создаёт новый экземпляр диалога.
-//
-// Параметры:
-//   - uasuac: User Agent для отправки и получения SIP сообщений
-//   - isServer: true если диалог создаётся как UAS (сервер), false для UAC (клиент)
-//   - logger: интерфейс для логирования (может быть nil, тогда используется NoOpLogger)
-//
-// Возвращает инициализированный диалог с настроенной машиной состояний.
-//
-// Пример:
-//
-//	// Создание серверного диалога (UAS)
-//	dialog := NewDialog(uasuac, true, logger)
-//	
-//	// Создание клиентского диалога (UAC)
-//	dialog := NewDialog(uasuac, false, logger)
-func NewDialog(uasuac *UASUAC, isServer bool, logger Logger) *Dialog {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Используем NoOpLogger если logger не предоставлен
-	if logger == nil {
-		logger = &NoOpLogger{}
-	}
-
-	d := &Dialog{
-		uasuac:            uasuac,
-		isServer:          isServer,
-		isClient:          !isServer,
-		ctx:               ctx,
-		cancel:            cancel,
-		createdAt:         time.Now(),
-		lastActivity:      time.Now(),
-		headerProcessor:   NewHeaderProcessor(),
-		securityValidator: NewSecurityValidator(DefaultSecurityConfig(), logger),
-		logger:            logger,
-	}
-
-	// Инициализируем FSM
-	d.initStateMachine()
-
-	return d
-}
-
-// initStateMachine инициализирует конечный автомат состояний
-func (d *Dialog) initStateMachine() {
-	d.stateMachine = fsm.NewFSM(
-		"none",
-		fsm.Events{
-			// Переход в ранний диалог
-			{Name: "early", Src: []string{"none"}, Dst: "early"},
-			// Переход в подтвержденный диалог
-			{Name: "confirm", Src: []string{"early"}, Dst: "confirmed"},
-			// Начало завершения
-			{Name: "terminate", Src: []string{"early", "confirmed"}, Dst: "terminating"},
-			// Завершение диалога
-			{Name: "terminated", Src: []string{"terminating", "early", "confirmed"}, Dst: "terminated"},
-		},
-		fsm.Callbacks{
-			"after_event": func(ctx context.Context, e *fsm.Event) {
-				d.handleStateChange(e)
-			},
-		},
-	)
-}
-
-// handleStateChange обрабатывает изменение состояния
-func (d *Dialog) handleStateChange(e *fsm.Event) {
-	d.mu.RLock()
-	handler := d.stateChangeHandler
-	d.mu.RUnlock()
-
-	if handler != nil {
-		oldState := d.stringToDialogState(e.Src)
-		newState := d.stringToDialogState(e.Dst)
-		handler(oldState, newState)
-	}
-}
-
-// stringToDialogState преобразует строку в DialogState
-func (d *Dialog) stringToDialogState(state string) DialogState {
-	switch state {
-	case "none":
-		return StateNone
-	case "early":
-		return StateEarly
-	case "confirmed":
-		return StateConfirmed
-	case "terminating":
-		return StateTerminating
-	case "terminated":
-		return StateTerminated
-	default:
-		return StateNone
-	}
-}
-
-// updateDialogID обновляет ID диалога на основе текущих тегов
-// ВАЖНО: Этот метод должен вызываться только внутри защищенных мьютексом секций
-// для предотвращения race conditions при обновлении ID диалога
-func (d *Dialog) updateDialogID() {
-	// Формируем ID диалога из Call-ID и тегов
-	var sb strings.Builder
-	sb.WriteString(d.callID.Value())
-	sb.WriteString(";from-tag=")
-
-	if d.isServer {
-		sb.WriteString(d.remoteTag)
-		sb.WriteString(";to-tag=")
-		sb.WriteString(d.localTag)
-	} else {
-		sb.WriteString(d.localTag)
-		sb.WriteString(";to-tag=")
-		sb.WriteString(d.remoteTag)
-	}
-
-	d.id = sb.String()
+	// Транзакция re-INVITE для обновления параметров сессии
+	reInviteTX *TX
+	reInviteMu sync.Mutex
 }
 
 // ID возвращает уникальный идентификатор диалога.
-// Идентификатор формируется из Call-ID и тегов From/To.
-// Формат: "callID;from-tag=tag1;to-tag=tag2"
-func (d *Dialog) ID() string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.id
+// Формат: "callID:localTag:remoteTag" или "callID:localTag:pending" если remoteTag еще не установлен.
+func (s *Dialog) ID() string {
+	return s.id
+}
+
+// SetID устанавливает новый идентификатор диалога.
+// Используется менеджером диалогов при необходимости обновления ID.
+func (s *Dialog) SetID(newID string) {
+	s.id = newID
 }
 
 // State возвращает текущее состояние диалога.
-// Возможные состояния:
-//   - StateNone: диалог не существует
-//   - StateEarly: ранний диалог (после 1xx ответа)
-//   - StateConfirmed: подтверждённый диалог (после 2xx ответа)
-//   - StateTerminating: диалог в процессе завершения
-//   - StateTerminated: диалог завершён
-func (d *Dialog) State() DialogState {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.stringToDialogState(d.stateMachine.Current())
+// Возможные состояния: IDLE, Calling, Ringing, InCall, Terminating, Ended.
+func (s *Dialog) State() DialogState {
+	if s.fsm != nil {
+		return DialogState(s.fsm.Current())
+	}
+	return IDLE
+}
+
+// LocalTag возвращает локальный тег диалога.
+// Тег генерируется при создании диалога и используется для его идентификации.
+func (s *Dialog) LocalTag() string {
+	return s.localTag
+}
+
+// RemoteTag возвращает удаленный тег диалога.
+// Устанавливается из ответа удаленной стороны.
+func (s *Dialog) RemoteTag() string {
+	return s.remoteTag
 }
 
 // CallID возвращает заголовок Call-ID диалога.
-// Call-ID - это уникальный идентификатор, общий для всех
-// запросов и ответов, отправляемых в рамках диалога.
-func (d *Dialog) CallID() sip.CallIDHeader {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.callID
+// Call-ID уникально идентифицирует SIP диалог вместе с тегами.
+func (s *Dialog) CallID() sip.CallIDHeader {
+	return s.callID
 }
 
-// LocalTag возвращает локальный тег
-func (d *Dialog) LocalTag() string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.localTag
+// LocalURI возвращает локальный URI (From для UAC, To для UAS).
+// Метод потокобезопасен.
+func (s *Dialog) LocalURI() sip.Uri {
+	s.uriMu.Lock()
+	defer s.uriMu.Unlock()
+	return s.localURI
 }
 
-// RemoteTag возвращает удаленный тег
-func (d *Dialog) RemoteTag() string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.remoteTag
+// RemoteURI возвращает удаленный URI (To для UAC, From для UAS).
+// Метод потокобезопасен.
+func (s *Dialog) RemoteURI() sip.Uri {
+	s.uriMu.Lock()
+	defer s.uriMu.Unlock()
+	return s.remoteURI
 }
 
-// SetID устанавливает новый ID диалога (используется при обновлении ID в менеджере)
-func (d *Dialog) SetID(newID string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.id = newID
+// LocalTarget возвращает локальный Contact URI.
+// Используется для маршрутизации последующих запросов.
+// Метод потокобезопасен.
+func (s *Dialog) LocalTarget() sip.Uri {
+	s.uriMu.Lock()
+	defer s.uriMu.Unlock()
+	return s.localTarget
 }
 
-// LocalURI возвращает локальный URI
-func (d *Dialog) LocalURI() sip.Uri {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.localURI
+// RemoteTarget возвращает удаленный Contact URI.
+// Используется для маршрутизации последующих запросов.
+// Метод потокобезопасен.
+func (s *Dialog) RemoteTarget() sip.Uri {
+	s.uriMu.Lock()
+	defer s.uriMu.Unlock()
+	return s.remoteTarget
 }
 
-// RemoteURI возвращает удаленный URI
-func (d *Dialog) RemoteURI() sip.Uri {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.remoteURI
+// RouteSet возвращает набор Route заголовков для маршрутизации.
+// Устанавливается из Record-Route заголовков при установлении диалога.
+func (s *Dialog) RouteSet() []sip.RouteHeader {
+	return s.routeHeaders
 }
 
-// LocalTarget возвращает локальный Contact URI
-func (d *Dialog) LocalTarget() sip.Uri {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.localTarget
+// LocalSeq возвращает локальный порядковый номер CSeq.
+// Увеличивается с каждым новым запросом в рамках диалога.
+func (s *Dialog) LocalSeq() uint32 {
+	return s.localCSeq.Load()
 }
 
-// RemoteTarget возвращает удаленный Contact URI
-func (d *Dialog) RemoteTarget() sip.Uri {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.remoteTarget
-}
-
-// RouteSet возвращает набор маршрутов
-func (d *Dialog) RouteSet() []sip.RouteHeader {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.routeSet
-}
-
-// LocalSeq возвращает локальный CSeq
-func (d *Dialog) LocalSeq() uint32 {
-	return d.localSeq.Load()
-}
-
-// RemoteSeq возвращает удаленный CSeq
-func (d *Dialog) RemoteSeq() uint32 {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.remoteSeq
-}
-
-// IsServer возвращает true, если диалог в роли UAS (сервер).
-// UAS (User Agent Server) - это роль, которую принимает UA при получении входящего INVITE.
-func (d *Dialog) IsServer() bool {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.isServer
-}
-
-// IsClient возвращает true, если диалог в роли UAC (клиент).
-// UAC (User Agent Client) - это роль, которую принимает UA при отправке INVITE.
-func (d *Dialog) IsClient() bool {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.isClient
-}
-
-// Answer отвечает на входящий вызов с кодом 200 OK.
-// Может быть вызван только для серверных диалогов (UAS) в состоянии early.
-//
-// Параметры:
-//   - body: тело ответа (обычно SDP для медиа-сессии)
-//   - headers: дополнительные заголовки для ответа
-//
-// Пример:
-//
-//	err := dialog.Answer(dialog.Body{
-//	    ContentType: "application/sdp",
-//	    Content: []byte(sdpAnswer),
-//	}, nil)
-func (d *Dialog) Answer(body Body, headers map[string]string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if !d.isServer {
-		return fmt.Errorf("ответить можно только на входящий вызов")
-	}
-
-	if d.stateMachine.Current() != "early" {
-		return fmt.Errorf("неверное состояние диалога для ответа: %s", d.stateMachine.Current())
-	}
-
-	// Валидация тела сообщения
-	if body.Content != nil {
-		if err := d.securityValidator.ValidateBody(body.Content, body.ContentType); err != nil {
-			return fmt.Errorf("ошибка валидации тела сообщения: %w", err)
-		}
-	}
-
-	// Валидация заголовков
-	if err := d.securityValidator.ValidateHeaders(headers); err != nil {
-		return fmt.Errorf("ошибка валидации заголовков: %w", err)
-	}
-
-	// Создаем ответ 200 OK
-	if inviteTx, ok := d.inviteTx.(sip.ServerTransaction); ok {
-		// Получаем исходный запрос из сохраненного dialog
-		if d.inviteRequest == nil {
-			return fmt.Errorf("нет сохраненного INVITE запроса")
-		}
-		req := d.inviteRequest
-		res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", body.Content)
-
-		// Добавляем заголовки
-		contactHeader := &sip.ContactHeader{
-			Address: d.localTarget,
-			Params:  sip.NewParams(),
-		}
-		res.AppendHeader(contactHeader)
-		if body.Content != nil {
-			res.AppendHeader(sip.NewHeader("Content-Type", body.ContentType))
-			res.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(body.Content))))
-		}
-
-		for name, value := range headers {
-			res.AppendHeader(sip.NewHeader(name, value))
-		}
-
-		// Отправляем ответ
-		if err := inviteTx.Respond(res); err != nil {
-			return fmt.Errorf("ошибка отправки ответа: %w", err)
-		}
-
-		// Переходим в состояние confirmed
-		if err := d.stateMachine.Event(context.Background(), "confirm"); err != nil {
-			return fmt.Errorf("ошибка изменения состояния: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// Reject отклоняет входящий вызов с указанным кодом ошибки.
-// Может быть вызван только для серверных диалогов (UAS) в состоянии early.
-//
-// Параметры:
-//   - statusCode: SIP код ответа (400-699)
-//   - reason: текстовое описание отказа
-//   - body: тело ответа (опционально)
-//   - headers: дополнительные заголовки
-//
-// Пример:
-//
-//	err := dialog.Reject(486, "Busy Here", dialog.Body{}, nil)
-func (d *Dialog) Reject(statusCode int, reason string, body Body, headers map[string]string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if !d.isServer {
-		return fmt.Errorf("отклонить можно только входящий вызов")
-	}
-
-	if d.stateMachine.Current() != "early" {
-		return fmt.Errorf("неверное состояние диалога для отклонения: %s", d.stateMachine.Current())
-	}
-
-	// Валидация кода статуса
-	if err := d.securityValidator.ValidateStatusCode(statusCode); err != nil {
-		return fmt.Errorf("некорректный код статуса: %w", err)
-	}
-
-	// Валидация тела сообщения
-	if body.Content != nil {
-		if err := d.securityValidator.ValidateBody(body.Content, body.ContentType); err != nil {
-			return fmt.Errorf("ошибка валидации тела сообщения: %w", err)
-		}
-	}
-
-	// Валидация заголовков
-	if err := d.securityValidator.ValidateHeaders(headers); err != nil {
-		return fmt.Errorf("ошибка валидации заголовков: %w", err)
-	}
-
-	// Создаем ответ с указанным кодом
-	if inviteTx, ok := d.inviteTx.(sip.ServerTransaction); ok {
-		// Получаем исходный запрос из сохраненного dialog
-		if d.inviteRequest == nil {
-			return fmt.Errorf("нет сохраненного INVITE запроса")
-		}
-		req := d.inviteRequest
-		res := sip.NewResponseFromRequest(req, statusCode, reason, body.Content)
-
-		// Добавляем заголовки
-		if body.Content != nil {
-			res.AppendHeader(sip.NewHeader("Content-Type", body.ContentType))
-			res.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(body.Content))))
-		}
-
-		for name, value := range headers {
-			res.AppendHeader(sip.NewHeader(name, value))
-		}
-
-		// Отправляем ответ
-		if err := inviteTx.Respond(res); err != nil {
-			return fmt.Errorf("ошибка отправки ответа: %w", err)
-		}
-
-		// Переходим в состояние terminated
-		if err := d.stateMachine.Event(context.Background(), "terminated"); err != nil {
-			return fmt.Errorf("ошибка изменения состояния: %w", err)
-		}
-	}
-
-	return nil
+// RemoteSeq возвращает удаленный порядковый номер CSeq.
+// Обновляется при получении запросов от удаленной стороны.
+func (s *Dialog) RemoteSeq() uint32 {
+	return s.remoteCSeq.Load()
 }
 
 // Terminate завершает диалог, отправляя BYE запрос.
-// Может быть вызван только для диалогов в состоянии confirmed.
-// После успешной отправки BYE диалог переходит в состояние terminated.
-//
-// Пример:
-//
-//	err := dialog.Terminate()
-//	if err != nil {
-//	    log.Printf("Ошибка завершения диалога: %v", err)
-//	}
-func (d *Dialog) Terminate() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// Может быть вызван только в состоянии InCall.
+// Переводит диалог в состояние Terminating.
+func (s *Dialog) Terminate() error {
+	// Отправляем BYE запрос
+	slog.Debug("Dialog.Terminate",
+		slog.String("dialogID", s.id),
+		slog.String("state", s.State().String()),
+		slog.String("callID", string(s.callID)))
 
-	if d.stateMachine.Current() != "confirmed" {
-		return fmt.Errorf("завершить можно только подтвержденный диалог")
-	}
-
-	// Проверяем что uasuac инициализирован
-	if d.uasuac == nil || d.uasuac.client == nil {
-		return fmt.Errorf("UASUAC не инициализирован")
-	}
-
-	// Переходим в состояние terminating
-	if err := d.stateMachine.Event(context.Background(), "terminate"); err != nil {
-		return fmt.Errorf("ошибка изменения состояния: %w", err)
+	if s.State() != InCall {
+		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
+		slog.Debug("Dialog.Terminate failed", slog.String("error", err.Error()))
+		return err
 	}
 
 	// Создаем BYE запрос
-	byeReq := sip.NewRequest(sip.BYE, d.remoteTarget)
-	d.applyDialogHeaders(byeReq)
-
-	// Отправляем BYE
-	ctx, cancel := context.WithTimeout(d.ctx, 5*time.Second)
-	defer cancel()
-
-	res, err := d.uasuac.client.Do(ctx, byeReq)
-	if err != nil {
-		return fmt.Errorf("ошибка отправки BYE: %w", err)
+	ctx := context.Background()
+	if s.ctx != nil {
+		ctx = s.ctx
 	}
 
-	if res.StatusCode >= 200 && res.StatusCode < 300 {
-		// Переходим в состояние terminated
-		if err := d.stateMachine.Event(context.Background(), "terminated"); err != nil {
-			return fmt.Errorf("ошибка изменения состояния: %w", err)
-		}
+	req := s.makeRequest(sip.BYE)
+	slog.Debug("Dialog.Terminate creating BYE request",
+		slog.String("request", req.String()))
+
+	// Отправляем запрос
+	tx, err := s.sendReq(ctx, req)
+	if err != nil {
+		slog.Debug("Dialog.Terminate sendReq failed",
+			slog.String("error", err.Error()))
+		return errors.Wrap(err, "failed to send BYE request")
+	}
+
+	slog.Debug("Dialog.Terminate BYE sent successfully",
+		slog.String("branchID", GetBranchID(tx.Request())))
+
+	// Переводим диалог в состояние завершения
+	if err := s.setState(Terminating, tx); err != nil {
+		slog.Debug("Dialog.Terminate setState failed",
+			slog.String("error", err.Error()))
+		return err
 	}
 
 	return nil
 }
 
-// Close закрывает диалог и освобождает все ресурсы.
-// Отменяет контекст диалога и переводит его в состояние terminated.
-// Если диалог был в состоянии confirmed, сначала пытается отправить BYE.
-func (d *Dialog) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// Start начинает новый диалог, отправляя INVITE запрос.
+// target - SIP URI вызываемого абонента (например, "sip:alice@example.com").
+// opts - дополнительные опции для настройки запроса.
+// Может быть вызван только в состоянии IDLE.
+// Переводит диалог в состояние Calling.
+func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (IClientTX, error) {
+	// Отправляем INVITE запрос для начала диалога
+	slog.Debug("Dialog.Start",
+		slog.String("dialogID", s.id),
+		slog.String("target", target),
+		slog.String("state", s.State().String()))
 
-	// Отменяем контекст
-	if d.cancel != nil {
-		d.cancel()
+	if s.State() != IDLE {
+		err := fmt.Errorf("dialog already started, state: %s", s.State())
+		slog.Debug("Dialog.Start failed", slog.String("error", err.Error()))
+		return nil, err
 	}
 
-	// Очищаем обработчики чтобы предотвратить утечки памяти
-	d.stateChangeHandler = nil
-	d.bodyHandler = nil
-	d.requestHandler = nil
-	d.referHandler = nil
-
-	// Очищаем ссылки на транзакции
-	d.inviteTx = nil
-	d.inviteRequest = nil
-
-	// Переходим в состояние terminated если это возможно
-	currentState := d.stateMachine.Current()
-	if currentState != "terminated" {
-		// Пытаемся сначала перейти в terminating, если возможно
-		if currentState == "confirmed" || currentState == "early" {
-			err := d.stateMachine.Event(context.Background(), "terminate")
-			if err != nil {
-				d.logger.Warn("не удалось перейти в состояние terminate",
-					DialogField(d.id),
-					F("current_state", currentState),
-					ErrField(err))
-			}
-		}
-		// Теперь переходим в terminated
-		err := d.stateMachine.Event(context.Background(), "terminated")
-		if err != nil {
-			d.logger.Warn("не удалось перейти в состояние terminated",
-				DialogField(d.id),
-				F("current_state", d.stateMachine.Current()),
-				ErrField(err))
-		}
-	}
-
-	return nil
-}
-
-// Refer отправляет REFER запрос
-func (d *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...ReqOpts) (sip.ClientTransaction, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if d.stateMachine.Current() != "confirmed" {
-		return nil, fmt.Errorf("REFER можно отправить только в подтвержденном диалоге")
-	}
-
-	// Валидация целевого URI
-	if err := validateSIPURI(&target); err != nil {
-		return nil, fmt.Errorf("некорректный целевой URI: %w", err)
-	}
-
-	// Создаем REFER запрос
-	referReq := sip.NewRequest(sip.REFER, d.remoteTarget)
-	d.applyDialogHeaders(referReq)
-
-	// Создаем типизированный Refer-To заголовок используя Builder
-	referToHeader, err := headers.NewBuilder(target.String()).Build()
+	// Парсим целевой URI
+	var targetURI sip.Uri
+	err := sip.ParseUri(target, &targetURI)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка создания Refer-To заголовка: %w", err)
+		slog.Debug("Dialog.Start parse URI failed",
+			slog.String("target", target),
+			slog.String("error", err.Error()))
+		return nil, errors.Wrap(err, "failed to parse target URI")
 	}
 
-	// Валидация Refer-To заголовка
-	if err := referToHeader.Validate(); err != nil {
-		return nil, fmt.Errorf("ошибка валидации Refer-To заголовка: %w", err)
-	}
+	// Устанавливаем удаленный адрес
+	s.uriMu.Lock()
+	s.remoteTarget = targetURI
+	s.remoteURI = targetURI
+	s.uriMu.Unlock()
 
-	// Дополнительная валидация через security validator
-	if err := d.securityValidator.ValidateHeader("Refer-To", referToHeader.Value()); err != nil {
-		return nil, fmt.Errorf("ошибка валидации безопасности Refer-To заголовка: %w", err)
-	}
-
-	referReq.AppendHeader(referToHeader)
+	// Создаем INVITE запрос
+	req := s.makeRequest(sip.INVITE)
 
 	// Применяем опции
 	for _, opt := range opts {
-		if err := opt(referReq); err != nil {
-			return nil, err
-		}
+		opt(req)
 	}
 
-	// Проверяем наличие клиента
-	if d.uasuac == nil || d.uasuac.client == nil {
-		return nil, fmt.Errorf("клиент транзакций не инициализирован")
+	slog.Debug("Dialog.Start creating INVITE",
+		slog.String("request", req.String()))
+
+	// Переводим диалог в состояние вызова
+	if err := s.setState(Calling, nil); err != nil {
+		slog.Debug("Dialog.Start setState failed",
+			slog.String("error", err.Error()))
+		return nil, err
 	}
 
 	// Отправляем запрос
-	tx, err := d.uasuac.client.TransactionRequest(ctx, referReq)
+	tx, err := s.sendReq(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка отправки REFER: %w", err)
+		slog.Debug("Dialog.Start sendReq failed",
+			slog.String("error", err.Error()))
+		// Возвращаем состояние обратно
+		s.setState(IDLE, nil)
+		return nil, errors.Wrap(err, "failed to send INVITE")
 	}
 
-	d.updateLastActivity()
+	slog.Debug("Dialog.Start INVITE sent successfully",
+		slog.String("branchID", GetBranchID(tx.Request())))
+
 	return tx, nil
 }
 
-// ReferReplace отправляет REFER с заголовком Replaces
-func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts *ReqOpts) (sip.ClientTransaction, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// Refer отправляет REFER запрос для переадресации вызова.
+// target - SIP URI на который переадресуется вызов.
+// Может быть вызван только в состоянии InCall.
+// Используется для слепого перевода (blind transfer).
+func (s *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...RequestOpt) (IClientTX, error) {
+	// Отправляем REFER запрос для переадресации
+	slog.Debug("Dialog.Refer",
+		slog.String("dialogID", s.id),
+		slog.String("target", target.String()),
+		slog.String("state", s.State().String()))
 
-	if d.stateMachine.Current() != "confirmed" {
-		return nil, fmt.Errorf("REFER можно отправить только в подтвержденном диалоге")
+	if s.State() != InCall {
+		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
+		slog.Debug("Dialog.Refer failed", slog.String("error", err.Error()))
+		return nil, err
 	}
 
 	// Создаем REFER запрос
-	referReq := sip.NewRequest(sip.REFER, d.remoteTarget)
-	d.applyDialogHeaders(referReq)
+	req := s.ReferRequest(target, nil)
 
-	// Получаем данные для Replaces
+	// Применяем опции
+	for _, opt := range opts {
+		opt(req)
+	}
+
+	slog.Debug("Dialog.Refer creating REFER request",
+		slog.String("request", req.String()))
+
+	// Отправляем запрос
+	tx, err := s.sendReq(ctx, req)
+	if err != nil {
+		slog.Debug("Dialog.Refer sendReq failed",
+			slog.String("error", err.Error()))
+		return nil, errors.Wrap(err, "failed to send REFER")
+	}
+
+	slog.Debug("Dialog.Refer sent successfully",
+		slog.String("branchID", GetBranchID(tx.Request())))
+
+	return tx, nil
+}
+
+// ReferReplace отправляет REFER запрос с заменой существующего диалога.
+// replaceDialog - диалог который будет заменен.
+// Может быть вызван только в состоянии InCall.
+// Используется для перевода с подменой (attended transfer).
+func (s *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts ...RequestOpt) (IClientTX, error) {
+	// Отправляем REFER с заменой существующего диалога
+	slog.Debug("Dialog.ReferReplace",
+		slog.String("dialogID", s.id),
+		slog.String("replaceDialogID", replaceDialog.ID()),
+		slog.String("state", s.State().String()))
+
+	if s.State() != InCall {
+		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
+		slog.Debug("Dialog.ReferReplace failed", slog.String("error", err.Error()))
+		return nil, err
+	}
+
+	if replaceDialog == nil {
+		err := fmt.Errorf("replaceDialog cannot be nil")
+		slog.Debug("Dialog.ReferReplace failed", slog.String("error", err.Error()))
+		return nil, err
+	}
+
+	// Получаем информацию для Replaces заголовка
 	callID := replaceDialog.CallID()
-	remoteTarget := replaceDialog.RemoteTarget()
+	localTag := replaceDialog.LocalTag()
+	remoteTag := replaceDialog.RemoteTag()
 
-	// Создаем типизированный Refer-To заголовок с Replaces используя Builder
-	referToHeader, err := headers.NewBuilder(remoteTarget.String()).
-		WithReplaces(callID.Value(), replaceDialog.RemoteTag(), replaceDialog.LocalTag()).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка создания Refer-To заголовка: %w", err)
+	slog.Debug("Dialog.ReferReplace replace info",
+		slog.String("callID", string(callID)),
+		slog.String("localTag", localTag),
+		slog.String("remoteTag", remoteTag))
+
+	// Создаем REFER запрос с Replaces
+	// TODO: Нужно создать метод ReferWithReplace с правильными параметрами
+	// Пока используем обычный REFER
+	req := s.ReferRequest(replaceDialog.RemoteURI(), nil)
+
+	// Добавляем Replaces информацию в Refer-To заголовок
+	replaces := fmt.Sprintf("%s;to-tag=%s;from-tag=%s", callID, remoteTag, localTag)
+	replacesHeader := sip.NewHeader("Replaces", replaces)
+	req.AppendHeader(replacesHeader)
+
+	// Применяем опции
+	for _, opt := range opts {
+		opt(req)
 	}
 
-	// Валидация заголовка
-	if err := referToHeader.Validate(); err != nil {
-		return nil, fmt.Errorf("ошибка валидации Refer-To заголовка: %w", err)
-	}
-
-	referReq.AppendHeader(referToHeader)
-
-	// Применяем опции, если есть
-	if opts != nil {
-		if err := (*opts)(referReq); err != nil {
-			return nil, err
-		}
-	}
-
-	// Проверяем наличие клиента
-	if d.uasuac == nil || d.uasuac.client == nil {
-		return nil, fmt.Errorf("клиент транзакций не инициализирован")
-	}
+	slog.Debug("Dialog.ReferReplace creating REFER with Replaces",
+		slog.String("request", req.String()))
 
 	// Отправляем запрос
-	tx, err := d.uasuac.client.TransactionRequest(ctx, referReq)
+	tx, err := s.sendReq(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка отправки REFER: %w", err)
+		slog.Debug("Dialog.ReferReplace sendReq failed",
+			slog.String("error", err.Error()))
+		return nil, errors.Wrap(err, "failed to send REFER with Replaces")
 	}
 
-	d.updateLastActivity()
+	slog.Debug("Dialog.ReferReplace sent successfully",
+		slog.String("branchID", GetBranchID(tx.Request())))
+
 	return tx, nil
 }
 
-// SendReINVITE отправляет re-INVITE запрос для изменения параметров сессии
-func (d *Dialog) SendReINVITE(ctx context.Context, body Body, headers map[string]string) (sip.ClientTransaction, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// SendRequest отправляет произвольный SIP запрос в рамках диалога.
+// По умолчанию создает INFO запрос. Метод можно изменить через RequestOpt.
+// Не может быть вызван в состоянии Ended.
+func (s *Dialog) SendRequest(ctx context.Context, opts ...RequestOpt) (IClientTX, error) {
+	// Отправляем произвольный запрос в рамках диалога
+	slog.Debug("Dialog.SendRequest",
+		slog.String("dialogID", s.id),
+		slog.String("state", s.State().String()))
 
-	// Re-INVITE может быть отправлен только в подтвержденном диалоге
-	if d.stateMachine.Current() != "confirmed" {
-		return nil, fmt.Errorf("re-INVITE можно отправить только в подтвержденном диалоге, текущее состояние: %s", d.stateMachine.Current())
+	if s.State() == Ended {
+		err := fmt.Errorf("dialog has ended")
+		slog.Debug("Dialog.SendRequest failed", slog.String("error", err.Error()))
+		return nil, err
 	}
 
-	// Валидация тела сообщения
-	if body.Content != nil {
-		if err := d.securityValidator.ValidateBody(body.Content, body.ContentType); err != nil {
-			return nil, fmt.Errorf("ошибка валидации тела сообщения: %w", err)
-		}
-	}
-
-	// Валидация заголовков
-	if err := d.securityValidator.ValidateHeaders(headers); err != nil {
-		return nil, fmt.Errorf("ошибка валидации заголовков: %w", err)
-	}
-
-	// Создаем re-INVITE запрос
-	req := sip.NewRequest(sip.INVITE, d.remoteTarget)
-	d.applyDialogHeaders(req)
-
-	// Добавляем тело
-	if body.Content != nil {
-		req.SetBody(body.Content)
-		req.AppendHeader(sip.NewHeader("Content-Type", body.ContentType))
-		req.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(body.Content))))
-	}
-
-	// Добавляем дополнительные заголовки
-	for name, value := range headers {
-		req.AppendHeader(sip.NewHeader(name, value))
-	}
-
-	// Проверяем наличие клиента
-	if d.uasuac == nil || d.uasuac.client == nil {
-		return nil, fmt.Errorf("клиент транзакций не инициализирован")
-	}
-
-	// Отправляем запрос
-	tx, err := d.uasuac.client.TransactionRequest(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка отправки re-INVITE: %w", err)
-	}
-
-	d.updateLastActivity()
-	return tx, nil
-}
-
-// SendRequest отправляет произвольный запрос в рамках диалога
-func (d *Dialog) SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpts) (sip.ClientTransaction, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// Валидация целевого URI
-	if err := validateSIPURI(&target); err != nil {
-		return nil, fmt.Errorf("некорректный целевой URI: %w", err)
-	}
+	// Определяем метод запроса из опций
+	method := sip.INFO // По умолчанию INFO
+	var req *sip.Request
 
 	// Создаем запрос
-	req := sip.NewRequest(sip.INFO, target)
-	d.applyDialogHeaders(req)
+	req = s.makeRequest(method)
 
-	// Применяем опции
+	// Применяем все опции
 	for _, opt := range opts {
-		if err := opt(req); err != nil {
-			return nil, err
-		}
+		opt(req)
 	}
 
-	// Валидация заголовков запроса после применения опций
-	headerMap := make(map[string]string)
-	for _, h := range req.Headers() {
-		headerMap[h.Name()] = h.Value()
-	}
-	if err := d.securityValidator.ValidateHeaders(headerMap); err != nil {
-		return nil, fmt.Errorf("ошибка валидации заголовков запроса: %w", err)
-	}
+	// Получаем актуальный метод после применения опций
+	method = req.Method
 
-	// Проверяем наличие клиента
-	if d.uasuac == nil || d.uasuac.client == nil {
-		return nil, fmt.Errorf("клиент транзакций не инициализирован")
-	}
+	slog.Debug("Dialog.SendRequest creating request",
+		slog.String("method", string(method)),
+		slog.String("request", req.String()))
 
 	// Отправляем запрос
-	tx, err := d.uasuac.client.TransactionRequest(ctx, req)
+	tx, err := s.sendReq(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка отправки запроса: %w", err)
+		slog.Debug("Dialog.SendRequest sendReq failed",
+			slog.String("error", err.Error()))
+		return nil, errors.Wrap(err, "failed to send request")
 	}
 
-	d.updateLastActivity()
+	slog.Debug("Dialog.SendRequest sent successfully",
+		slog.String("method", string(method)),
+		slog.String("branchID", GetBranchID(tx.Request())))
+
 	return tx, nil
 }
 
-// Context возвращает контекст диалога
-func (d *Dialog) Context() context.Context {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.ctx
+// Context возвращает контекст диалога.
+// Используется для отмены операций и управления жизненным циклом.
+func (s *Dialog) Context() context.Context {
+	return s.ctx
 }
 
-// SetContext устанавливает новый контекст для диалога
-func (d *Dialog) SetContext(ctx context.Context) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// Отменяем старый контекст
-	if d.cancel != nil {
-		d.cancel()
-	}
-
-	d.ctx, d.cancel = context.WithCancel(ctx)
+// SetContext устанавливает новый контекст для диалога.
+// Позволяет обновить контекст во время работы диалога.
+func (s *Dialog) SetContext(ctx context.Context) {
+	s.ctx = ctx
 }
 
-// CreatedAt возвращает время создания диалога
-func (d *Dialog) CreatedAt() time.Time {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.createdAt
+// CreatedAt возвращает время создания диалога.
+func (s *Dialog) CreatedAt() time.Time {
+	return s.createdAt
 }
 
-// LastActivity возвращает время последней активности
-func (d *Dialog) LastActivity() time.Time {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.lastActivity
+// LastActivity возвращает время последней активности в диалоге.
+// Обновляется при отправке/получении запросов и смене состояния.
+// Метод потокобезопасен.
+func (s *Dialog) LastActivity() time.Time {
+	s.activityMu.Lock()
+	defer s.activityMu.Unlock()
+	return s.lastActivity
 }
 
-// OnRequest обрабатывает входящий запрос в рамках диалога
-func (d *Dialog) OnRequest(_ context.Context, req *sip.Request, tx sip.ServerTransaction) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// Проверяем, что запрос относится к этому диалогу
-	if !d.isRequestInDialog(req) {
-		return fmt.Errorf("запрос не относится к этому диалогу")
-	}
-
-	// Обрабатываем заголовки
-	if err := d.headerProcessor.ProcessRequest(req); err != nil {
-		// Отправляем 400 Bad Request
-		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, err.Error(), nil)
-		return tx.Respond(res)
-	}
-
-	// Обновляем последнюю активность
-	d.updateLastActivity()
-
-	// Обрабатываем в зависимости от метода
-	switch req.Method {
-	case sip.ACK:
-		return d.handleACK(req, tx)
-	case sip.BYE:
-		return d.handleBYE(req, tx)
-	case sip.INFO:
-		return d.handleINFO(req, tx)
-	case sip.REFER:
-		return d.handleREFER(req, tx)
-	case sip.INVITE:
-		return d.handleReINVITE(req, tx)
-	default:
-		// Отвечаем 405 Method Not Allowed
-		res := sip.NewResponseFromRequest(req, sip.StatusMethodNotAllowed, "Method Not Allowed", nil)
-		return tx.Respond(res)
-	}
-}
-
-// OnStateChange устанавливает обработчик изменения состояния
-func (d *Dialog) OnStateChange(handler StateChangeHandler) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.stateChangeHandler = handler
-}
-
-// OnBody устанавливает обработчик получения тела сообщения
-func (d *Dialog) OnBody(handler OnBodyHandler) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.bodyHandler = handler
-}
-
-// OnRequestHandler устанавливает обработчик входящих запросов
-func (d *Dialog) OnRequestHandler(handler func(*sip.Request, sip.ServerTransaction)) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.requestHandler = handler
-}
-
-// OnRefer устанавливает обработчик REFER запросов
-func (d *Dialog) OnRefer(handler ReferHandler) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.referHandler = handler
-}
-
-// applyDialogHeaders применяет заголовки диалога к запросу
-func (d *Dialog) applyDialogHeaders(req *sip.Request) {
-	// From
-	fromHeader := &sip.FromHeader{
-		Address: d.localURI,
-		Params:  sip.NewParams(),
-	}
-	if d.localTag != "" {
-		fromHeader.Params.Add("tag", d.localTag)
-	}
-	req.ReplaceHeader(fromHeader)
-
-	// To
-	toHeader := &sip.ToHeader{
-		Address: d.remoteURI,
-		Params:  sip.NewParams(),
-	}
-	if d.remoteTag != "" {
-		toHeader.Params.Add("tag", d.remoteTag)
-	}
-	req.ReplaceHeader(toHeader)
-
-	// Call-ID
-	req.ReplaceHeader(&d.callID)
-
-	// CSeq
-	seq := d.localSeq.Add(1)
-	var cseqBuilder strings.Builder
-	cseqBuilder.WriteString(strconv.FormatUint(uint64(seq), 10))
-	cseqBuilder.WriteByte(' ')
-	cseqBuilder.WriteString(string(req.Method))
-	req.ReplaceHeader(sip.NewHeader("CSeq", cseqBuilder.String()))
-
-	// Contact
-	contactHeader := &sip.ContactHeader{
-		Address: d.localTarget,
-		Params:  sip.NewParams(),
-	}
-	req.ReplaceHeader(contactHeader)
-
-	// Route set
-	if err := d.headerProcessor.ProcessRouteHeaders(req, d.routeSet); err != nil {
-		d.logger.Error("ошибка обработки Route headers",
-			DialogField(d.id),
-			MethodField(string(req.Method)),
-			ErrField(err))
-		// Игнорируем ошибку маршрутизации, так как это не критично для применения заголовков
-	}
-
-	// Добавляем дополнительные заголовки
-	d.headerProcessor.AddSupportedHeader(req)
-	d.headerProcessor.AddUserAgent(req, "SoftPhone/1.0")
-	d.headerProcessor.AddTimestamp(req)
-}
-
-// isRequestInDialog проверяет, относится ли запрос к этому диалогу
-func (d *Dialog) isRequestInDialog(req *sip.Request) bool {
-	// Проверяем Call-ID
-	if req.CallID().Value() != d.callID.Value() {
-		return false
-	}
-
-	// Проверяем теги
-	fromTag, _ := req.From().Params.Get("tag")
-	toTag, _ := req.To().Params.Get("tag")
-
-	if d.isServer {
-		// Для сервера: локальный тег = to-tag, удаленный = from-tag
-		return fromTag == d.remoteTag && toTag == d.localTag
-	} else {
-		// Для клиента: локальный тег = from-tag, удаленный = to-tag
-		return fromTag == d.localTag && toTag == d.remoteTag
-	}
-}
-
-// updateLastActivity обновляет время последней активности
-func (d *Dialog) updateLastActivity() {
-	d.lastActivity = time.Now()
-}
-
-// handleACK обрабатывает ACK запрос
-func (d *Dialog) handleACK(_ *sip.Request, _ sip.ServerTransaction) error {
-	if d.stateMachine.Current() == "early" {
-		// Переходим в состояние confirmed
-		return d.stateMachine.Event(context.Background(), "confirm")
-	}
-	// ACK не требует ответа
-	return nil
-}
-
-// handleBYE обрабатывает BYE запрос
-func (d *Dialog) handleBYE(req *sip.Request, tx sip.ServerTransaction) error {
-
-	// Отвечаем 200 OK
-	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-
-	// Добавляем заголовки
-	d.headerProcessor.AddUserAgentToResponse(res, "SoftPhone/1.0")
-
-	if err := tx.Respond(res); err != nil {
-		return err
-	}
-
-	// Переходим в состояние terminated
-	return d.stateMachine.Event(context.Background(), "terminated")
-}
-
-// handleINFO обрабатывает INFO запрос
-func (d *Dialog) handleINFO(req *sip.Request, tx sip.ServerTransaction) error {
-
-	// Проверяем тело
-	if req.Body() != nil && d.bodyHandler != nil {
-		contentType := req.GetHeader("Content-Type")
-		body := Body{
-			Content:     req.Body(),
-			ContentType: contentType.Value(),
-		}
-		d.bodyHandler(body)
-	}
-
-	// Отвечаем 200 OK
-	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-	return tx.Respond(res)
-}
-
-// handleREFER обрабатывает REFER запрос
-func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
-	// Создаем контекст для обработки REFER
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Проверяем наличие Refer-To заголовка
-	referToHeader := req.GetHeader("Refer-To")
-	if referToHeader == nil {
-		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Missing Refer-To header", nil)
-		return tx.Respond(res)
-	}
-
-	// Валидация Refer-To заголовка
-	if err := d.securityValidator.ValidateHeader("Refer-To", referToHeader.Value()); err != nil {
-		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, fmt.Sprintf("Invalid Refer-To: %v", err), nil)
-		return tx.Respond(res)
-	}
-
-	// Парсим Refer-To
-	referToURI, params, err := parseReferTo(referToHeader.Value())
-	if err != nil {
-		res := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Invalid Refer-To header", nil)
-		return tx.Respond(res)
-	}
-
-	// Создаем ReferEvent
-	event := &ReferEvent{
-		ReferTo:     referToURI,
-		Request:     req,
-		Transaction: tx,
-	}
-
-	// Проверяем ReferredBy
-	if referredBy := req.GetHeader("Referred-By"); referredBy != nil {
-		event.ReferredBy = referredBy.Value()
-	}
-
-	// Проверяем параметр Replaces
-	if replaces, ok := params["Replaces"]; ok {
-		event.Replaces = replaces
-		callID, toTag, fromTag, err := parseReplaces(replaces)
-		if err == nil {
-			event.ReplacesCallID = callID
-			event.ReplacesToTag = toTag
-			event.ReplacesFromTag = fromTag
-		}
-	}
-
-	// Отправляем 202 Accepted
-	res := sip.NewResponseFromRequest(req, sip.StatusAccepted, "Accepted", nil)
-	if err := tx.Respond(res); err != nil {
-		return err
-	}
-
-	// Создаем подписку для отслеживания статуса
-	subscription := NewReferSubscription(d, referToURI)
-
-	// Получаем необходимые данные без блокировки, так как handleREFER вызывается из OnRequest,
-	// который уже держит блокировку
-	referHandler := d.referHandler
-	uasuac := d.uasuac
-	// Копируем необходимые данные для использования в горутине
-	dialogID := d.id
-	logger := d.logger
-
-	// Проверяем что UASUAC инициализирован
-	if uasuac == nil || uasuac.client == nil {
-		return fmt.Errorf("UASUAC не инициализирован")
-	}
-
-	// Запускаем обработку REFER в фоне
-	SafeGo(logger, "dialog-refer-handler", func() {
-		// Проверяем контекст на отмену
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// Обновляем статус на Accepted
-		subscription.UpdateStatus(ReferStatusAccepted)
-		// Отправляем NOTIFY
-		_ = subscription.SendNotify(ctx)
-
-		// Если есть обработчик REFER в диалоге, вызываем его
-		if referHandler != nil {
-			if err := referHandler(event); err != nil {
-				subscription.UpdateStatus(ReferStatusFailed)
-			} else {
-				subscription.UpdateStatus(ReferStatusSuccess)
-			}
-			notifyErr := subscription.SendNotify(ctx)
-			if notifyErr != nil {
-				logger.Error("не удалось отправить NOTIFY с результатом REFER",
-					DialogField(dialogID),
-					F("refer_failed", err != nil),
-					ErrField(notifyErr))
-			}
-		} else {
-			// Если нет обработчика, просто сообщаем об успехе
-			subscription.UpdateStatus(ReferStatusSuccess)
-			notifyErr := subscription.SendNotify(ctx)
-			if notifyErr != nil {
-				logger.Error("не удалось отправить NOTIFY об успехе",
-					DialogField(dialogID),
-					ErrField(notifyErr))
-			}
-		}
-
-		// Закрываем подписку
-		subscription.Close()
-	})
-
-	return nil
-}
-
-// handleReINVITE обрабатывает re-INVITE запрос (изменение параметров существующего диалога)
-func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) error {
-
-	// Re-INVITE может быть отправлен только в подтвержденном диалоге
-	if d.stateMachine.Current() != "confirmed" {
-		res := sip.NewResponseFromRequest(req, sip.StatusRequestTerminated, "Request Terminated", nil)
-		return tx.Respond(res)
-	}
-
-	// Сохраняем новый INVITE запрос и транзакцию
-	d.inviteRequest = req
-	d.inviteTx = tx
-
-	// Обновляем Contact если есть
-	if contact := req.GetHeader("Contact"); contact != nil {
-		contactValue := contact.Value()
-		if uri := extractURIFromContact(contactValue); uri != nil {
-			d.remoteTarget = *uri
-		}
-	}
-
-	// Обновляем CSeq
-	if cseq := req.GetHeader("CSeq"); cseq != nil {
-		// Парсим CSeq для обновления последовательности
-		var seq uint32
-		if _, err := fmt.Sscanf(cseq.Value(), "%d", &seq); err == nil {
-			d.remoteCSeq = seq
-		}
-	}
-
-	// Если есть обработчик запросов, вызываем его
-	if d.requestHandler != nil {
-		// Передаем управление пользовательскому коду для обработки re-INVITE
-		// Пользователь должен вызвать Answer() или Reject() для ответа
-		logger := d.logger
-		handler := d.requestHandler
-		SafeGo(logger, "dialog-request-handler", func() {
-			handler(req, tx)
-		})
+// Close закрывает диалог без отправки BYE запроса.
+// Освобождает ресурсы и переводит диалог в состояние Ended.
+// Используется для аварийного завершения или очистки.
+func (s *Dialog) Close() error {
+	// Закрываем диалог без отправки BYE
+	if s.State() == Ended {
 		return nil
 	}
 
-	// Если нет обработчика, автоматически принимаем re-INVITE
-	// с текущими параметрами медиа (без изменений)
-	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", req.Body())
-
-	// Добавляем необходимые заголовки
-	contactHeader := &sip.ContactHeader{
-		Address: d.localTarget,
-		Params:  sip.NewParams(),
-	}
-	res.AppendHeader(contactHeader)
-
-	// Если есть тело, добавляем Content-Type
-	if req.Body() != nil {
-		if contentType := req.GetHeader("Content-Type"); contentType != nil {
-			res.AppendHeader(sip.NewHeader("Content-Type", contentType.Value()))
-			res.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(req.Body()))))
-		}
+	// Переводим в состояние Ended
+	if err := s.setState(Ended, nil); err != nil {
+		return err
 	}
 
-	return tx.Respond(res)
-}
-
-// handleResponse обрабатывает ответ для клиентского диалога
-func (d *Dialog) handleResponse(res *sip.Response) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// Валидируем ответ
-	err := d.headerProcessor.ValidateResponse(res)
-	if err != nil {
-		d.logger.Warn("некорректный ответ",
-			DialogField(d.id),
-			StatusCodeField(res.StatusCode),
-			ErrField(err))
-	}
-	// Игнорируем ошибки валидации ответа, так как это не должно блокировать обработку
-
-	// Обновляем последнюю активность
-	d.updateLastActivity()
-
-	// Обрабатываем в зависимости от кода ответа
-	if res.StatusCode >= 100 && res.StatusCode < 200 {
-		// Предварительный ответ
-		if d.stateMachine.Current() == "none" {
-			// Получаем удаленный тег
-			if toTag, ok := res.To().Params.Get("tag"); ok && toTag != "" {
-				oldID := d.id
-				d.remoteTag = toTag
-				// Обновляем ID диалога теперь, когда у нас есть remote tag
-				d.updateDialogID()
-
-				// Обновляем ID в менеджере диалогов
-				if d.uasuac != nil && d.uasuac.dialogManager != nil {
-					oldIDCopy := oldID
-					newIDCopy := d.id
-					dialogManager := d.uasuac.dialogManager
-					logger := d.logger
-					SafeGo(logger, "dialog-id-update", func() {
-						err := dialogManager.UpdateDialogID(oldIDCopy, newIDCopy, d)
-						if err != nil {
-							logger.Error("не удалось обновить ID диалога",
-								F("old_id", oldIDCopy),
-								F("new_id", newIDCopy),
-								ErrField(err))
-						}
-					})
-				}
-			}
-
-			// Сохраняем Contact
-			if contact := res.GetHeader("Contact"); contact != nil {
-				contactValue := contact.Value()
-				// Простой парсинг Contact URI
-				if uri := extractURIFromContact(contactValue); uri != nil {
-					d.remoteTarget = *uri
-				}
-			}
-
-			// Переходим в состояние early
-			err := d.stateMachine.Event(context.Background(), "early")
-			if err != nil {
-				d.logger.Warn("не удалось перейти в состояние early",
-					DialogField(d.id),
-					StatusCodeField(res.StatusCode),
-					ErrField(err))
-			}
-		}
-	} else if res.StatusCode >= 200 && res.StatusCode < 300 {
-		// Успешный ответ
-		if d.stateMachine.Current() == "early" {
-			// Обновляем маршруты из Record-Route
-			d.updateRouteSet(res)
-
-			// Переходим в состояние confirmed
-			err := d.stateMachine.Event(context.Background(), "confirm")
-			if err != nil {
-				d.logger.Warn("не удалось перейти в состояние confirm",
-					DialogField(d.id),
-					StatusCodeField(res.StatusCode),
-					ErrField(err))
-			}
-		}
-	} else {
-		// Ошибка - переходим в terminated
-		err := d.stateMachine.Event(context.Background(), "terminated")
-		if err != nil {
-			d.logger.Warn("не удалось перейти в состояние terminated",
-				DialogField(d.id),
-				StatusCodeField(res.StatusCode),
-				ErrField(err))
-		}
-	}
-}
-
-// updateRouteSet обновляет маршруты из ответа
-func (d *Dialog) updateRouteSet(res *sip.Response) {
-	// Используем HeaderProcessor для извлечения Record-Route заголовков
-	d.routeSet = d.headerProcessor.ExtractRecordRoute(res)
-}
-
-// SetupFromInvite настраивает диалог из INVITE запроса (для сервера)
-func (d *Dialog) SetupFromInvite(req *sip.Request, tx sip.ServerTransaction) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// Сохраняем транзакцию и запрос
-	d.inviteTx = tx
-	d.inviteRequest = req
-
-	// Извлекаем информацию из запроса
-	d.callID = *req.CallID()
-
-	// From/To для сервера инвертированы
-	fromValue := req.From().Value()
-	if uri := extractURIFromHeaderValue(fromValue); uri != nil {
-		d.remoteURI = *uri
-	} else {
-		return fmt.Errorf("ошибка парсинга From URI")
-	}
-	var ok bool
-	d.remoteTag, ok = req.From().Params.Get("tag")
-	if !ok {
-		d.logger.Debug("тег отсутствует в заголовке From",
-			DialogField(d.id))
-	}
-
-	toValue := req.To().Value()
-	if uri := extractURIFromHeaderValue(toValue); uri != nil {
-		d.localURI = *uri
-	} else {
-		return fmt.Errorf("ошибка парсинга To URI")
-	}
-
-	// Генерируем локальный тег
-	d.localTag = generateTag()
-
-	// Contact
-	if contact := req.GetHeader("Contact"); contact != nil {
-		contactValue := contact.Value()
-		if uri := extractURIFromContact(contactValue); uri != nil {
-			d.remoteTarget = *uri
-		}
-	}
-
-	// CSeq
-	d.remoteSeq = req.CSeq().SeqNo
-
-	// Локальный target берем из UASUAC
-	if d.uasuac != nil {
-		d.localTarget = d.uasuac.contactURI
-	} else {
-		return fmt.Errorf("UASUAC не инициализирован")
-	}
-
-	// Формируем ID диалога
-	var idBuilder strings.Builder
-	idBuilder.WriteString(d.callID.Value())
-	idBuilder.WriteByte('-')
-	idBuilder.WriteString(d.localTag)
-	idBuilder.WriteByte('-')
-	idBuilder.WriteString(d.remoteTag)
-	d.id = idBuilder.String()
-
-	// Переходим в состояние early
-	return d.stateMachine.Event(context.Background(), "early")
-}
-
-// SetupFromInviteRequest настраивает диалог из INVITE запроса (для клиента)
-func (d *Dialog) SetupFromInviteRequest(req *sip.Request) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// Сохраняем запрос
-	d.inviteRequest = req
-
-	// Извлекаем информацию из запроса
-	d.callID = *req.CallID()
-
-	// From/To для клиента
-	fromValue := req.From().Value()
-	if uri := extractURIFromHeaderValue(fromValue); uri != nil {
-		d.localURI = *uri
-	} else {
-		return fmt.Errorf("ошибка парсинга From URI")
-	}
-	var ok bool
-	d.localTag, ok = req.From().Params.Get("tag")
-	if !ok {
-		d.logger.Debug("тег отсутствует в заголовке From для UAS",
-			DialogField(d.id))
-	}
-
-	toValue := req.To().Value()
-	if uri := extractURIFromHeaderValue(toValue); uri != nil {
-		d.remoteURI = *uri
-	} else {
-		return fmt.Errorf("ошибка парсинга To URI")
-	}
-
-	// Contact
-	if contact := req.GetHeader("Contact"); contact != nil {
-		contactValue := contact.Value()
-		if uri := extractURIFromContact(contactValue); uri != nil {
-			d.localTarget = *uri
-		}
-	}
-
-	// CSeq
-	d.localSeq.Store(req.CSeq().SeqNo)
-
+	// TODO: Освободить ресурсы
 	return nil
+}
+
+// OnStateChange устанавливает обработчик изменения состояния диалога.
+// Обработчик будет вызван при каждом переходе между состояниями.
+// Метод потокобезопасен.
+func (s *Dialog) OnStateChange(handler func(DialogState)) {
+	s.handlersMu.Lock()
+	defer s.handlersMu.Unlock()
+	s.stateChangeHandler = handler
+}
+
+// OnBody устанавливает обработчик получения тела SIP сообщения.
+// Например, для обработки SDP в INVITE или других данных.
+// Метод потокобезопасен.
+func (s *Dialog) OnBody(handler func(body *Body)) {
+	s.handlersMu.Lock()
+	defer s.handlersMu.Unlock()
+	s.bodyHandler = handler
+}
+
+// OnRequestHandler устанавливает обработчик входящих запросов.
+// Обработчик получает серверную транзакцию для ответа.
+// Метод потокобезопасен.
+func (s *Dialog) OnRequestHandler(handler func(IServerTX)) {
+	s.handlersMu.Lock()
+	defer s.handlersMu.Unlock()
+	s.requestHandler = handler
+}
+
+// Без  opts cоздается по дефолту
+func NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, error) {
+
+	if uu == nil {
+		return nil, fmt.Errorf("ua not created")
+	}
+	di := uu.createDefaultDialog()
+
+	for _, opt := range opts {
+		opt(di)
+	}
+
+	di.localCSeq.Swap(uint32(rand.Int31()))
+	di.initFSM()
+	di.callID = sip.CallIDHeader(newCallId())
+
+	// Инициализируем временные метки
+	di.createdAt = time.Now()
+	di.lastActivity = di.createdAt
+
+	// Устанавливаем контекст
+	di.ctx = ctx
+
+	// Генерируем localTag
+	di.localTag = generateTag()
+
+	// Устанавливаем локальный URI из профиля
+	if di.profile != nil {
+		di.localURI = di.profile.Address
+		di.localTarget = di.profile.Address
+	}
+
+	// Инициализируем локальный контакт
+	if di.localContact == nil && di.profile != nil {
+		di.localContact = &sip.ContactHeader{
+			DisplayName: di.profile.DisplayName,
+			Address:     di.profile.Address,
+		}
+	}
+
+	// Устанавливаем ID диалога
+	di.updateDialogID()
+
+	return di, nil
+}
+
+func newUAS(req *sip.Request, tx sip.ServerTransaction) *Dialog {
+	session := new(Dialog)
+	session.uaType = UAS
+	session.callID = *req.CallID()
+	session.initReq = req
+
+	// Устанавливаем временные метки
+	session.createdAt = time.Now()
+	session.lastActivity = session.createdAt
+
+	// Устанавливаем контекст
+	session.ctx = context.Background()
+
+	toHeader := req.To()
+	if toHeader != nil && toHeader.Params != nil && toHeader.Params.Has("tag") {
+		if tagValue, ok := toHeader.Params.Get("tag"); ok {
+			session.remoteTag = tagValue
+		}
+	}
+
+	// Генерируем localTag для UAS
+	session.localTag = generateTag()
+
+	session.initFSM()
+
+	if req.CSeq() != nil {
+		session.remoteCSeq.Store(req.CSeq().SeqNo)
+	}
+
+	session.localURI = req.Recipient
+	session.remoteURI = req.From().Address
+
+	if req.Contact() != nil {
+		session.remoteTarget = req.Contact().Address
+	}
+
+	session.localContact = &sip.ContactHeader{
+		DisplayName: "",
+		Address:     req.Recipient,
+		Params:      nil,
+	}
+	session.remoteContact = req.Contact()
+
+	// Обрабатываем from/to заголовки
+	session.from = req.From()
+	session.to = req.To()
+
+	// Обрабатываем remoteTag из From заголовка (для UAS)
+	if session.from.Params != nil && session.from.Params.Has("tag") {
+		if tagValue, ok := session.from.Params.Get("tag"); ok {
+			session.remoteTag = tagValue
+		}
+	}
+
+	// Устанавливаем ID диалога
+	session.updateDialogID()
+
+	return session
+}
+
+func formEventName(src, dst DialogState) string {
+	builder := strings.Builder{}
+	builder.WriteString(string(src))
+	builder.WriteString("_to_")
+	builder.WriteString(string(dst))
+	return builder.String()
+}
+
+/*
+FSM (Конечный автомат) для session:
+
+Состояния и переходы:
+
+1. IDLE (Начальное состояние)
+   - Описание: Исходное состояние, сессия неактивна
+   - Возможные переходы:
+     * IDLE → Calling (через событие "IDLE->Calling")
+     * IDLE → Ringing (через событие "IDLE->Ringing")
+
+2. Calling
+   - Описание: Состояние инициализации вызова
+   - Возможные переходы:
+     * Calling → InCall (через событие "Calling->InCall")
+     * Calling → Terminating (через событие "Calling->Terminating")
+
+3. Ringing
+   - Описание: Входящий вызов в состоянии ожидания ответа
+   - Возможные переходы:
+     * Ringing → InCall (через событие "Ringing->InCall")
+     * Ringing → Terminating (через событие "Ringing->Terminating")
+
+4. InCall
+   - Описание: Активное состояние вызова
+   - Возможные переходы:
+     * InCall → Terminating (через событие "InCall->Terminating")
+
+5. Terminating
+   - Описание: Процесс завершения вызова
+   - Возможные переходы:
+     * Terminating → Ended (через событие "Terminating->Ended")
+
+6. Ended
+   - Описание: Финальное терминальное состояние
+   - Выходящие переходы отсутствуют
+
+Конвенция именования событий:
+События формируются через formEventName(srcState, dstState), создавая строки формата "SRC->DST" (например, "IDLE->Calling")
+
+Коллбеки:
+   - after_event:         Срабатывает после любого перехода
+   - enter_Ringing: Вызывается при входе в состояние Ringing
+   - enter_Calling: Вызывается при входе в состояние Calling
+
+Диаграмма переходов:
+[IDLE] → [Calling] → [InCall] → [Terminating] → [Ended]
+[IDLE] → [Ringing] → [InCall] → [Terminating] → [Ended]
+[Calling] → [Terminating] → [Ended]
+[Ringing] → [Terminating] → [Ended]
+*/
+
+func (s *Dialog) initFSM() {
+	s.fsm = fsm.NewFSM(
+		string(IDLE),
+		fsm.Events{
+			{Name: formEventName(IDLE, Calling), Src: []string{string(IDLE)}, Dst: string(Calling)},
+			{Name: formEventName(IDLE, Ringing), Src: []string{string(IDLE)}, Dst: string(Ringing)},
+			{Name: formEventName(Calling, InCall), Src: []string{string(Calling)}, Dst: string(InCall)},
+			{Name: formEventName(Ringing, InCall), Src: []string{string(Ringing)}, Dst: string(InCall)},
+			{Name: formEventName(InCall, Terminating), Src: []string{string(InCall)}, Dst: string(Terminating)},
+			{Name: formEventName(Terminating, Ended), Src: []string{string(Terminating)}, Dst: string(Ended)},
+			{Name: formEventName(Calling, Terminating), Src: []string{string(Calling)}, Dst: string(Terminating)},
+			{Name: formEventName(Ringing, Terminating), Src: []string{string(Ringing)}, Dst: string(Terminating)},
+		}, fsm.Callbacks{
+			"after_event":               s.afterStateChange,
+			"enter_" + Ringing.String(): s.enterRinging,
+			"enter_" + Calling.String(): s.enterCalling,
+		})
+}
+
+//callBacks for FSM
+
+func (s *Dialog) afterStateChange(ctx context.Context, e *fsm.Event) {
+	// Обновляем время последней активности
+	s.activityMu.Lock()
+	s.lastActivity = time.Now()
+	s.activityMu.Unlock()
+
+	// Уведомляем о смене состояния
+	s.handlersMu.Lock()
+	handler := s.stateChangeHandler
+	s.handlersMu.Unlock()
+
+	if handler != nil {
+		handler(DialogState(e.Dst))
+	}
+}
+
+func (s *Dialog) enterRinging(ctx context.Context, e *fsm.Event) {
+	// Обрабатываем входящий вызов
+	if tx, ok := e.Args[0].(*TX); ok && len(e.Args) == 1 {
+		s.handlersMu.Lock()
+		handler := s.requestHandler
+		s.handlersMu.Unlock()
+
+		if handler != nil {
+			handler(tx)
+		}
+	}
+}
+
+func (s *Dialog) enterCalling(ctx context.Context, e *fsm.Event) {
+	// Обрабатываем начало исходящего вызова
+	// TODO: Дополнительная логика при необходимости
+}
+
+func (s *Dialog) setState(status DialogState, tx *TX) error {
+
+	return s.fsm.Event(context.TODO(), formEventName(DialogState(s.fsm.Current()), status), tx)
+}
+
+func (s *Dialog) GetCurrentState() DialogState {
+	return DialogState(s.fsm.Current())
+}
+
+func (s *Dialog) saveHeaders(req *sip.Request) {
+
+}
+
+func (s *Dialog) setFirstTX(tx *TX) {
+	s.firstTX = tx
+}
+
+func (s *Dialog) getFirstTX() *TX {
+	return s.firstTX
+}
+
+// setReInviteTX сохраняет транзакцию re-INVITE
+func (s *Dialog) setReInviteTX(tx *TX) {
+	s.reInviteMu.Lock()
+	defer s.reInviteMu.Unlock()
+	s.reInviteTX = tx
+}
+
+// getReInviteTX возвращает текущую транзакцию re-INVITE
+func (s *Dialog) getReInviteTX() *TX {
+	s.reInviteMu.Lock()
+	defer s.reInviteMu.Unlock()
+	return s.reInviteTX
 }
 
 // generateTag генерирует уникальный тег для диалога
-// Использует криптографически стойкую генерацию
 func generateTag() string {
-	return generateSecureTag()
+	return fmt.Sprintf("%d.%d", time.Now().UnixNano(), rand.Int63())
 }
 
-// extractURIFromHeaderValue извлекает URI из значения заголовка (например, From или To)
-func extractURIFromHeaderValue(value string) *sip.Uri {
-	// Простая реализация - извлекаем URI из <uri>
-	start := -1
-	end := -1
+// makeRequest создает новый SIP запрос в рамках диалога.
+// Автоматически добавляет необходимые заголовки: From, To, Call-ID, CSeq, Route.
+// Устанавливает локальный адрес (Laddr) в зависимости от типа диалога (UAS/UAC).
+func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
+	trg := s.remoteTarget
+	trg.Port = 0
+	newRequest := sip.NewRequest(method, trg)
 
-	for i, ch := range value {
-		if ch == '<' {
-			start = i + 1
-		} else if ch == '>' && start != -1 {
-			end = i
-			break
+	// Получаем адрес из заголовка To входящего запроса для UAS
+	if s.uaType == UAS && s.initReq != nil {
+		toHeader := s.initReq.To()
+		if toHeader != nil {
+			newRequest.Laddr = sip.Addr{
+				Hostname: toHeader.Address.Host,
+				Port:     toHeader.Address.Port,
+			}
+		}
+	} else {
+		// Для исходящих вызовов (UAC) использовать первый транспорт
+		if len(uu.config.TransportConfigs) > 0 {
+			tc := uu.config.TransportConfigs[0]
+			newRequest.Laddr = sip.Addr{
+				Hostname: tc.Host,
+				Port:     tc.Port,
+			}
 		}
 	}
 
-	if start != -1 && end != -1 && end > start {
-		uriStr := value[start:end]
-		var uri sip.Uri
-		err := sip.ParseUri(uriStr, &uri)
-		if err == nil {
-			return &uri
+	fromTag := newTag()
+
+	fromHeader := sip.FromHeader{
+		DisplayName: s.profile.DisplayName,
+		Address:     s.profile.Address,
+		Params:      sip.NewParams().Add("tag", fromTag),
+	}
+	newRequest.AppendHeader(&fromHeader)
+
+	toHeader := sip.ToHeader{
+		DisplayName: "",
+		Address:     s.remoteTarget,
+		Params:      nil,
+	}
+	newRequest.AppendHeader(&toHeader)
+	newRequest.Recipient = s.remoteTarget
+
+	newRequest.AppendHeader(s.profile.Contact())
+	newRequest.AppendHeader(&s.callID)
+	newRequest.AppendHeader(&sip.CSeqHeader{SeqNo: s.NextLocalCSeq(), MethodName: method})
+	maxForwards := sip.MaxForwardsHeader(70)
+	newRequest.AppendHeader(&maxForwards)
+
+	if len(s.routeSet) > 0 {
+		for _, val := range s.routeSet {
+			newRequest.AppendHeader(&sip.RouteHeader{Address: val})
 		}
 	}
 
-	// Если не нашли <>, пробуем парсить всю строку
-	var uri sip.Uri
-	err := sip.ParseUri(value, &uri)
-	if err == nil {
-		return &uri
+	slog.Debug("Dialog.makeRequest created",
+		slog.String("method", string(method)),
+		slog.String("callID", string(s.callID)),
+		slog.String("fromTag", fromTag),
+		slog.String("localAddr", fmt.Sprintf("%s:%d", newRequest.Laddr.Hostname, newRequest.Laddr.Port)))
+
+	return newRequest
+}
+
+// sendReq отправляет запрос через транспортный уровень и создает транзакцию.
+func (s *Dialog) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
+	// Обновляем время последней активности
+	s.activityMu.Lock()
+	s.lastActivity = time.Now()
+	s.activityMu.Unlock()
+
+	// Отправляем через глобальный UAC
+	tx, err := uu.uac.TransactionRequest(ctx, req, sipgo.ClientRequestAddVia)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to send request")
 	}
 
-	return nil
+	slog.Debug("Dialog.sendReq sent",
+		slog.String("method", string(req.Method)),
+		slog.String("branchID", GetBranchID(req)))
+
+	// Создаем обертку транзакции
+	txWrapper := newTX(req, tx, s)
+	return txWrapper, nil
 }
 
-// extractURIFromContact извлекает URI из Contact заголовка
-func extractURIFromContact(value string) *sip.Uri {
-	// Contact может содержать display name и параметры, поэтому используем ту же логику
-	return extractURIFromHeaderValue(value)
+// updateDialogID обновляет ID диалога на основе CallID и тегов
+func (s *Dialog) updateDialogID() {
+	if s.callID != "" && s.localTag != "" && s.remoteTag != "" {
+		s.id = fmt.Sprintf("%s:%s:%s", s.callID, s.localTag, s.remoteTag)
+	} else if s.callID != "" && s.localTag != "" {
+		// Временный ID пока нет remoteTag
+		s.id = fmt.Sprintf("%s:%s:pending", s.callID, s.localTag)
+	}
 }
+
+//func (s *session) storeRouteSet(msg sip.Message, reverse bool) {
+//	hdrs := msg.GetHeaders("Record-Route")
+//	if len(hdrs) > 0 {
+//		l := 0
+//		for _, rr := range hdrs {
+//			hh := rr.(*sip.RecordRouteHeader)
+//		}
+//		rs := make([]sip.Uri, l)
+//		i := 0
+//		if reverse {
+//			i = l - 1
+//		}
+//		for _, rr := range hdrs {
+//			for hop := rr.(*sip.RecordRouteHeader); hop != nil; hop = hop.Next {
+//				rs[i] = hop.Address
+//				if reverse {
+//					i -= 1
+//				} else {
+//					i += 1
+//				}
+//
+//			}
+//		}
+//		s.routeSet = rs
+//	}
+//}

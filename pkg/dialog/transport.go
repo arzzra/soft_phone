@@ -5,8 +5,6 @@ import (
 	"strings"
 )
 
-// TransportType определяет тип транспортного протокола для SIP сообщений.
-// Пакет поддерживает все основные транспорты согласно RFC 3261.
 type TransportType string
 
 const (
@@ -56,160 +54,58 @@ type TransportConfig struct {
 	KeepAlivePeriod int
 }
 
-// DefaultTransportConfig возвращает конфигурацию транспорта по умолчанию.
-//
-// По умолчанию используется:
-//   - Транспорт: UDP
-//   - Host: "0.0.0.0"
-//   - Port: 5060
-//   - WebSocket путь: "/"
-//   - Keep-alive: включен
-//   - Период keep-alive: 30 секунд
-func DefaultTransportConfig() TransportConfig {
-	return TransportConfig{
-		Type:            TransportUDP,
-		Host:            "0.0.0.0",
-		Port:            5060,
-		WSPath:          "/",
-		KeepAlive:       true,
-		KeepAlivePeriod: 30,
-	}
-}
-
 // Validate проверяет корректность конфигурации транспорта.
 //
 // Проверяет:
 //   - Корректность типа транспорта
-//   - Корректность Host и Port
-//   - Наличие WSPath для WebSocket транспортов
-//   - Корректность KeepAlivePeriod
-func (tc TransportConfig) Validate() error {
+//   - Валидность порта (если указан)
+//   - Корректность WSPath для WebSocket транспортов
+//   - Валидность KeepAlivePeriod
+func (tc *TransportConfig) Validate() error {
+	// Проверка типа транспорта
 	switch tc.Type {
 	case TransportUDP, TransportTCP, TransportTLS, TransportWS, TransportWSS:
-		// Валидные типы транспорта
+		// Валидный тип
+	case "":
+		return fmt.Errorf("тип транспорта не указан")
 	default:
 		return fmt.Errorf("неизвестный тип транспорта: %s", tc.Type)
 	}
 
-	// Проверяем Host
-	if tc.Host == "" {
-		return fmt.Errorf("Host не может быть пустым")
+	// Проверка порта если указан
+	if tc.Port != 0 && (tc.Port < 1 || tc.Port > 65535) {
+		return fmt.Errorf("некорректный порт: %d", tc.Port)
 	}
 
-	// Проверяем Port
-	if tc.Port <= 0 || tc.Port > 65535 {
-		return fmt.Errorf("Port должен быть в диапазоне 1-65535, получен: %d", tc.Port)
-	}
-
-	// Проверяем WSPath для WebSocket транспортов
+	// Проверка WSPath для WebSocket транспортов
 	if tc.Type == TransportWS || tc.Type == TransportWSS {
 		if tc.WSPath == "" {
-			return fmt.Errorf("WSPath не может быть пустым для WebSocket транспорта")
+			tc.WSPath = "/" // Значение по умолчанию
 		}
 		if !strings.HasPrefix(tc.WSPath, "/") {
-			return fmt.Errorf("WSPath должен начинаться с /")
+			return fmt.Errorf("WSPath должен начинаться с '/': %s", tc.WSPath)
 		}
 	}
 
-	// Проверяем KeepAlivePeriod
-	if tc.KeepAlive && tc.KeepAlivePeriod <= 0 {
-		return fmt.Errorf("KeepAlivePeriod должен быть больше 0 при включенном KeepAlive")
+	// Проверка KeepAlivePeriod
+	if tc.KeepAlive && tc.KeepAlivePeriod < 0 {
+		return fmt.Errorf("некорректный период keep-alive: %d", tc.KeepAlivePeriod)
+	}
+
+	// Установка значения по умолчанию для KeepAlivePeriod
+	if tc.KeepAlive && tc.KeepAlivePeriod == 0 {
+		tc.KeepAlivePeriod = 30 // 30 секунд по умолчанию
 	}
 
 	return nil
 }
 
-// GetScheme возвращает SIP схему для данного типа транспорта.
-//
-// Возвращает:
-//   - "sips" для защищённых транспортов (TLS, WSS)
-//   - "sip" для остальных транспортов
-func (tc TransportConfig) GetScheme() string {
-	switch tc.Type {
-	case TransportTLS:
-		return "sips"
-	case TransportWS:
-		return "sip"
-	case TransportWSS:
-		return "sips"
-	default:
-		return "sip"
-	}
-}
-
-// GetTransportParam возвращает параметр transport для Contact и Via заголовков.
-//
-// Используется для указания транспорта в SIP URI и заголовках.
-// Например: ";transport=tcp" для TCP транспорта.
-func (tc TransportConfig) GetTransportParam() string {
-	switch tc.Type {
-	case TransportUDP:
-		return "udp"
-	case TransportTCP:
-		return "tcp"
-	case TransportTLS:
-		return "tls"
-	case TransportWS:
-		return "ws"
-	case TransportWSS:
-		return "wss"
-	default:
-		return "udp"
-	}
-}
-
-// RequiresConnection возвращает true, если транспорт требует установления соединения.
-// UDP является единственным транспортом без соединения.
-func (tc TransportConfig) RequiresConnection() bool {
-	return tc.Type != TransportUDP
-}
-
-// IsSecure возвращает true, если транспорт использует шифрование.
-// Защищёнными считаются TLS и WSS (WebSocket Secure).
-func (tc TransportConfig) IsSecure() bool {
-	return tc.Type == TransportTLS || tc.Type == TransportWSS
-}
-
-// IsWebSocket возвращает true, если транспорт основан на WebSocket.
-// WebSocket транспорты включают WS и WSS.
-func (tc TransportConfig) IsWebSocket() bool {
-	return tc.Type == TransportWS || tc.Type == TransportWSS
-}
-
-// GetListenNetwork возвращает сетевой тип для net.Listen.
-//
-// Возвращает:
-//   - "udp" для UDP транспорта
-//   - "tcp" для TCP, TLS, WebSocket транспортов
-func (tc TransportConfig) GetListenNetwork() string {
-	switch tc.Type {
-	case TransportUDP:
-		return "udp"
-	case TransportTCP, TransportTLS:
-		return "tcp"
-	case TransportWS, TransportWSS:
-		return "tcp" // WebSocket использует TCP
-	default:
-		return "udp"
-	}
-}
-
-// GetListenAddr возвращает полный адрес для прослушивания в формате "host:port".
-//
-// Пример: "192.168.1.100:5060"
-func (tc TransportConfig) GetListenAddr() string {
-	return fmt.Sprintf("%s:%d", tc.Host, tc.Port)
-}
-
 // GetDefaultPort возвращает порт по умолчанию для типа транспорта.
 //
-// Стандартные порты:
-//   - UDP: 5060
-//   - TCP: 5060
-//   - TLS: 5061
-//   - WS: 5060
-//   - WSS: 5061
-func (tc TransportConfig) GetDefaultPort() int {
+// Возвращает:
+//   - 5060 для UDP, TCP, WS
+//   - 5061 для TLS, WSS
+func (tc *TransportConfig) GetDefaultPort() int {
 	switch tc.Type {
 	case TransportTLS, TransportWSS:
 		return 5061
@@ -218,26 +114,44 @@ func (tc TransportConfig) GetDefaultPort() int {
 	}
 }
 
+// IsSecure проверяет, является ли транспорт защищённым.
+//
+// Возвращает true для TLS и WSS транспортов.
+func (tc *TransportConfig) IsSecure() bool {
+	return tc.Type == TransportTLS || tc.Type == TransportWSS
+}
+
 // GetTransportString возвращает строковое представление транспорта.
 //
-// Используется для логирования и отладки.
-// Формат: "TYPE://host:port[/path]"
-func (tc TransportConfig) GetTransportString() string {
-	scheme := strings.ToLower(string(tc.Type))
-	addr := fmt.Sprintf("%s:%d", tc.Host, tc.Port)
-	
-	if tc.IsWebSocket() && tc.WSPath != "" && tc.WSPath != "/" {
-		return fmt.Sprintf("%s://%s%s", scheme, addr, tc.WSPath)
+// Формат: "type://host:port[/path]"
+// Примеры:
+//   - "UDP://192.168.1.100:5060"
+//   - "WSS://sip.example.com:5061/websocket"
+func (tc *TransportConfig) GetTransportString() string {
+	port := tc.Port
+	if port == 0 {
+		port = tc.GetDefaultPort()
 	}
-	
-	return fmt.Sprintf("%s://%s", scheme, addr)
+
+	result := fmt.Sprintf("%s://%s:%d", tc.Type, tc.Host, port)
+
+	// Добавляем путь для WebSocket транспортов
+	if (tc.Type == TransportWS || tc.Type == TransportWSS) && tc.WSPath != "" {
+		result += tc.WSPath
+	}
+
+	return result
 }
 
 // Clone создаёт глубокую копию конфигурации транспорта.
 //
-// Используется для создания независимых копий конфигурации.
-func (tc TransportConfig) Clone() TransportConfig {
-	return TransportConfig{
+// Полезно для создания модифицированных копий без изменения оригинала.
+func (tc *TransportConfig) Clone() *TransportConfig {
+	if tc == nil {
+		return nil
+	}
+
+	clone := &TransportConfig{
 		Type:            tc.Type,
 		Host:            tc.Host,
 		Port:            tc.Port,
@@ -245,10 +159,8 @@ func (tc TransportConfig) Clone() TransportConfig {
 		KeepAlive:       tc.KeepAlive,
 		KeepAlivePeriod: tc.KeepAlivePeriod,
 	}
-}
 
-// TransportOptions для расширения в будущем
-type TransportOptions struct {
-	// Дополнительные опции могут быть добавлены здесь
-	// Например: MaxConnections, ReadTimeout, WriteTimeout и т.д.
+	// TODO: Когда будет добавлен TLSConfig, нужно будет его тоже клонировать
+
+	return clone
 }

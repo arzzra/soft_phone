@@ -1,193 +1,500 @@
 package dialog
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/emiago/sipgo/sip"
+	"log/slog"
+	"strconv"
+	"time"
 )
 
-// handleInviteRequest обрабатывает входящие INVITE запросы
-func (u *UASUAC) handleInviteRequest(req *sip.Request, tx sip.ServerTransaction) {
-	// Проверяем лимиты
-	if u.rateLimiter != nil && !u.rateLimiter.Allow("invite") {
-		res := sip.NewResponseFromRequest(req, sip.StatusServiceUnavailable, "Service Unavailable", nil)
-		_ = tx.Respond(res)
-		return
-	}
-	
-	// Проверяем наличие To tag - если есть, это re-INVITE
-	toHeader := req.To()
-	var toTag string
-	if toHeader != nil && toHeader.Params != nil {
-		toTag, _ = toHeader.Params.Get("tag")
-	}
-	
-	if toTag != "" {
-		// Это re-INVITE (есть To tag) - ищем существующий диалог
-		existingDialog, err := u.dialogManager.GetDialogByRequest(req)
-		if err != nil {
-			// Диалог не найден для re-INVITE - отправляем 481
-			res := sip.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil)
-			_ = tx.Respond(res)
-			u.logger.Warn("получен re-INVITE для несуществующего диалога",
-				CallIDField(req.CallID().Value()),
-				F("to_tag", toTag))
-			return
-		}
-		
-		// Передаем re-INVITE в существующий диалог
-		_ = existingDialog.OnRequest(context.Background(), req, tx)
-		return
-	}
-	
-	// Это новый INVITE (нет To tag) - проверяем, нет ли уже диалога с таким Call-ID
-	existingDialog, err := u.dialogManager.GetDialogByCallID(req.CallID())
-	if err == nil && existingDialog != nil {
-		// Диалог с таким Call-ID уже существует - это дубликат
-		res := sip.NewResponseFromRequest(req, 482, "Loop Detected", nil)
-		_ = tx.Respond(res)
-		u.logger.Warn("получен дублированный INVITE с существующим Call-ID",
-			CallIDField(req.CallID().Value()),
-			F("dialog_state", existingDialog.State()))
-		return
-	}
-	
-	// Создаем новый диалог для входящего INVITE
-	dialog, err := u.dialogManager.CreateServerDialog(req, tx)
-	if err != nil {
-		// Ошибка создания диалога - отправляем 500
-		res := sip.NewResponseFromRequest(req, sip.StatusInternalServerError, "Internal Server Error", nil)
-		_ = tx.Respond(res)
-		u.logger.Error("ошибка создания диалога",
-			CallIDField(req.CallID().Value()),
-			ErrField(err))
-		return
-	}
+var (
+	CallIDDoesNotExist = "empty call id"
+	CallDoesNotExist   = "transaction not found"
+)
 
-	// Передаем управление диалогу
-	_ = dialog.OnRequest(context.Background(), req, tx)
-}
+// handleInvite обрабатывает входящие INVITE запросы
+func (u *UACUAS) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
+	slog.Debug("handleInvite",
+		slog.String("req", req.String()),
+		slog.String("body", string(req.Body())))
 
-// handleAckRequest обрабатывает входящие ACK запросы
-func (u *UASUAC) handleAckRequest(req *sip.Request, tx sip.ServerTransaction) {
-	// Улучшенный поиск диалога
-	dialog, err := u.findDialogForRequest(req)
-	if err != nil {
-		// ACK не требует ответа
-		u.logger.Debug("диалог не найден для ACK",
-			CallIDField(req.CallID().Value()),
-			ErrField(err))
-		return
-	}
-
-	err = dialog.OnRequest(context.Background(), req, tx)
-	if err != nil {
-		u.logger.Error("ошибка обработки ACK в диалоге",
-			DialogField(dialog.ID()),
-			ErrField(err))
-	}
-}
-
-// handleByeRequest обрабатывает входящие BYE запросы
-func (u *UASUAC) handleByeRequest(req *sip.Request, tx sip.ServerTransaction) {
-	// Улучшенный поиск диалога
-	dialog, err := u.findDialogForRequest(req)
-	if err != nil {
-		res := sip.NewResponseFromRequest(req, 481, "Call Does Not Exist", nil)
-		resErr := tx.Respond(res)
-		if resErr != nil {
-			u.logger.Error("не удалось отправить ответ 481 на BYE после повторных попыток",
-				CallIDField(req.CallID().Value()),
-				ErrField(resErr))
-		}
-		return
-	}
-
-	err = dialog.OnRequest(context.Background(), req, tx)
-	if err != nil {
-		u.logger.Error("ошибка обработки BYE в диалоге",
-			DialogField(dialog.ID()),
-			ErrField(err))
-	}
-}
-
-// handleCancelRequest обрабатывает входящие CANCEL запросы
-func (u *UASUAC) handleCancelRequest(req *sip.Request, tx sip.ServerTransaction) {
-	// CANCEL обрабатывается на уровне транзакций
-	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-	_ = tx.Respond(res)
-}
-
-// handleOptionsRequest обрабатывает входящие OPTIONS запросы
-func (u *UASUAC) handleOptionsRequest(req *sip.Request, tx sip.ServerTransaction) {
-	res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-	
-	// Добавляем поддерживаемые методы и расширения
-	hp := NewHeaderProcessor()
-	hp.AddAllowHeaderToResponse(res)
-	hp.AddSupportedHeaderToResponse(res)
-	hp.AddUserAgentToResponse(res, "SoftPhone/1.0")
-	
-	_ = tx.Respond(res)
-}
-
-// findDialogForRequest находит диалог для входящего запроса
-// Сначала пытается найти по тегам (быстрее), затем по Call-ID
-func (u *UASUAC) findDialogForRequest(req *sip.Request) (IDialog, error) {
 	callID := req.CallID()
 	if callID == nil {
-		return nil, fmt.Errorf("missing Call-ID header")
+		resp := sip.NewResponseFromRequest(req, sip.StatusBadRequest, CallIDDoesNotExist, nil)
+		err := tx.Respond(resp)
+		if err != nil {
+			slog.Error("Не удалось отправить ответ на INVITE с отсутствующим Call-ID",
+				slog.Any("error", err),
+				slog.String("Method", req.Method.String()))
+		}
+		return
+	}
+	tagTo := GetToTag(req)
+	sessia, ok := u.dialogs.Get(*callID, tagTo)
+	if tagTo != "" {
+		if ok {
+			// Это re-INVITE для существующего диалога
+			ltx := newTX(req, tx, sessia)
+			if ltx != nil {
+				// Обработка re-INVITE для изменения параметров существующего диалога
+				slog.Debug("Получен re-INVITE для существующего диалога",
+					slog.String("CallID", callID.String()),
+					slog.String("ToTag", tagTo))
+
+				// Проверяем состояние диалога - re-INVITE допустим только в состоянии InCall
+				if sessia.GetCurrentState() != InCall {
+					resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Неверное состояние диалога для re-INVITE", nil)
+					err := tx.Respond(resp)
+					if err != nil {
+						slog.Error("Не удалось отправить ответ на re-INVITE в неверном состоянии",
+							slog.Any("error", err),
+							slog.String("CallID", callID.String()),
+							slog.String("State", sessia.GetCurrentState().String()))
+					}
+					return
+				}
+
+				// Сохраняем re-INVITE транзакцию
+				sessia.setReInviteTX(ltx)
+
+				// Вызываем колбэк для обработки re-INVITE если он установлен
+				if u.onReInvite != nil {
+					u.onReInvite(sessia, ltx)
+				} else {
+					// Если колбэк не установлен, отвечаем 200 OK по умолчанию
+					resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
+					err := tx.Respond(resp)
+					if err != nil {
+						slog.Error("Не удалось отправить ответ 200 OK на re-INVITE",
+							slog.Any("error", err),
+							slog.String("CallID", callID.String()))
+					}
+				}
+			}
+		} else {
+			resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, CallDoesNotExist, nil)
+			err := tx.Respond(resp)
+			if err != nil {
+				slog.Error("Не удалось отправить ответ 481 на re-INVITE для несуществующего диалога",
+					slog.Any("error", err),
+					slog.String("CallID", callID.String()),
+					slog.String("ToTag", tagTo))
+			}
+			return
+		}
+	} else {
+		_, is := u.dialogs.GetWithTX(GetBranchID(req))
+		if is || ok {
+			// loop detected
+			resp := sip.NewResponseFromRequest(req, sip.StatusLoopDetected, "", nil)
+			err := tx.Respond(resp)
+			if err != nil {
+				slog.Error("Не удалось отправить ответ 482 на дублированный INVITE",
+					slog.Any("error", err),
+					slog.String("CallID", callID.String()))
+			}
+			return
+		} else {
+			sessionDialog := newUAS(req, tx)
+			u.dialogs.Put(*callID, tagTo, GetBranchID(req), sessionDialog)
+			lTX := newTX(req, tx, sessionDialog)
+			sessionDialog.setFirstTX(lTX)
+
+			// Вызываем колбэк о новом входящем вызове
+			if u.cb != nil {
+				u.cb(sessionDialog, lTX)
+			} else {
+				slog.Warn("Колбэк для входящих вызовов не установлен",
+					slog.String("CallID", callID.String()))
+			}
+		}
+	}
+}
+
+// handleCancel обрабатывает входящие CANCEL запросы
+func (u *UACUAS) handleCancel(req *sip.Request, tx sip.ServerTransaction) {
+	slog.Debug("handleCancel",
+		slog.String("req", req.String()), slog.String("body", string(req.Body())))
+
+	// CANCEL завершает диалог, который еще не установлен (до получения 200 OK на INVITE)
+
+	callID := req.CallID()
+	if callID == nil {
+		resp := sip.NewResponseFromRequest(req, sip.StatusBadRequest, CallIDDoesNotExist, nil)
+		err := tx.Respond(resp)
+		if err != nil {
+			slog.Error("handle cancel", slog.Any("error", err))
+		}
+		return
 	}
 
-	// Извлекаем теги из заголовков
+	tagTo := GetToTag(req)
+	sess, ok := u.dialogs.Get(*callID, tagTo)
+	if ok {
+		ltx := newTX(req, tx, sess)
+		if ltx == nil {
+			slog.Error("Ошибка создания транзакции для CANCEL",
+				slog.String("CallID", callID.String()),
+				slog.String("ToTag", tagTo))
+			return
+		}
+		// Изменяем состояние диалога на Terminating
+		err := sess.setState(Terminating, ltx)
+		if err != nil {
+			slog.Error("Ошибка изменения состояния диалога при CANCEL",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()),
+				slog.String("CurrentState", sess.GetCurrentState().String()))
+		}
+
+		// Отправляем успешный ответ на CANCEL
+		resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
+		err = tx.Respond(resp)
+		if err != nil {
+			slog.Error("Ошибка отправки 200 OK на CANCEL",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()))
+		}
+
+		// Отправляем 487 Request Terminated на оригинальный INVITE
+		if inviteTx := sess.getFirstTX(); inviteTx != nil && inviteTx.IsServer() {
+			terminatedResp := sip.NewResponseFromRequest(inviteTx.Request(), sip.StatusRequestTerminated, "Request Terminated", nil)
+			if serverTx := inviteTx.ServerTX(); serverTx != nil {
+				err = serverTx.Respond(terminatedResp)
+				if err != nil {
+					slog.Error("Ошибка отправки 487 на INVITE после CANCEL",
+						slog.Any("error", err),
+						slog.String("CallID", callID.String()))
+				}
+			}
+		}
+
+		// Изменяем состояние на Ended
+		err = sess.setState(Ended, ltx)
+		if err != nil {
+			slog.Error("Ошибка изменения состояния диалога на Ended после CANCEL",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()))
+		}
+	} else {
+		sess, is := u.dialogs.GetWithTX(GetBranchID(req))
+		if is {
+			ltx := newTX(req, tx, sess)
+			if ltx == nil {
+				slog.Error("Ошибка создания транзакции для CANCEL (поиск по branch)",
+					slog.String("CallID", callID.String()),
+					slog.String("BranchID", GetBranchID(req)))
+				return
+			}
+			// Изменяем состояние диалога на Terminating
+			err := sess.setState(Terminating, ltx)
+			if err != nil {
+				slog.Error("Ошибка изменения состояния диалога при CANCEL (поиск по branch)",
+					slog.Any("error", err),
+					slog.String("CallID", callID.String()),
+					slog.String("CurrentState", sess.GetCurrentState().String()))
+			}
+
+			// Отправляем успешный ответ на CANCEL
+			resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
+			err = tx.Respond(resp)
+			if err != nil {
+				slog.Error("Ошибка отправки 200 OK на CANCEL (поиск по branch)",
+					slog.Any("error", err),
+					slog.String("CallID", callID.String()))
+			}
+
+			// Отправляем 487 Request Terminated на оригинальный INVITE
+			if inviteTx := sess.getFirstTX(); inviteTx != nil && inviteTx.IsServer() {
+				terminatedResp := sip.NewResponseFromRequest(inviteTx.Request(), sip.StatusRequestTerminated, "Request Terminated", nil)
+				if serverTx := inviteTx.ServerTX(); serverTx != nil {
+					err = serverTx.Respond(terminatedResp)
+					if err != nil {
+						slog.Error("Ошибка отправки 487 на INVITE после CANCEL (поиск по branch)",
+							slog.Any("error", err),
+							slog.String("CallID", callID.String()))
+					}
+				}
+			}
+
+			// Изменяем состояние на Ended
+			err = sess.setState(Ended, ltx)
+			if err != nil {
+				slog.Error("Ошибка изменения состояния диалога на Ended после CANCEL (поиск по branch)",
+					slog.Any("error", err),
+					slog.String("CallID", callID.String()))
+			}
+		} else {
+			// CANCEL для несуществующей транзакции
+			resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Транзакция не найдена", nil)
+			err := tx.Respond(resp)
+			if err != nil {
+				slog.Error("Ошибка отправки 481 на CANCEL для несуществующей транзакции",
+					slog.Any("error", err),
+					slog.String("CallID", callID.String()))
+			}
+		}
+	}
+
+}
+
+// handleBye обрабатывает входящие BYE запросы
+func (u *UACUAS) handleBye(req *sip.Request, tx sip.ServerTransaction) {
+	slog.Debug("handleBye",
+		slog.String("req", req.String()),
+		slog.String("body", string(req.Body())))
+
+	callID := req.CallID()
+	if callID == nil {
+		resp := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Call-ID отсутствует", nil)
+		err := tx.Respond(resp)
+		if err != nil {
+			slog.Error("Ошибка отправки ответа на BYE", slog.Any("error", err))
+		}
+		return
+	}
+
+	tagTo := GetToTag(req)
+	sess, ok := u.dialogs.Get(*callID, tagTo)
+	if !ok {
+		resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Диалог не найден", nil)
+		err := tx.Respond(resp)
+		if err != nil {
+			slog.Error("Ошибка отправки ответа 481 на BYE",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()))
+		}
+		return
+	}
+
+	// Создаем транзакцию и обрабатываем BYE
+	ltx := newTX(req, tx, sess)
+	if ltx != nil {
+		// Обрабатываем BYE в рамках диалога
+		// Изменяем состояние диалога на Terminating
+		err := sess.setState(Terminating, ltx)
+		if err != nil {
+			slog.Error("Ошибка изменения состояния диалога при BYE",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()),
+				slog.String("CurrentState", sess.GetCurrentState().String()))
+		}
+
+		// Вызываем обработчик если он установлен
+		sess.handlersMu.Lock()
+		handler := sess.requestHandler
+		sess.handlersMu.Unlock()
+
+		if handler != nil {
+			handler(ltx)
+		}
+	}
+
+	// Отправляем успешный ответ
+	resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
+	err := tx.Respond(resp)
+	if err != nil {
+		slog.Error("Ошибка отправки 200 OK на BYE",
+			slog.Any("error", err),
+			slog.String("CallID", callID.String()))
+	}
+
+	// Изменяем состояние на Ended и завершаем диалог
+	if ltx != nil {
+		err = sess.setState(Ended, ltx)
+		if err != nil {
+			slog.Error("Ошибка изменения состояния диалога на Ended после BYE",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()))
+		}
+	}
+
+	// Удаляем диалог из менеджера
+	u.dialogs.Delete(*callID, tagTo, GetBranchID(req))
+}
+
+// обработка ACK на ответ клиента на 200 OK
+func (u *UACUAS) handleACK(req *sip.Request, tx sip.ServerTransaction) {
+	slog.Debug("handleAck",
+		slog.String("request", req.String()),
+		slog.String("body", string(req.Body())))
+
+	callID := req.CallID()
+	if callID != nil {
+		tagTo := GetToTag(req)
+		d, ok := u.dialogs.Get(*callID, tagTo)
+		if ok {
+
+			// сам допиши
+			fTx := d.getFirstTX()
+			fTx.writeAck(req)
+
+			// Пока просто логируем получение ACK
+			slog.Debug("ACK получен для существующего диалога",
+				slog.String("CallID", callID.String()),
+				slog.String("ToTag", tagTo))
+		}
+		return
+
+	} else {
+		resp := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "call id is empty", nil)
+		err := tx.Respond(resp)
+		if err != nil {
+			slog.Error("handleAck", slog.Any("error", err))
+		}
+		return
+	}
+}
+
+// handleUpdate обрабатывает входящие UPDATE запросы
+func (u *UACUAS) handleUpdate(req *sip.Request, tx sip.ServerTransaction) {
+	slog.Debug("handleUpdate",
+		slog.String("req", req.String()),
+		slog.String("body", string(req.Body())))
+
+	response := sip.NewResponseFromRequest(req, sip.StatusOK, "", nil)
+	err := tx.Respond(response)
+	if err != nil {
+		slog.Error("Ошибка отправки ответа на UPDATE",
+			slog.Any("error", err),
+			slog.String("CallID", req.CallID().String()))
+	}
+}
+
+// handleOptions обрабатывает входящие OPTIONS запросы
+func (u *UACUAS) handleOptions(req *sip.Request, tx sip.ServerTransaction) {
+	slog.Debug("handleOptions",
+		slog.String("req", req.String()),
+		slog.String("body", string(req.Body())))
+
+	response := sip.NewResponseFromRequest(req, sip.StatusOK, "", nil)
+	err := tx.Respond(response)
+	if err != nil {
+		slog.Error("Ошибка отправки ответа на OPTIONS",
+			slog.Any("error", err),
+			slog.String("CallID", req.CallID().String()))
+	}
+}
+
+// handleNotify обрабатывает входящие NOTIFY запросы
+func (u *UACUAS) handleNotify(req *sip.Request, tx sip.ServerTransaction) {
+	slog.Debug("handleNotify",
+		slog.String("req", req.String()),
+		slog.String("body", string(req.Body())))
+
+	response := sip.NewResponseFromRequest(req, sip.StatusOK, "", nil)
+	err := tx.Respond(response)
+	if err != nil {
+		slog.Error("Ошибка отправки ответа на NOTIFY",
+			slog.Any("error", err),
+			slog.String("CallID", req.CallID().String()))
+	}
+}
+
+// handleRegister обрабатывает входящие REGISTER запросы
+func (u *UACUAS) handleRegister(req *sip.Request, tx sip.ServerTransaction) {
+	slog.Debug("handleRegister",
+		slog.String("req", req.String()),
+		slog.String("body", string(req.Body())))
+
+	// REGISTER обычно используется для регистрации на SIP сервере
+	// В контексте софтфона это может быть не нужно, но добавим базовую обработку
+
+	// Проверяем заголовки
 	fromHeader := req.From()
 	toHeader := req.To()
-	
-	var fromTag, toTag string
-	if fromHeader != nil && fromHeader.Params != nil {
-		fromTag, _ = fromHeader.Params.Get("tag")
-	}
-	if toHeader != nil && toHeader.Params != nil {
-		toTag, _ = toHeader.Params.Get("tag")
+
+	if fromHeader == nil || toHeader == nil {
+		resp := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Отсутствуют обязательные заголовки", nil)
+		err := tx.Respond(resp)
+		if err != nil {
+			slog.Error("Ошибка отправки ответа на REGISTER", slog.Any("error", err))
+		}
+		return
 	}
 
-	// Пытаемся найти по тегам (O(1) операция)
-	if fromTag != "" && toTag != "" {
-		u.logger.Debug("поиск диалога по тегам",
-			CallIDField(callID.Value()),
-			F("from_tag", fromTag),
-			F("to_tag", toTag))
-		
-		dialog, err := u.dialogManager.GetDialogByTags(callID.Value(), fromTag, toTag)
-		if err == nil {
-			return dialog, nil
+	// Проверяем Contact заголовок для регистрации
+	contactHeader := req.Contact()
+	if contactHeader == nil {
+		// Если нет Contact - это запрос на получение информации о регистрации
+		resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
+		err := tx.Respond(resp)
+		if err != nil {
+			slog.Error("Ошибка отправки ответа на REGISTER (query)",
+				slog.Any("error", err),
+				slog.String("From", fromHeader.Address.String()))
+		}
+		return
+	}
+
+	// Обработка регистрации
+	// Проверяем Expires заголовок
+	expiresHeader := req.GetHeader("Expires")
+	var expires int
+	if expiresHdr, ok := expiresHeader.(*sip.ExpiresHeader); ok {
+		expires = int(*expiresHdr)
+	} else {
+		// Проверяем expires параметр в Contact заголовке
+		if contactParams := contactHeader.Params; contactParams != nil {
+			if expiresParam, ok := contactParams["expires"]; ok {
+				if exp, err := strconv.Atoi(expiresParam); err == nil {
+					expires = exp
+				}
+			}
+		}
+		// Если не указан expires, используем значение по умолчанию
+		if expires == 0 {
+			expires = 3600 // 1 час по умолчанию
 		}
 	}
 
-	// Fallback на поиск по Call-ID
-	u.logger.Debug("fallback поиск диалога по Call-ID",
-		CallIDField(callID.Value()))
-	
-	dialog, err := u.dialogManager.GetDialogByCallID(callID)
+	// Если expires = 0, это отмена регистрации
+	if expires == 0 {
+		slog.Info("Отмена регистрации",
+			slog.String("From", fromHeader.Address.String()),
+			slog.String("Contact", contactHeader.Address.String()))
+
+		// Удаляем регистрацию из хранилища
+		if u.registrations != nil {
+			delete(u.registrations, fromHeader.Address.String())
+		}
+	} else {
+		// Сохраняем регистрацию
+		if u.registrations == nil {
+			u.registrations = make(map[string]*Registration)
+		}
+
+		reg := &Registration{
+			AOR:        fromHeader.Address.String(),
+			Contact:    contactHeader.Address.String(),
+			Expires:    expires,
+			Registered: time.Now(),
+		}
+
+		u.registrations[fromHeader.Address.String()] = reg
+
+		slog.Info("Новая регистрация",
+			slog.String("AOR", reg.AOR),
+			slog.String("Contact", reg.Contact),
+			slog.Int("Expires", reg.Expires))
+	}
+	resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
+
+	// Добавляем заголовок Contact в ответ
+	resp.AppendHeader(contactHeader)
+
+	// Добавляем Expires заголовок (время жизни регистрации в секундах)
+	expiresHdr := sip.ExpiresHeader(expires)
+	resp.AppendHeader(&expiresHdr)
+
+	err := tx.Respond(resp)
 	if err != nil {
-		return nil, err
+		slog.Error("Ошибка отправки 200 OK на REGISTER",
+			slog.Any("error", err),
+			slog.String("From", fromHeader.Address.String()))
 	}
 
-	// Проверяем соответствие тегов, если они есть
-	dlg, ok := dialog.(*Dialog)
-	if ok && fromTag != "" {
-		// Для запросов от remote стороны, локальный тег диалога должен совпадать с To тегом запроса
-		// и удаленный тег диалога должен совпадать с From тегом запроса
-		if dlg.localTag != toTag || dlg.remoteTag != fromTag {
-			u.logger.Warn("найден диалог по Call-ID, но теги не совпадают",
-				DialogField(dlg.ID()),
-				F("dialog_local_tag", dlg.localTag),
-				F("request_to_tag", toTag),
-				F("dialog_remote_tag", dlg.remoteTag),
-				F("request_from_tag", fromTag))
-		}
-	}
-
-	return dialog, nil
+	slog.Info("Регистрация обработана",
+		slog.String("From", fromHeader.Address.String()),
+		slog.String("Contact", contactHeader.Address.String()))
 }

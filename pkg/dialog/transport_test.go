@@ -1,7 +1,6 @@
 package dialog
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -13,34 +12,43 @@ func TestTransportConfig_Validate(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name: "Валидная UDP конфигурация",
+			name: "Валидный UDP транспорт",
 			config: TransportConfig{
 				Type: TransportUDP,
-				Host: "192.168.1.1",
+				Host: "192.168.1.100",
 				Port: 5060,
 			},
 			wantErr: false,
 		},
 		{
-			name: "Валидная TCP конфигурация с KeepAlive",
+			name: "Валидный TCP транспорт с KeepAlive",
 			config: TransportConfig{
 				Type:            TransportTCP,
-				Host:            "example.com",
+				Host:            "sip.example.com",
 				Port:            5060,
 				KeepAlive:       true,
-				KeepAlivePeriod: 30,
+				KeepAlivePeriod: 60,
 			},
 			wantErr: false,
 		},
 		{
-			name: "Валидная WebSocket конфигурация",
+			name: "Валидный WS транспорт с путём",
 			config: TransportConfig{
 				Type:   TransportWS,
 				Host:   "ws.example.com",
-				Port:   8080,
-				WSPath: "/sip",
+				Port:   80,
+				WSPath: "/websocket",
 			},
 			wantErr: false,
+		},
+		{
+			name: "Пустой тип транспорта",
+			config: TransportConfig{
+				Host: "example.com",
+				Port: 5060,
+			},
+			wantErr: true,
+			errMsg:  "тип транспорта не указан",
 		},
 		{
 			name: "Неизвестный тип транспорта",
@@ -53,68 +61,66 @@ func TestTransportConfig_Validate(t *testing.T) {
 			errMsg:  "неизвестный тип транспорта",
 		},
 		{
-			name: "Пустой Host",
-			config: TransportConfig{
-				Type: TransportUDP,
-				Host: "",
-				Port: 5060,
-			},
-			wantErr: true,
-			errMsg:  "Host не может быть пустым",
-		},
-		{
-			name: "Некорректный Port (0)",
+			name: "Некорректный порт - отрицательный",
 			config: TransportConfig{
 				Type: TransportUDP,
 				Host: "example.com",
-				Port: 0,
+				Port: -1,
 			},
 			wantErr: true,
-			errMsg:  "Port должен быть в диапазоне 1-65535",
+			errMsg:  "некорректный порт",
 		},
 		{
-			name: "Некорректный Port (больше 65535)",
+			name: "Некорректный порт - слишком большой",
 			config: TransportConfig{
 				Type: TransportUDP,
 				Host: "example.com",
-				Port: 70000,
+				Port: 65536,
 			},
 			wantErr: true,
-			errMsg:  "Port должен быть в диапазоне 1-65535",
+			errMsg:  "некорректный порт",
 		},
 		{
-			name: "WebSocket без WSPath",
+			name: "WS без пути - должен установить по умолчанию",
+			config: TransportConfig{
+				Type: TransportWS,
+				Host: "ws.example.com",
+				Port: 80,
+			},
+			wantErr: false,
+		},
+		{
+			name: "WS с некорректным путём",
 			config: TransportConfig{
 				Type:   TransportWS,
-				Host:   "example.com",
-				Port:   8080,
-				WSPath: "",
+				Host:   "ws.example.com",
+				Port:   80,
+				WSPath: "websocket", // без слеша
 			},
 			wantErr: true,
-			errMsg:  "WSPath не может быть пустым для WebSocket транспорта",
+			errMsg:  "WSPath должен начинаться с '/'",
 		},
 		{
-			name: "WebSocket с неправильным WSPath",
-			config: TransportConfig{
-				Type:   TransportWSS,
-				Host:   "example.com",
-				Port:   8443,
-				WSPath: "sip", // без начального слеша
-			},
-			wantErr: true,
-			errMsg:  "WSPath должен начинаться с /",
-		},
-		{
-			name: "KeepAlive с некорректным периодом",
+			name: "Некорректный KeepAlivePeriod",
 			config: TransportConfig{
 				Type:            TransportTCP,
-				Host:            "example.com",
+				Host:            "tcp.example.com",
 				Port:            5060,
 				KeepAlive:       true,
-				KeepAlivePeriod: 0,
+				KeepAlivePeriod: -10,
 			},
 			wantErr: true,
-			errMsg:  "KeepAlivePeriod должен быть больше 0",
+			errMsg:  "некорректный период keep-alive",
+		},
+		{
+			name: "KeepAlive без периода - должен установить по умолчанию",
+			config: TransportConfig{
+				Type:      TransportTCP,
+				Host:      "tcp.example.com",
+				Port:      5060,
+				KeepAlive: true,
+			},
+			wantErr: false,
 		},
 	}
 
@@ -126,79 +132,41 @@ func TestTransportConfig_Validate(t *testing.T) {
 				return
 			}
 			if err != nil && tt.errMsg != "" {
-				if !strings.Contains(err.Error(), tt.errMsg) {
-					t.Errorf("Validate() error = %v, должна содержать %v", err, tt.errMsg)
+				if err.Error() == "" || !strContains(err.Error(), tt.errMsg) {
+					t.Errorf("Validate() error = %v, должно содержать %v", err, tt.errMsg)
 				}
 			}
-		})
-	}
-}
 
-func TestTransportConfig_GetScheme(t *testing.T) {
-	tests := []struct {
-		name      string
-		transport TransportType
-		want      string
-	}{
-		{"UDP", TransportUDP, "sip"},
-		{"TCP", TransportTCP, "sip"},
-		{"TLS", TransportTLS, "sips"},
-		{"WS", TransportWS, "sip"},
-		{"WSS", TransportWSS, "sips"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tc := TransportConfig{Type: tt.transport}
-			if got := tc.GetScheme(); got != tt.want {
-				t.Errorf("GetScheme() = %v, want %v", got, tt.want)
+			// Проверяем установку значений по умолчанию
+			if tt.name == "WS без пути - должен установить по умолчанию" && tt.config.WSPath != "/" {
+				t.Errorf("WSPath должен быть установлен в '/', получено %v", tt.config.WSPath)
+			}
+			if tt.name == "KeepAlive без периода - должен установить по умолчанию" && tt.config.KeepAlivePeriod != 30 {
+				t.Errorf("KeepAlivePeriod должен быть установлен в 30, получено %v", tt.config.KeepAlivePeriod)
 			}
 		})
 	}
 }
 
-func TestTransportConfig_GetTransportParam(t *testing.T) {
+func TestTransportConfig_GetDefaultPort(t *testing.T) {
 	tests := []struct {
 		name      string
 		transport TransportType
-		want      string
+		want      int
 	}{
-		{"UDP", TransportUDP, "udp"},
-		{"TCP", TransportTCP, "tcp"},
-		{"TLS", TransportTLS, "tls"},
-		{"WS", TransportWS, "ws"},
-		{"WSS", TransportWSS, "wss"},
-		{"Unknown", "UNKNOWN", "udp"}, // default
+		{"UDP", TransportUDP, 5060},
+		{"TCP", TransportTCP, 5060},
+		{"TLS", TransportTLS, 5061},
+		{"WS", TransportWS, 5060},
+		{"WSS", TransportWSS, 5061},
+		{"Пустой", "", 5060}, // по умолчанию
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := TransportConfig{Type: tt.transport}
-			if got := tc.GetTransportParam(); got != tt.want {
-				t.Errorf("GetTransportParam() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTransportConfig_RequiresConnection(t *testing.T) {
-	tests := []struct {
-		name      string
-		transport TransportType
-		want      bool
-	}{
-		{"UDP не требует соединения", TransportUDP, false},
-		{"TCP требует соединения", TransportTCP, true},
-		{"TLS требует соединения", TransportTLS, true},
-		{"WS требует соединения", TransportWS, true},
-		{"WSS требует соединения", TransportWSS, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tc := TransportConfig{Type: tt.transport}
-			if got := tc.RequiresConnection(); got != tt.want {
-				t.Errorf("RequiresConnection() = %v, want %v", got, tt.want)
+			tc := &TransportConfig{Type: tt.transport}
+			if got := tc.GetDefaultPort(); got != tt.want {
+				t.Errorf("GetDefaultPort() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -219,103 +187,9 @@ func TestTransportConfig_IsSecure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := TransportConfig{Type: tt.transport}
+			tc := &TransportConfig{Type: tt.transport}
 			if got := tc.IsSecure(); got != tt.want {
 				t.Errorf("IsSecure() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTransportConfig_IsWebSocket(t *testing.T) {
-	tests := []struct {
-		name      string
-		transport TransportType
-		want      bool
-	}{
-		{"UDP не WebSocket", TransportUDP, false},
-		{"TCP не WebSocket", TransportTCP, false},
-		{"TLS не WebSocket", TransportTLS, false},
-		{"WS - WebSocket", TransportWS, true},
-		{"WSS - WebSocket", TransportWSS, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tc := TransportConfig{Type: tt.transport}
-			if got := tc.IsWebSocket(); got != tt.want {
-				t.Errorf("IsWebSocket() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTransportConfig_GetListenNetwork(t *testing.T) {
-	tests := []struct {
-		name      string
-		transport TransportType
-		want      string
-	}{
-		{"UDP", TransportUDP, "udp"},
-		{"TCP", TransportTCP, "tcp"},
-		{"TLS", TransportTLS, "tcp"},
-		{"WS", TransportWS, "tcp"},
-		{"WSS", TransportWSS, "tcp"},
-		{"Unknown", "UNKNOWN", "udp"}, // default
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tc := TransportConfig{Type: tt.transport}
-			if got := tc.GetListenNetwork(); got != tt.want {
-				t.Errorf("GetListenNetwork() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTransportConfig_GetListenAddr(t *testing.T) {
-	tests := []struct {
-		name string
-		host string
-		port int
-		want string
-	}{
-		{"Стандартный адрес", "192.168.1.1", 5060, "192.168.1.1:5060"},
-		{"Localhost", "localhost", 8080, "localhost:8080"},
-		{"IPv6", "::1", 5061, "::1:5061"},
-		{"All interfaces", "0.0.0.0", 5060, "0.0.0.0:5060"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tc := TransportConfig{Host: tt.host, Port: tt.port}
-			if got := tc.GetListenAddr(); got != tt.want {
-				t.Errorf("GetListenAddr() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTransportConfig_GetDefaultPort(t *testing.T) {
-	tests := []struct {
-		name      string
-		transport TransportType
-		want      int
-	}{
-		{"UDP - порт по умолчанию 5060", TransportUDP, 5060},
-		{"TCP - порт по умолчанию 5060", TransportTCP, 5060},
-		{"TLS - порт по умолчанию 5061", TransportTLS, 5061},
-		{"WS - порт по умолчанию 5060", TransportWS, 5060},
-		{"WSS - порт по умолчанию 5061", TransportWSS, 5061},
-		{"Unknown - порт по умолчанию 5060", "UNKNOWN", 5060},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tc := TransportConfig{Type: tt.transport}
-			if got := tc.GetDefaultPort(); got != tt.want {
-				t.Errorf("GetDefaultPort() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -328,52 +202,40 @@ func TestTransportConfig_GetTransportString(t *testing.T) {
 		want   string
 	}{
 		{
-			name: "UDP транспорт",
+			name: "UDP с указанным портом",
 			config: TransportConfig{
 				Type: TransportUDP,
-				Host: "192.168.1.1",
+				Host: "192.168.1.100",
 				Port: 5060,
 			},
-			want: "udp://192.168.1.1:5060",
+			want: "UDP://192.168.1.100:5060",
 		},
 		{
-			name: "TLS транспорт",
+			name: "TCP без порта - используется по умолчанию",
 			config: TransportConfig{
-				Type: TransportTLS,
-				Host: "secure.example.com",
-				Port: 5061,
+				Type: TransportTCP,
+				Host: "sip.example.com",
 			},
-			want: "tls://secure.example.com:5061",
+			want: "TCP://sip.example.com:5060",
 		},
 		{
-			name: "WebSocket с путём",
-			config: TransportConfig{
-				Type:   TransportWS,
-				Host:   "ws.example.com",
-				Port:   8080,
-				WSPath: "/sip",
-			},
-			want: "ws://ws.example.com:8080/sip",
-		},
-		{
-			name: "WebSocket с корневым путём",
+			name: "WS с путём",
 			config: TransportConfig{
 				Type:   TransportWS,
 				Host:   "ws.example.com",
 				Port:   8080,
-				WSPath: "/",
+				WSPath: "/websocket",
 			},
-			want: "ws://ws.example.com:8080",
+			want: "WS://ws.example.com:8080/websocket",
 		},
 		{
-			name: "WebSocket Secure",
+			name: "WSS без пути",
 			config: TransportConfig{
-				Type:   TransportWSS,
-				Host:   "wss.example.com",
-				Port:   8443,
-				WSPath: "/secure",
+				Type: TransportWSS,
+				Host: "wss.example.com",
+				Port: 443,
 			},
-			want: "wss://wss.example.com:8443/secure",
+			want: "WSS://wss.example.com:443",
 		},
 	}
 
@@ -387,67 +249,72 @@ func TestTransportConfig_GetTransportString(t *testing.T) {
 }
 
 func TestTransportConfig_Clone(t *testing.T) {
-	original := TransportConfig{
+	original := &TransportConfig{
 		Type:            TransportTCP,
-		Host:            "example.com",
+		Host:            "original.com",
 		Port:            5060,
-		WSPath:          "/sip",
+		WSPath:          "/ws",
 		KeepAlive:       true,
-		KeepAlivePeriod: 45,
+		KeepAlivePeriod: 60,
 	}
 
+	// Клонируем
 	clone := original.Clone()
 
-	// Проверяем, что все поля скопированы
+	// Проверяем что все поля скопированы
 	if clone.Type != original.Type {
-		t.Errorf("Clone().Type = %v, want %v", clone.Type, original.Type)
+		t.Error("Type не скопирован")
 	}
 	if clone.Host != original.Host {
-		t.Errorf("Clone().Host = %v, want %v", clone.Host, original.Host)
+		t.Error("Host не скопирован")
 	}
 	if clone.Port != original.Port {
-		t.Errorf("Clone().Port = %v, want %v", clone.Port, original.Port)
+		t.Error("Port не скопирован")
 	}
 	if clone.WSPath != original.WSPath {
-		t.Errorf("Clone().WSPath = %v, want %v", clone.WSPath, original.WSPath)
+		t.Error("WSPath не скопирован")
 	}
 	if clone.KeepAlive != original.KeepAlive {
-		t.Errorf("Clone().KeepAlive = %v, want %v", clone.KeepAlive, original.KeepAlive)
+		t.Error("KeepAlive не скопирован")
 	}
 	if clone.KeepAlivePeriod != original.KeepAlivePeriod {
-		t.Errorf("Clone().KeepAlivePeriod = %v, want %v", clone.KeepAlivePeriod, original.KeepAlivePeriod)
+		t.Error("KeepAlivePeriod не скопирован")
 	}
 
-	// Проверяем, что это действительно копия (изменение клона не влияет на оригинал)
+	// Проверяем что это разные объекты
+	if clone == original {
+		t.Error("Clone должен возвращать новый объект")
+	}
+
+	// Изменяем клон
 	clone.Host = "modified.com"
-	clone.Port = 9999
-	if original.Host != "example.com" {
-		t.Error("Изменение клона повлияло на оригинал (Host)")
+	clone.Port = 5061
+
+	// Проверяем что оригинал не изменился
+	if original.Host != "original.com" {
+		t.Error("Изменение клона затронуло оригинал")
 	}
 	if original.Port != 5060 {
-		t.Error("Изменение клона повлияло на оригинал (Port)")
+		t.Error("Изменение клона затронуло оригинал")
+	}
+
+	// Тест клонирования nil
+	var nilConfig *TransportConfig
+	if nilConfig.Clone() != nil {
+		t.Error("Clone nil должен возвращать nil")
 	}
 }
 
-func TestDefaultTransportConfig(t *testing.T) {
-	config := DefaultTransportConfig()
+// Вспомогательная функция
+func strContains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && strContainsHelper(s, substr))
+}
 
-	if config.Type != TransportUDP {
-		t.Errorf("DefaultTransportConfig().Type = %v, want %v", config.Type, TransportUDP)
+func strContainsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
 	}
-	if config.Host != "0.0.0.0" {
-		t.Errorf("DefaultTransportConfig().Host = %v, want %v", config.Host, "0.0.0.0")
-	}
-	if config.Port != 5060 {
-		t.Errorf("DefaultTransportConfig().Port = %v, want %v", config.Port, 5060)
-	}
-	if config.WSPath != "/" {
-		t.Errorf("DefaultTransportConfig().WSPath = %v, want %v", config.WSPath, "/")
-	}
-	if !config.KeepAlive {
-		t.Errorf("DefaultTransportConfig().KeepAlive = %v, want %v", config.KeepAlive, true)
-	}
-	if config.KeepAlivePeriod != 30 {
-		t.Errorf("DefaultTransportConfig().KeepAlivePeriod = %v, want %v", config.KeepAlivePeriod, 30)
-	}
+	return false
 }

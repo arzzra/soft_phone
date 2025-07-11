@@ -1,90 +1,56 @@
 package dialog
 
 import (
-	"strings"
 	"sync"
 	"testing"
-
-	"github.com/emiago/sipgo/sip"
+	"time"
 )
 
 func TestEndpoint_BuildURI(t *testing.T) {
 	tests := []struct {
 		name     string
-		endpoint *Endpoint
+		endpoint Endpoint
 		user     string
-		want     sip.Uri
+		wantURI  string
 	}{
 		{
 			name: "UDP endpoint",
-			endpoint: &Endpoint{
-				Name: "test",
-				Host: "192.168.1.100",
-				Port: 5060,
-				Transport: TransportConfig{
-					Type: TransportUDP,
-				},
+			endpoint: Endpoint{
+				Host:      "192.168.1.100",
+				Port:      5060,
+				Transport: TransportConfig{Type: TransportUDP},
 			},
-			user: "alice",
-			want: sip.Uri{
-				Scheme: "sip",
-				User:   "alice",
-				Host:   "192.168.1.100",
-				Port:   5060,
-			},
+			user:    "alice",
+			wantURI: "sip:alice@192.168.1.100:5060",
 		},
 		{
-			name: "TLS endpoint",
-			endpoint: &Endpoint{
-				Name: "secure",
-				Host: "secure.example.com",
-				Port: 5061,
-				Transport: TransportConfig{
-					Type: TransportTLS,
-				},
+			name: "TLS endpoint - должен использовать sips",
+			endpoint: Endpoint{
+				Host:      "secure.example.com",
+				Port:      5061,
+				Transport: TransportConfig{Type: TransportTLS},
 			},
-			user: "bob",
-			want: sip.Uri{
-				Scheme: "sips",
-				User:   "bob",
-				Host:   "secure.example.com",
-				Port:   5061,
-			},
+			user:    "bob",
+			wantURI: "sips:bob@secure.example.com:5061",
 		},
 		{
-			name: "WSS endpoint",
-			endpoint: &Endpoint{
-				Name: "websocket",
-				Host: "ws.example.com",
-				Port: 8443,
-				Transport: TransportConfig{
-					Type: TransportWSS,
-				},
+			name: "WSS endpoint - должен использовать sips",
+			endpoint: Endpoint{
+				Host:      "wss.example.com",
+				Port:      443,
+				Transport: TransportConfig{Type: TransportWSS},
 			},
-			user: "charlie",
-			want: sip.Uri{
-				Scheme: "sips",
-				User:   "charlie",
-				Host:   "ws.example.com",
-				Port:   8443,
-			},
+			user:    "charlie",
+			wantURI: "sips:charlie@wss.example.com:443",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.endpoint.BuildURI(tt.user)
-			if got.Scheme != tt.want.Scheme {
-				t.Errorf("BuildURI().Scheme = %v, want %v", got.Scheme, tt.want.Scheme)
-			}
-			if got.User != tt.want.User {
-				t.Errorf("BuildURI().User = %v, want %v", got.User, tt.want.User)
-			}
-			if got.Host != tt.want.Host {
-				t.Errorf("BuildURI().Host = %v, want %v", got.Host, tt.want.Host)
-			}
-			if got.Port != tt.want.Port {
-				t.Errorf("BuildURI().Port = %v, want %v", got.Port, tt.want.Port)
+			uri := tt.endpoint.BuildURI(tt.user)
+			got := uri.String()
+			if got != tt.wantURI {
+				t.Errorf("BuildURI() = %v, want %v", got, tt.wantURI)
 			}
 		})
 	}
@@ -93,82 +59,73 @@ func TestEndpoint_BuildURI(t *testing.T) {
 func TestEndpoint_Validate(t *testing.T) {
 	tests := []struct {
 		name     string
-		endpoint *Endpoint
+		endpoint Endpoint
 		wantErr  bool
 		errMsg   string
 	}{
 		{
 			name: "Валидный endpoint",
-			endpoint: &Endpoint{
-				Name:   "main",
-				Host:   "sip.example.com",
-				Port:   5060,
-				Weight: 10,
+			endpoint: Endpoint{
+				Name: "main",
+				Host: "sip.example.com",
+				Port: 5060,
 				Transport: TransportConfig{
 					Type: TransportUDP,
-					Host: "0.0.0.0",
+					Host: "sip.example.com",
 					Port: 5060,
 				},
 			},
 			wantErr: false,
 		},
 		{
-			name: "Endpoint без имени",
-			endpoint: &Endpoint{
-				Name: "",
+			name: "Пустое имя",
+			endpoint: Endpoint{
 				Host: "sip.example.com",
 				Port: 5060,
+				Transport: TransportConfig{
+					Type: TransportUDP,
+				},
 			},
 			wantErr: true,
 			errMsg:  "имя endpoint'а не может быть пустым",
 		},
 		{
-			name: "Endpoint без хоста",
-			endpoint: &Endpoint{
-				Name: "test",
-				Host: "",
-				Port: 5060,
-			},
-			wantErr: true,
-			errMsg:  "хост endpoint'а",
-		},
-		{
-			name: "Endpoint с некорректным портом",
-			endpoint: &Endpoint{
-				Name: "test",
-				Host: "example.com",
-				Port: 0,
-			},
-			wantErr: true,
-			errMsg:  "некорректный порт",
-		},
-		{
-			name: "Endpoint с некорректным транспортом",
-			endpoint: &Endpoint{
-				Name: "test",
-				Host: "example.com",
+			name: "Пустой хост",
+			endpoint: Endpoint{
+				Name: "main",
 				Port: 5060,
 				Transport: TransportConfig{
-					Type: "INVALID",
+					Type: TransportUDP,
+				},
+			},
+			wantErr: true,
+			errMsg:  "хост endpoint'а 'main' не может быть пустым",
+		},
+		{
+			name: "Некорректный порт",
+			endpoint: Endpoint{
+				Name: "main",
+				Host: "sip.example.com",
+				Port: 0,
+				Transport: TransportConfig{
+					Type: TransportUDP,
+				},
+			},
+			wantErr: true,
+			errMsg:  "некорректный порт 0",
+		},
+		{
+			name: "Некорректная конфигурация транспорта",
+			endpoint: Endpoint{
+				Name:      "main",
+				Host:      "sip.example.com",
+				Port:      5060,
+				Transport: TransportConfig{
+					// Type не указан
 				},
 			},
 			wantErr: true,
 			errMsg:  "некорректная конфигурация транспорта",
-		},
-		{
-			name: "Endpoint с нулевым весом (должен установиться в 1)",
-			endpoint: &Endpoint{
-				Name:   "test",
-				Host:   "example.com",
-				Port:   5060,
-				Weight: 0,
-				Transport: TransportConfig{
-					Type: TransportUDP,
-					Host: "0.0.0.0",
-					Port: 5060,
-				},
-			},
-			wantErr: false,
 		},
 	}
 
@@ -180,129 +137,102 @@ func TestEndpoint_Validate(t *testing.T) {
 				return
 			}
 			if err != nil && tt.errMsg != "" {
-				if !strings.Contains(err.Error(), tt.errMsg) {
-					t.Errorf("Validate() error = %v, должна содержать %v", err, tt.errMsg)
-				}
-			}
-			// Проверяем, что вес установился в 1, если был 0
-			if !tt.wantErr && tt.endpoint.Weight == 0 {
-				if tt.endpoint.Weight != 1 {
-					t.Errorf("Validate() должен установить Weight = 1, если он был 0")
+				if !contains(err.Error(), tt.errMsg) {
+					t.Errorf("Validate() error = %v, должно содержать %v", err, tt.errMsg)
 				}
 			}
 		})
 	}
 }
 
-func TestEndpoint_HealthCheck(t *testing.T) {
+func TestEndpoint_HealthManagement(t *testing.T) {
 	endpoint := &Endpoint{
-		Name:   "test",
-		Host:   "example.com",
-		Port:   5060,
-		Weight: 1,
+		Name: "test",
+		Host: "192.168.1.100",
+		Port: 5060,
 		Transport: TransportConfig{
 			Type: TransportUDP,
-			Host: "0.0.0.0",
-			Port: 5060,
 		},
 	}
 
-	// Проверяем, что изначально endpoint здоров
-	if !endpoint.HealthCheck() {
-		t.Error("HealthCheck() должен возвращать true для нового endpoint")
-	}
-
-	// Добавляем несколько ошибок
-	for i := 0; i < 4; i++ {
-		endpoint.RecordFailure()
-	}
-
-	// Всё ещё должен быть здоров (меньше 5 ошибок)
-	if !endpoint.HealthCheck() {
-		t.Error("HealthCheck() должен возвращать true при < 5 ошибках")
-	}
-
-	// Ещё одна ошибка - теперь должен быть нездоров
-	endpoint.RecordFailure()
-	if endpoint.HealthCheck() {
-		t.Error("HealthCheck() должен возвращать false при >= 5 ошибках")
-	}
-
-	// Проверяем, что время последней проверки обновилось
-	if endpoint.lastHealthCheck.IsZero() {
-		t.Error("lastHealthCheck должен быть установлен после HealthCheck()")
-	}
-}
-
-func TestEndpoint_RecordSuccessAndFailure(t *testing.T) {
-	endpoint := &Endpoint{
-		Name: "test",
-	}
-
-	// Изначально должен быть здоров
-	if !endpoint.IsHealthy() {
-		t.Error("Новый endpoint должен быть здоров")
-	}
-
-	// Записываем несколько ошибок
-	for i := 0; i < 5; i++ {
-		endpoint.RecordFailure()
-	}
-
-	// Теперь должен быть нездоров
+	// Изначально endpoint должен быть нездоровым
 	if endpoint.IsHealthy() {
-		t.Error("Endpoint должен быть нездоров после 5 ошибок")
-	}
-
-	// Проверяем счётчик ошибок
-	if endpoint.GetFailureCount() != 5 {
-		t.Errorf("GetFailureCount() = %d, ожидалось 5", endpoint.GetFailureCount())
+		t.Error("Новый endpoint не должен быть здоровым")
 	}
 
 	// Записываем успех
 	endpoint.RecordSuccess()
-
-	// Должен снова стать здоровым
 	if !endpoint.IsHealthy() {
-		t.Error("Endpoint должен быть здоров после RecordSuccess()")
+		t.Error("После RecordSuccess endpoint должен быть здоровым")
+	}
+	if endpoint.FailureCount.Load() != 0 {
+		t.Error("После RecordSuccess счётчик ошибок должен быть 0")
 	}
 
-	// Счётчик ошибок должен быть сброшен
-	if endpoint.GetFailureCount() != 0 {
-		t.Errorf("GetFailureCount() = %d, ожидалось 0 после успеха", endpoint.GetFailureCount())
+	// Записываем неудачи
+	endpoint.RecordFailure()
+	endpoint.RecordFailure()
+	if !endpoint.IsHealthy() {
+		t.Error("После 2 неудач endpoint всё ещё должен быть здоровым")
 	}
 
-	// Проверяем, что LastUsed был обновлён
-	if endpoint.GetLastUsed().IsZero() {
-		t.Error("LastUsed должен быть установлен после RecordSuccess()")
+	// Третья неудача должна пометить как нездоровый
+	endpoint.RecordFailure()
+	if endpoint.IsHealthy() {
+		t.Error("После 3 неудач endpoint должен быть нездоровым")
+	}
+	if endpoint.FailureCount.Load() != 3 {
+		t.Errorf("Счётчик неудач должен быть 3, получено %d", endpoint.FailureCount.Load())
+	}
+
+	// Успех должен сбросить состояние
+	endpoint.RecordSuccess()
+	if !endpoint.IsHealthy() {
+		t.Error("После успеха endpoint должен быть здоровым")
+	}
+	if endpoint.FailureCount.Load() != 0 {
+		t.Error("После успеха счётчик ошибок должен быть сброшен")
 	}
 }
 
-func TestEndpoint_String(t *testing.T) {
+func TestEndpoint_ConcurrentAccess(t *testing.T) {
 	endpoint := &Endpoint{
-		Name:     "main",
-		Priority: 10,
-		Weight:   5,
+		Name: "concurrent",
+		Host: "test.com",
+		Port: 5060,
 		Transport: TransportConfig{
-			Type: TransportTCP,
-			Host: "example.com",
-			Port: 5060,
+			Type: TransportUDP,
 		},
 	}
-	endpoint.isHealthy.Store(true)
 
-	str := endpoint.String()
-	if !strings.Contains(str, "main") {
-		t.Errorf("String() должен содержать имя endpoint'а")
+	// Запускаем несколько горутин для проверки thread-safety
+	var wg sync.WaitGroup
+	iterations := 100
+	goroutines := 10
+
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				if j%3 == 0 {
+					endpoint.RecordSuccess()
+				} else {
+					endpoint.RecordFailure()
+				}
+				_ = endpoint.IsHealthy()
+			}
+		}()
 	}
-	if !strings.Contains(str, "[10:5]") {
-		t.Errorf("String() должен содержать приоритет и вес")
-	}
-	if !strings.Contains(str, "tcp://example.com:5060") {
-		t.Errorf("String() должен содержать транспорт")
-	}
-	if !strings.Contains(str, "healthy") {
-		t.Errorf("String() должен содержать статус здоровья")
+
+	wg.Wait()
+
+	// Проверяем что не было паники и данные корректны
+	count := endpoint.FailureCount.Load()
+	// В зависимости от последовательности операций, если последней была RecordSuccess,
+	// счётчик будет сброшен в 0, что нормально для этого теста
+	if count > uint32(goroutines*iterations) {
+		t.Errorf("Некорректный счётчик неудач после конкурентного доступа: %d", count)
 	}
 }
 
@@ -322,8 +252,6 @@ func TestEndpointConfig_Validate(t *testing.T) {
 					Port: 5060,
 					Transport: TransportConfig{
 						Type: TransportUDP,
-						Host: "0.0.0.0",
-						Port: 5060,
 					},
 				},
 			},
@@ -339,8 +267,6 @@ func TestEndpointConfig_Validate(t *testing.T) {
 						Port: 5060,
 						Transport: TransportConfig{
 							Type: TransportUDP,
-							Host: "0.0.0.0",
-							Port: 5060,
 						},
 					},
 				},
@@ -354,18 +280,6 @@ func TestEndpointConfig_Validate(t *testing.T) {
 			errMsg:  "должен быть указан хотя бы один endpoint",
 		},
 		{
-			name: "Невалидный primary endpoint",
-			config: EndpointConfig{
-				Primary: &Endpoint{
-					Name: "", // пустое имя
-					Host: "example.com",
-					Port: 5060,
-				},
-			},
-			wantErr: true,
-			errMsg:  "ошибка в primary endpoint",
-		},
-		{
 			name: "Дублирующиеся имена",
 			config: EndpointConfig{
 				Primary: &Endpoint{
@@ -374,25 +288,21 @@ func TestEndpointConfig_Validate(t *testing.T) {
 					Port: 5060,
 					Transport: TransportConfig{
 						Type: TransportUDP,
-						Host: "0.0.0.0",
-						Port: 5060,
 					},
 				},
 				Fallbacks: []*Endpoint{
 					{
-						Name: "duplicate", // то же имя
-						Host: "backup.com",
+						Name: "duplicate",
+						Host: "fallback.com",
 						Port: 5060,
 						Transport: TransportConfig{
 							Type: TransportUDP,
-							Host: "0.0.0.0",
-							Port: 5060,
 						},
 					},
 				},
 			},
 			wantErr: true,
-			errMsg:  "дублирующееся имя endpoint'а",
+			errMsg:  "дублирующееся имя endpoint'а: duplicate",
 		},
 	}
 
@@ -404,8 +314,8 @@ func TestEndpointConfig_Validate(t *testing.T) {
 				return
 			}
 			if err != nil && tt.errMsg != "" {
-				if !strings.Contains(err.Error(), tt.errMsg) {
-					t.Errorf("Validate() error = %v, должна содержать %v", err, tt.errMsg)
+				if !contains(err.Error(), tt.errMsg) {
+					t.Errorf("Validate() error = %v, должно содержать %v", err, tt.errMsg)
 				}
 			}
 		})
@@ -414,29 +324,33 @@ func TestEndpointConfig_Validate(t *testing.T) {
 
 func TestEndpointConfig_GetEndpointByName(t *testing.T) {
 	config := &EndpointConfig{
-		Primary: &Endpoint{Name: "main"},
+		Primary: &Endpoint{
+			Name: "primary",
+			Host: "primary.com",
+			Port: 5060,
+		},
 		Fallbacks: []*Endpoint{
-			{Name: "backup1"},
-			{Name: "backup2"},
+			{Name: "backup1", Host: "backup1.com", Port: 5060},
+			{Name: "backup2", Host: "backup2.com", Port: 5060},
 		},
 	}
 
-	// Ищем primary
-	ep := config.GetEndpointByName("main")
-	if ep == nil || ep.Name != "main" {
-		t.Error("GetEndpointByName() должен найти primary endpoint")
+	// Тест поиска primary
+	ep := config.GetEndpointByName("primary")
+	if ep == nil || ep.Name != "primary" {
+		t.Error("Не найден primary endpoint")
 	}
 
-	// Ищем fallback
+	// Тест поиска fallback
 	ep = config.GetEndpointByName("backup2")
 	if ep == nil || ep.Name != "backup2" {
-		t.Error("GetEndpointByName() должен найти fallback endpoint")
+		t.Error("Не найден fallback endpoint")
 	}
 
-	// Ищем несуществующий
+	// Тест несуществующего
 	ep = config.GetEndpointByName("nonexistent")
 	if ep != nil {
-		t.Error("GetEndpointByName() должен вернуть nil для несуществующего endpoint")
+		t.Error("Не должен находить несуществующий endpoint")
 	}
 }
 
@@ -469,16 +383,6 @@ func TestEndpointConfig_GetTotalEndpoints(t *testing.T) {
 			},
 			want: 3,
 		},
-		{
-			name: "Только fallbacks",
-			config: EndpointConfig{
-				Fallbacks: []*Endpoint{
-					{Name: "backup1"},
-					{Name: "backup2"},
-				},
-			},
-			want: 2,
-		},
 	}
 
 	for _, tt := range tests {
@@ -491,193 +395,172 @@ func TestEndpointConfig_GetTotalEndpoints(t *testing.T) {
 }
 
 func TestEndpointConfig_GetHealthyEndpoints(t *testing.T) {
-	// Создаём endpoints с разными приоритетами
-	ep1 := &Endpoint{Name: "high", Priority: 10}
-	ep1.isHealthy.Store(true)
+	// Создаём endpoints с разными состояниями
+	healthy1 := &Endpoint{
+		Name:     "healthy1",
+		Priority: 10,
+	}
+	healthy1.isHealthy.Store(true)
 
-	ep2 := &Endpoint{Name: "medium", Priority: 20}
-	ep2.isHealthy.Store(true)
+	healthy2 := &Endpoint{
+		Name:     "healthy2",
+		Priority: 5,
+	}
+	healthy2.isHealthy.Store(true)
 
-	ep3 := &Endpoint{Name: "low", Priority: 30}
-	ep3.isHealthy.Store(true)
-
-	ep4 := &Endpoint{Name: "unhealthy", Priority: 5}
-	ep4.FailureCount.Store(10) // делаем нездоровым
-	ep4.isHealthy.Store(false)  // нездоровый
+	unhealthy := &Endpoint{
+		Name:     "unhealthy",
+		Priority: 1,
+	}
+	unhealthy.isHealthy.Store(false)
 
 	config := &EndpointConfig{
-		Primary: ep4, // нездоровый primary
+		Primary: healthy1,
 		Fallbacks: []*Endpoint{
-			ep3, // priority 30
-			ep1, // priority 10
-			ep2, // priority 20
+			unhealthy,
+			healthy2,
 		},
 	}
 
-	healthy := config.GetHealthyEndpoints()
+	healthyEndpoints := config.GetHealthyEndpoints()
 
-	// Должно быть 3 здоровых endpoint'а
-	if len(healthy) != 3 {
-		t.Errorf("GetHealthyEndpoints() вернул %d endpoints, ожидалось 3", len(healthy))
+	// Должны получить только здоровые endpoints
+	if len(healthyEndpoints) != 2 {
+		t.Errorf("Ожидалось 2 здоровых endpoints, получено %d", len(healthyEndpoints))
 	}
 
 	// Проверяем сортировку по приоритету
-	if len(healthy) > 0 && healthy[0].Name != "high" {
-		t.Error("Первый endpoint должен иметь наивысший приоритет (high)")
+	if healthyEndpoints[0].Name != "healthy2" {
+		t.Error("Первым должен быть endpoint с наименьшим приоритетом")
 	}
-	if len(healthy) > 1 && healthy[1].Name != "medium" {
-		t.Error("Второй endpoint должен быть medium")
-	}
-	if len(healthy) > 2 && healthy[2].Name != "low" {
-		t.Error("Третий endpoint должен быть low")
+	if healthyEndpoints[1].Name != "healthy1" {
+		t.Error("Вторым должен быть endpoint с большим приоритетом")
 	}
 }
 
 func TestEndpointConfig_SelectEndpoint(t *testing.T) {
-	t.Run("Нет здоровых endpoints", func(t *testing.T) {
-		ep1 := &Endpoint{Name: "ep1"}
-		// Сделаем endpoint нездоровым
-		ep1.FailureCount.Store(10)
-		ep1.isHealthy.Store(false)
+	// Создаём endpoints для тестирования
+	ep1 := &Endpoint{
+		Name:     "ep1",
+		Priority: 10,
+		Weight:   100,
+	}
+	ep1.isHealthy.Store(true)
 
-		config := &EndpointConfig{Primary: ep1}
+	ep2 := &Endpoint{
+		Name:     "ep2",
+		Priority: 10,
+		Weight:   200,
+	}
+	ep2.isHealthy.Store(true)
 
-		if config.SelectEndpoint() != nil {
-			t.Error("SelectEndpoint() должен вернуть nil, если нет здоровых endpoints")
-		}
-	})
+	ep3 := &Endpoint{
+		Name:     "ep3",
+		Priority: 20,
+		Weight:   100,
+	}
+	ep3.isHealthy.Store(true)
 
-	t.Run("Один здоровый endpoint", func(t *testing.T) {
-		ep1 := &Endpoint{Name: "ep1"}
-		ep1.isHealthy.Store(true)
+	unhealthy := &Endpoint{
+		Name:     "unhealthy",
+		Priority: 1,
+		Weight:   100,
+	}
+	unhealthy.isHealthy.Store(false)
 
-		config := &EndpointConfig{Primary: ep1}
+	config := &EndpointConfig{
+		Primary: ep1,
+		Fallbacks: []*Endpoint{
+			ep2,
+			ep3,
+			unhealthy,
+		},
+	}
 
-		selected := config.SelectEndpoint()
-		if selected == nil || selected.Name != "ep1" {
-			t.Error("SelectEndpoint() должен вернуть единственный здоровый endpoint")
-		}
-	})
-
-	t.Run("Несколько endpoints с одинаковым приоритетом", func(t *testing.T) {
-		ep1 := &Endpoint{Name: "ep1", Priority: 10, Weight: 100}
-		ep1.isHealthy.Store(true)
-
-		ep2 := &Endpoint{Name: "ep2", Priority: 10, Weight: 50}
-		ep2.isHealthy.Store(true)
-
-		config := &EndpointConfig{
-			Primary:   ep1,
-			Fallbacks: []*Endpoint{ep2},
-		}
-
+	// Проверяем что выбираются только endpoints с приоритетом 10
+	selections := make(map[string]int)
+	for i := 0; i < 1000; i++ {
 		selected := config.SelectEndpoint()
 		if selected == nil {
-			t.Error("SelectEndpoint() не должен возвращать nil")
-			return
+			t.Fatal("SelectEndpoint не должен возвращать nil когда есть здоровые endpoints")
 		}
-		// При детерминированном выборе должен выбираться endpoint с большим весом
-		if selected.Name != "ep1" {
-			t.Errorf("SelectEndpoint() вернул %s, ожидался ep1 (больший вес)", selected.Name)
-		}
-	})
+		selections[selected.Name]++
+	}
 
-	t.Run("Endpoints с разными приоритетами", func(t *testing.T) {
-		ep1 := &Endpoint{Name: "low-priority", Priority: 20}
-		ep1.isHealthy.Store(true)
+	// Проверяем что выбирались только ep1 и ep2 (приоритет 10)
+	if _, exists := selections["ep3"]; exists {
+		t.Error("Не должен выбираться endpoint с более низким приоритетом")
+	}
+	if _, exists := selections["unhealthy"]; exists {
+		t.Error("Не должен выбираться нездоровый endpoint")
+	}
 
-		ep2 := &Endpoint{Name: "high-priority", Priority: 10}
-		ep2.isHealthy.Store(true)
+	// Проверяем примерное распределение по весам (ep2 должен выбираться примерно в 2 раза чаще)
+	ratio := float64(selections["ep2"]) / float64(selections["ep1"])
+	if ratio < 1.5 || ratio > 2.5 {
+		t.Errorf("Неправильное распределение по весам: ep1=%d, ep2=%d, ratio=%f",
+			selections["ep1"], selections["ep2"], ratio)
+	}
 
-		config := &EndpointConfig{
-			Primary:   ep1,
-			Fallbacks: []*Endpoint{ep2},
-		}
-
-		selected := config.SelectEndpoint()
-		if selected == nil || selected.Name != "high-priority" {
-			t.Error("SelectEndpoint() должен выбрать endpoint с наивысшим приоритетом")
-		}
-	})
+	// Тест когда нет здоровых endpoints
+	emptyConfig := &EndpointConfig{
+		Primary: unhealthy,
+	}
+	if emptyConfig.SelectEndpoint() != nil {
+		t.Error("Должен возвращать nil когда нет здоровых endpoints")
+	}
 }
 
 func TestEndpointConfig_RunHealthChecks(t *testing.T) {
 	// Создаём несколько endpoints
-	endpoints := make([]*Endpoint, 3)
-	for i := 0; i < 3; i++ {
-		endpoints[i] = &Endpoint{
-			Name: string(rune('A' + i)),
-		}
-		// Первые два здоровые, третий - нет
-		if i < 2 {
-			endpoints[i].isHealthy.Store(true)
-		} else {
-			endpoints[i].FailureCount.Store(10)
-			endpoints[i].isHealthy.Store(false)
-		}
+	ep1 := &Endpoint{
+		Name: "ep1",
+		Host: "localhost",
+		Port: 12345, // Заведомо недоступный порт
+		Transport: TransportConfig{
+			Type: TransportTCP,
+		},
+	}
+
+	ep2 := &Endpoint{
+		Name: "ep2",
+		Host: "127.0.0.1",
+		Port: 54321, // Заведомо недоступный порт
+		Transport: TransportConfig{
+			Type: TransportUDP,
+		},
 	}
 
 	config := &EndpointConfig{
-		Primary:   endpoints[0],
-		Fallbacks: endpoints[1:],
+		Primary:   ep1,
+		Fallbacks: []*Endpoint{ep2},
 	}
 
-	healthyCount := config.RunHealthChecks()
+	// Запускаем health checks
+	config.RunHealthChecks()
 
-	// Должно быть 2 здоровых endpoint'а
-	if healthyCount != 2 {
-		t.Errorf("RunHealthChecks() вернул %d здоровых endpoints, ожидалось 2", healthyCount)
-	}
+	// Даём время на выполнение (проверки идут в горутинах)
+	time.Sleep(200 * time.Millisecond)
 
-	// Проверяем, что health check был выполнен для всех
-	for _, ep := range endpoints {
-		if ep.lastHealthCheck.IsZero() {
-			t.Errorf("Health check не был выполнен для endpoint %s", ep.Name)
-		}
+	// Проверяем что проверки были выполнены
+	// Для UDP проверка может пройти успешно даже если порт недоступен
+	// (UDP не устанавливает соединение), поэтому проверяем только TCP
+	if ep1.IsHealthy() {
+		t.Error("ep1 должен быть нездоровым после неудачной проверки")
 	}
+	// Для UDP не можем гарантировать результат, поэтому пропускаем проверку ep2
 }
 
-func TestEndpoint_ConcurrentAccess(t *testing.T) {
-	endpoint := &Endpoint{
-		Name: "concurrent-test",
+// Вспомогательная функция
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
 	}
-
-	// Запускаем горутины, которые одновременно обновляют endpoint
-	var wg sync.WaitGroup
-	concurrency := 100
-
-	// Горутины, записывающие успехи
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer wg.Done()
-			endpoint.RecordSuccess()
-		}()
-	}
-
-	// Горутины, записывающие ошибки
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer wg.Done()
-			endpoint.RecordFailure()
-		}()
-	}
-
-	// Горутины, читающие состояние
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer wg.Done()
-			_ = endpoint.IsHealthy()
-			_ = endpoint.GetFailureCount()
-			_ = endpoint.GetLastUsed()
-		}()
-	}
-
-	// Ждём завершения всех горутин
-	wg.Wait()
-
-	// Если мы дошли сюда без паники, значит конкурентный доступ работает корректно
-	t.Log("Конкурентный доступ работает без проблем")
+	return false
 }
