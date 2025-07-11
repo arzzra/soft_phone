@@ -132,7 +132,7 @@ func TestTransportConfig_Validate(t *testing.T) {
 				return
 			}
 			if err != nil && tt.errMsg != "" {
-				if err.Error() == "" || !contains(err.Error(), tt.errMsg) {
+				if err.Error() == "" || !strContains(err.Error(), tt.errMsg) {
 					t.Errorf("Validate() error = %v, должно содержать %v", err, tt.errMsg)
 				}
 			}
@@ -306,11 +306,11 @@ func TestTransportConfig_Clone(t *testing.T) {
 }
 
 // Вспомогательная функция
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsHelper(s, substr))
+func strContains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && strContainsHelper(s, substr))
 }
 
-func containsHelper(s, substr string) bool {
+func strContainsHelper(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
 			return true

@@ -240,7 +240,7 @@ func (s *Dialog) Terminate() error {
 	}
 
 	slog.Debug("Dialog.Terminate BYE sent successfully",
-		slog.String("txID", tx.Request().TransactionID()))
+		slog.String("branchID", GetBranchID(tx.Request())))
 
 	// Переводим диалог в состояние завершения
 	if err := s.setState(Terminating, tx); err != nil {
@@ -271,7 +271,8 @@ func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (
 	}
 
 	// Парсим целевой URI
-	targetURI, err := sip.ParseUri(target)
+	var targetURI sip.Uri
+	err := sip.ParseUri(target, &targetURI)
 	if err != nil {
 		slog.Debug("Dialog.Start parse URI failed",
 			slog.String("target", target),
@@ -314,7 +315,7 @@ func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (
 	}
 
 	slog.Debug("Dialog.Start INVITE sent successfully",
-		slog.String("txID", tx.Request().TransactionID()))
+		slog.String("branchID", GetBranchID(tx.Request())))
 
 	return tx, nil
 }
@@ -356,7 +357,7 @@ func (s *Dialog) Refer(ctx context.Context, target sip.Uri, opts ...RequestOpt) 
 	}
 
 	slog.Debug("Dialog.Refer sent successfully",
-		slog.String("txID", tx.Request().TransactionID()))
+		slog.String("branchID", GetBranchID(tx.Request())))
 
 	return tx, nil
 }
@@ -421,7 +422,7 @@ func (s *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts .
 	}
 
 	slog.Debug("Dialog.ReferReplace sent successfully",
-		slog.String("txID", tx.Request().TransactionID()))
+		slog.String("branchID", GetBranchID(tx.Request())))
 
 	return tx, nil
 }
@@ -470,7 +471,7 @@ func (s *Dialog) SendRequest(ctx context.Context, opts ...RequestOpt) (IClientTX
 
 	slog.Debug("Dialog.SendRequest sent successfully",
 		slog.String("method", string(method)),
-		slog.String("txID", tx.Request().TransactionID()))
+		slog.String("branchID", GetBranchID(tx.Request())))
 
 	return tx, nil
 }
@@ -888,7 +889,7 @@ func (s *Dialog) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
 
 	slog.Debug("Dialog.sendReq sent",
 		slog.String("method", string(req.Method)),
-		slog.String("txID", req.TransactionID()))
+		slog.String("branchID", GetBranchID(req)))
 
 	// Создаем обертку транзакции
 	txWrapper := newTX(req, tx, s)

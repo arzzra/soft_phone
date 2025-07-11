@@ -32,7 +32,7 @@ func handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 	tagTo := GetToTag(req)
 	sessia, ok := dialogs.Get(*callID, tagTo)
 	if tagTo != "" {
-		if ok == true {
+		if ok {
 			// Это re-INVITE для существующего диалога
 			ltx := newTX(req, tx, sessia)
 			if ltx != nil {

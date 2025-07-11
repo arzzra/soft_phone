@@ -2,7 +2,6 @@ package mockTransport
 
 import (
 	"fmt"
-	"t
 	"testing"
 )
 
@@ -48,7 +47,7 @@ func BenchmarkConcurrentTransmission(b *testing.B) {
 		idx := 0
 		for pb.Next() {
 			from := conns[idx%numConns]
-
+			to := conns[(idx+1)%numConns]
 			
 			_, err := from.WriteTo(data, to.LocalAddr())
 			if err != nil {
@@ -57,7 +56,7 @@ func BenchmarkConcurrentTransmission(b *testing.B) {
 			_, _, err = to.ReadFrom(buf)
 			if err != nil {
 				b.Fatal(err)
-
+			}
 			
 			idx++
 		}
@@ -68,8 +67,8 @@ func BenchmarkRegistryOperations(b *testing.B) {
 	registry := NewRegistry()
 
 	b.Run("CreateConnection", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
 			conn := registry.CreateConnection(string(rune(i%26 + 'A')))
-			conn := registry.CreateConnection(string(rune(i % 26 + 'A')))
 			conn.Close()
 		}
 	})
@@ -82,8 +81,8 @@ func BenchmarkRegistryOperations(b *testing.B) {
 		defer registry.CloseAll()
 
 		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
 			_, _ = registry.GetConnection(string(rune(i%26 + 'A')))
-			_, _ = registry.GetConnection(string(rune(i % 26 + 'A')))
 		}
 	})
 

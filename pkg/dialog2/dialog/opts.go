@@ -388,7 +388,7 @@ func MakeSipUri(user, host string, port int) sip.Uri {
 		User:   user,
 		Host:   host,
 		Port:   port,
-		Params: sip.NewParams(),
+		UriParams: sip.NewParams(),
 	}
 }
 
@@ -399,7 +399,7 @@ func MakeSipsUri(user, host string, port int) sip.Uri {
 		User:   user,
 		Host:   host,
 		Port:   port,
-		Params: sip.NewParams(),
+		UriParams: sip.NewParams(),
 	}
 }
 
@@ -408,7 +408,7 @@ func MakeTelUri(number string) sip.Uri {
 	return sip.Uri{
 		Scheme: "tel",
 		User:   number,
-		Params: sip.NewParams(),
+		UriParams: sip.NewParams(),
 	}
 }
 

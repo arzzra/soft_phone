@@ -3,7 +3,6 @@ package dialog
 import (
 	"context"
 	"fmt"
-	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 	"github.com/pkg/errors"
 	"log/slog"
@@ -22,14 +21,21 @@ func (s *Dialog) Invite(ctx context.Context, target string, opts ...RequestOpt) 
 		return nil, fmt.Errorf("target is nill")
 	}
 
-	s.remoteTarget = *target
+	// Парсим целевой URI
+	var targetURI sip.Uri
+	err := sip.ParseUri(target, &targetURI)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to parse target URI")
+	}
+	s.remoteTarget = targetURI
 
 	// сначала устаниавливаем все данные
 
 	req := s.makeRequest(sip.INVITE)
 
-	for _, v := range headers {
-		req.AppendHeader(v)
+	// TODO: применить опции к запросу
+	for _, opt := range opts {
+		opt(req)
 	}
 
 	fmt.Println("target", req.String())
