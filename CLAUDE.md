@@ -3,17 +3,103 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Important Context
-- IMPORTANT: Отвечай и пиши комментарии и документацию  на русском языке
+- IMPORTANT: Отвечай и пиши комментарии и документацию на русском языке
 - Be brutally honest, don't be a yes man. If I am wrong, point it out bluntly.
 - I need honest feedback on my code.
--
+
 ## Code Quality
 **ВАЖНО**: После внесения изменений в код необходимо:
-1. Запустить линтер командой `make lint` или `golangci-lint run`
+1. Запустить линтер командой `golangci-lint run` (глобального Makefile нет)
 2. Исправить все обнаруженные линтером ошибки и предупреждения
-3. Убедиться, что код соответствует настроенным в `.golangci.yml` правилам
-4. Только после успешного прохождения линтера считать задачу выполненной
-5. Сделать commit полноценный. Не указывай себя в авторах
+3. Только после успешного прохождения линтера считать задачу выполненной
+4. Сделать commit полноценный. Не указывай себя в авторах
+
+## Common Development Commands
+
+### Building and Running
+```bash
+# Сборка всего проекта
+go build ./...
+
+# Запуск конкретного исполняемого файла
+go run ./cmd/test_dtls/main.go
+
+# Сборка с указанием выходного файла
+go build -o bin/softphone ./cmd/test_dtls
+```
+
+### Testing
+```bash
+# Запуск всех тестов
+go test ./...
+
+# Запуск тестов с подробным выводом
+go test -v ./...
+
+# Запуск тестов с детектором гонок
+go test -race ./...
+
+# Запуск конкретного теста
+go test ./pkg/dialog -run TestSpecificFunction
+
+# Генерация покрытия кода
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out -o coverage.html
+```
+
+### Linting and Formatting
+```bash
+# Установка golangci-lint (если не установлен)
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+# Запуск линтера
+golangci-lint run
+
+# Форматирование кода
+go fmt ./...
+
+# Проверка кода на потенциальные ошибки
+go vet ./...
+```
+
+## High-Level Architecture
+
+### Package Structure
+```
+soft_phone/
+├── pkg/dialog/      # SIP протокол и управление диалогами
+├── pkg/media/       # Высокоуровневая обработка медиа (аудио, кодеки, jitter buffer)
+├── pkg/rtp/         # Низкоуровневая работа с RTP/RTCP транспортом
+└── pkg/media_sdp/   # SDP обработка и интеграция с медиа слоем
+```
+
+### Архитектурные связи
+1. **pkg/dialog** обрабатывает SIP сигнализацию и управляет жизненным циклом звонков
+2. **pkg/media_sdp** служит мостом между SIP (SDP) и медиа обработкой
+3. **pkg/media** предоставляет высокоуровневый API для работы с аудио потоками
+4. **pkg/rtp** обеспечивает низкоуровневую передачу RTP/RTCP пакетов
+
+### Основные интерфейсы
+- **IDialog** (pkg/dialog) - управление SIP диалогом
+- **IUU** (pkg/dialog) - менеджер диалогов (UAC/UAS)
+- **MediaSession** (pkg/media) - управление медиа потоками
+- **SDPMediaHandler** (pkg/media_sdp) - обработка SDP offer/answer
+- **Session** (pkg/rtp) - RTP сессия
+
+### Поток обработки вызова
+1. SIP INVITE принимается в **pkg/dialog**
+2. SDP offer передается в **pkg/media_sdp** для парсинга
+3. **pkg/media_sdp** создает RTP транспорт через **pkg/rtp**
+4. **pkg/media_sdp** создает медиа сессию через **pkg/media**
+5. SDP answer генерируется и отправляется через **pkg/dialog**
+6. Начинается обмен RTP пакетами
+
+## Supported Features
+- **Транспорты**: UDP, TCP, TLS (TODO), WS, WSS (TODO)
+- **Кодеки**: G.711 (μ-law/A-law), G.722, GSM, G.728, G.729
+- **DTMF**: RFC 4733 (телефонные события)
+- **Jitter Buffer**: Адаптивная компенсация сетевого джиттера
+- **RTCP**: Отчеты о качестве связи
 
 # Правила использования MCP инструментов
 
@@ -145,11 +231,10 @@ mcp__context7__get-library-docs(context7CompatibleLibraryID="/mongodb/docs")
 
 ## Важные правила:
 
-1. **НЕ используй** стандартные инструменты поиска для Go кода
-2. **ВСЕГДА** начинай с MCP инструментов
-3. **Используй** gopls для навигации и анализа
-4. **Используй** godoc для документации перед чтением кода
-5. **Комбинируй** инструменты для максимальной эффективности
+1**ВСЕГДА** начинай с MCP инструментов
+2**Используй** gopls для навигации и анализа
+3**Используй** godoc для документации перед чтением кода
+4**Комбинируй** инструменты для максимальной эффективности
 
 ## Приоритет инструментов (от высокого к низкому):
 1. MCP gopls - для всей работы с Go кодом

@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/arzzra/soft_phone/pkg/dialog2/dialog/mockTransport"
+	"github.com/arzzra/soft_phone/pkg/dialog/mockTransport"
 )
 
 // ExampleRegistry демонстрирует базовое использование mock транспорта.

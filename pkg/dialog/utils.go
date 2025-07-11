@@ -2,7 +2,6 @@ package dialog
 
 import (
 	"github.com/emiago/sipgo/sip"
-	"strconv"
 )
 
 // NextLocalCSeq возвращает следующий локальный CSeq
@@ -86,6 +85,8 @@ func (s *Dialog) SetLocalSDP(contentType string, content []byte) *Dialog {
 	return s
 }
 
+// GetFromTag извлекает тег из заголовка From SIP сообщения.
+// Возвращает пустую строку, если тег отсутствует.
 func GetFromTag(msg sip.Message) string {
 	if from := msg.From(); from != nil {
 		if tag, ok := from.Params.Get("tag"); ok {
@@ -96,6 +97,8 @@ func GetFromTag(msg sip.Message) string {
 	return ""
 }
 
+// GetToTag извлекает тег из заголовка To SIP сообщения.
+// Возвращает пустую строку, если тег отсутствует.
 func GetToTag(msg sip.Message) string {
 	if to := msg.To(); to != nil {
 		if tag, ok := to.Params.Get("tag"); ok {
@@ -106,6 +109,9 @@ func GetToTag(msg sip.Message) string {
 	return ""
 }
 
+// GetBranchID извлекает branch ID из заголовка Via SIP сообщения.
+// Branch ID используется для идентификации транзакций.
+// Возвращает пустую строку, если branch ID отсутствует.
 func GetBranchID(msg sip.Message) string {
 	if viaHop := msg.Via(); viaHop != nil {
 		if branch, ok := viaHop.Params.Get("branch"); ok {
@@ -116,44 +122,44 @@ func GetBranchID(msg sip.Message) string {
 	return ""
 }
 
-func isHaveBody(msg sip.Message) bool {
-	if len(msg.Body()) > 0 {
-		return true
-	}
-	return false
-}
+// isHaveBody проверяет наличие тела в SIP сообщении (зарезервировано для будущего использования)
+// func isHaveBody(msg sip.Message) bool {
+// 	return len(msg.Body()) > 0
+// }
 
-// validateReq проверяет запрос на коректность. Если запрос неверный то возвращается причина
-func validateReq(req sip.Request) (bool, string) {
-	return true, ""
-}
+// validateReq проверяет запрос на коректность. Если запрос неверный то возвращается причина (зарезервировано)
+// func validateReq(req sip.Request) (bool, string) {
+// 	return true, ""
+// }
 
-func setContent(msg sip.Message, contentType string, content []byte) {
-	msg.SetBody(content)
-	typeC := sip.ContentTypeHeader(contentType)
-	msg.AppendHeader(&typeC)
-}
+// setContent устанавливает тело и тип содержимого в SIP сообщении (зарезервировано)
+// func setContent(msg sip.Message, contentType string, content []byte) {
+// 	msg.SetBody(content)
+// 	typeC := sip.ContentTypeHeader(contentType)
+// 	msg.AppendHeader(&typeC)
+// }
 
-func getHostPortFromVia(req *sip.Request) (string, uint16) {
-	viaHeader := req.Via()
-	var (
-		host string
-		port uint16
-	)
-	host = viaHeader.Host
-	if viaHeader.Params != nil {
-		if received, ok := viaHeader.Params.Get("received"); ok && received != "" {
-			host = received
-		}
-		if viaHeader.Port != 0 {
-			port = uint16(viaHeader.Port)
-		} else if rport, ok := viaHeader.Params.Get("rport"); ok && rport != "" {
-			if p, err := strconv.Atoi(rport); err == nil {
-				port = uint16(p)
-			}
-		} else {
-			port = uint16(sip.DefaultPort(req.Transport()))
-		}
-	}
-	return host, port
-}
+// getHostPortFromVia извлекает хост и порт из заголовка Via (зарезервировано)
+// func getHostPortFromVia(req *sip.Request) (string, uint16) {
+// 	viaHeader := req.Via()
+// 	var (
+// 		host string
+// 		port uint16
+// 	)
+// 	host = viaHeader.Host
+// 	if viaHeader.Params != nil {
+// 		if received, ok := viaHeader.Params.Get("received"); ok && received != "" {
+// 			host = received
+// 		}
+// 		if viaHeader.Port != 0 {
+// 			port = uint16(viaHeader.Port)
+// 		} else if rport, ok := viaHeader.Params.Get("rport"); ok && rport != "" {
+// 			if p, err := strconv.Atoi(rport); err == nil {
+// 				port = uint16(p)
+// 			}
+// 		} else {
+// 			port = uint16(sip.DefaultPort(req.Transport()))
+// 		}
+// 	}
+// 	return host, port
+// }

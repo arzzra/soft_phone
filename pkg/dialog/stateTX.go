@@ -8,12 +8,15 @@ import (
 	"log/slog"
 )
 
+// TX представляет обертку над SIP транзакцией.
+// Предоставляет удобный интерфейс для работы с клиентскими и серверными транзакциями.
+// Реализует интерфейсы IClientTX и IServerTX в зависимости от типа транзакции.
 type TX struct {
 	tx  sip.Transaction
 	req *sip.Request
 
 	dialog *Dialog
-	// true если транзакция является серверной
+	// isServer - true если транзакция является серверной
 	isServer bool
 
 	ackChan chan *sip.Request
@@ -29,7 +32,51 @@ func (t *TX) Accept(opts ...ResponseOpt) error {
 	}
 
 	// Создаем ответ 200 OK
-	resp := sip.NewResponseFromRequest(t.req, sip.StatusOK, "OK", nil)
+	resp := newRespFromReq(t.Request(), sip.StatusOK, "OK", nil, t.dialog.localTag)
+
+	// Применяем опциональные модификаторы ответа
+	for _, opt := range opts {
+		opt(resp)
+	}
+
+	slog.Debug("Transaction accepted", slog.Any("to-tag", resp.To().Params))
+
+	// Отправляем ответ через серверную транзакцию
+	if sTx, ok := t.tx.(sip.ServerTransaction); ok {
+		err := sTx.Respond(resp)
+		if err != nil {
+			return err
+		}
+		return t.processingOutgoingResponse(resp)
+	}
+
+	return nil
+}
+
+func (t *TX) processingOutgoingResponse(resp *sip.Response) error {
+	if t.dialog.getFirstTX() == t && resp.StatusCode == 200 {
+		err := t.dialog.setState(InCall, t)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Provisional отправляет предварительный ответ (1xx)
+func (t *TX) Provisional(code int, reason string, opts ...ResponseOpt) error {
+	// Проверяем, что это серверная транзакция
+	if t.IsClient() {
+		return fmt.Errorf("cannot send provisional response on client transaction")
+	}
+
+	// Проверяем, что код находится в диапазоне 1xx
+	if code < 100 || code > 199 {
+		return fmt.Errorf("provisional response code must be between 100 and 199, got %d", code)
+	}
+
+	// Создаем предварительный ответ
+	resp := sip.NewResponseFromRequest(t.req, code, reason, nil)
 
 	// Применяем опциональные модификаторы ответа
 	for _, opt := range opts {
@@ -86,6 +133,16 @@ func (t *TX) Err() error {
 	return t.tx.Err()
 }
 
+// Done возвращает канал, который закрывается при завершении транзакции
+func (t *TX) Done() <-chan struct{} {
+	return t.tx.Done()
+}
+
+// Error возвращает ошибку транзакции (аналогично Err)
+func (t *TX) Error() error {
+	return t.Err()
+}
+
 func (t *TX) Responses() <-chan *sip.Response {
 	return t.respChan
 
@@ -140,9 +197,9 @@ func (t *TX) Cancel() error {
 	cancelReq.SetDestination(t.req.Destination())
 
 	// Отправляем CANCEL через UAC диалога
-	if t.dialog != nil && uu != nil && uu.uac != nil {
+	if t.dialog != nil && t.dialog.uu != nil && t.dialog.uu.uac != nil {
 		ctx := context.Background()
-		_, err := uu.uac.TransactionRequest(ctx, cancelReq)
+		_, err := t.dialog.uu.uac.TransactionRequest(ctx, cancelReq)
 		return err
 	}
 
@@ -165,6 +222,9 @@ func newTX(req *sip.Request, tx sip.Transaction, di *Dialog) *TX {
 		// Запускаем горутину для обработки ответов
 		go mTx.loopResponse()
 	}
+
+	mTx.ackChan = make(chan *sip.Request)
+	mTx.respChan = make(chan *sip.Response)
 
 	return mTx
 }
@@ -193,11 +253,15 @@ func (t *TX) processingResponse(resp *sip.Response) {
 		}
 	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
 		// Успешные ответы (2xx)
+		// Сохраняем remote tag из ответа
+		t.saveRemoteTag(resp)
+
 		if t.dialog.GetCurrentState() == Calling {
 			err := t.dialog.setState(InCall, t)
 			if err != nil {
 				slog.Error("failed to set dialog state to InCall", "error", err)
 			}
+			_ = t.dialog.sendAckWithoutTX()
 		}
 	case resp.StatusCode >= 300 && resp.StatusCode <= 399:
 		// Перенаправления (3xx)
@@ -214,6 +278,28 @@ func (t *TX) processingResponse(resp *sip.Response) {
 	default:
 		// Неизвестный код ответа
 		slog.Warn("received response with unknown status code", "status", resp.StatusCode)
+	}
+}
+
+// saveRemoteTag сохраняет remote tag из ответа для UAC
+func (t *TX) saveRemoteTag(resp *sip.Response) {
+	// Только для клиентских транзакций (UAC)
+	if !t.IsClient() {
+		return
+	}
+
+	// Получаем To заголовок из ответа
+	toHeader := resp.To()
+	if toHeader != nil && toHeader.Params != nil && toHeader.Params.Has("tag") {
+		if tagValue, ok := toHeader.Params.Get("tag"); ok {
+			// Сохраняем remote tag
+			t.dialog.remoteTag = tagValue
+			// Обновляем ID диалога после установки remoteTag
+			t.dialog.updateDialogID()
+			slog.Debug("Saved remote tag from response",
+				slog.String("remoteTag", tagValue),
+				slog.String("dialogID", t.dialog.id))
+		}
 	}
 }
 
@@ -268,6 +354,7 @@ func (t *TX) ClientTX() sip.ClientTransaction {
 
 func (t *TX) writeAck(ack *sip.Request) {
 	if t.ackChan == nil {
+		slog.Debug("no ack channel")
 		return
 	}
 	select {

@@ -16,7 +16,7 @@ type caseTest struct {
 }
 
 func initTestingDialog() *tools.MockedUDP {
-	uu, err := NewUACUAS(Config{TestMode: true})
+	uu, err := NewUACUAS(Config{DebugMode: true})
 	if err != nil {
 		panic(err)
 	}

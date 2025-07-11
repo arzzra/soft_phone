@@ -671,6 +671,8 @@ func (u *UACUAS) NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, err
 
 	// Генерируем localTag
 	di.localTag = generateTag()
+	// и сохраняем
+	u.dialogs.Put(di.callID, di.localTag, "", di)
 
 	// Устанавливаем локальный URI из профиля
 	if di.profile != nil {
@@ -695,11 +697,12 @@ func (u *UACUAS) NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, err
 // newUAS создает новый диалог для входящего вызова (User Agent Server).
 // Используется когда получен INVITE запрос от удаленной стороны.
 // Диалог создается на основе информации из входящего запроса.
-func newUAS(req *sip.Request, tx sip.ServerTransaction) *Dialog {
+func (u *UACUAS) newUAS(req *sip.Request, tx sip.ServerTransaction) *Dialog {
 	di := new(Dialog)
 	di.uaType = UAS
 	di.callID = *req.CallID()
 	di.initReq = req
+	di.uu = u
 
 	// Устанавливаем временные метки
 	di.createdAt = time.Now()
@@ -956,10 +959,28 @@ func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
 		Address:     s.remoteTarget,
 		Params:      nil,
 	}
+	// Добавляем tag для запросов внутри диалога (согласно RFC 3261)
+	if s.remoteTag != "" {
+		toHeader.Params = sip.NewParams().Add("tag", s.remoteTag)
+	}
 	newRequest.AppendHeader(&toHeader)
 	newRequest.Recipient = s.remoteTarget
 
-	newRequest.AppendHeader(s.profile.Contact())
+	// Добавляем Contact заголовок
+	if s.profile != nil {
+		// Если есть профиль, используем его
+		newRequest.AppendHeader(s.profile.Contact())
+	} else if s.localContact != nil {
+		// Если есть сохраненный локальный контакт, используем его
+		newRequest.AppendHeader(s.localContact)
+	} else {
+		// Создаем Contact из локального URI
+		contactHeader := &sip.ContactHeader{
+			Address: s.localURI,
+		}
+		newRequest.AppendHeader(contactHeader)
+	}
+
 	newRequest.AppendHeader(&s.callID)
 	newRequest.AppendHeader(&sip.CSeqHeader{SeqNo: s.NextLocalCSeq(), MethodName: method})
 	maxForwards := sip.MaxForwardsHeader(70)
@@ -1012,7 +1033,7 @@ func (s *Dialog) buildFromHeader() sip.FromHeader {
 			}
 		}
 	}
-	
+
 	// Если все еще не удалось создать заголовок, используем локальный URI
 	if fromHeader.Address.Host == "" && s.localURI.Host != "" {
 		fromHeader = sip.FromHeader{
@@ -1020,7 +1041,7 @@ func (s *Dialog) buildFromHeader() sip.FromHeader {
 			Params:  sip.NewParams().Add("tag", s.localTag),
 		}
 	}
-	
+
 	return fromHeader
 }
 

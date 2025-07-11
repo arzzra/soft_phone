@@ -45,7 +45,8 @@ func TestEndpoint_BuildURI(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			uri := tt.endpoint.BuildURI(tt.user)
 			got := uri.String()
@@ -129,7 +130,8 @@ func TestEndpoint_Validate(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.endpoint.Validate()
 			if (err != nil) != tt.wantErr {

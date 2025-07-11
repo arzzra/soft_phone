@@ -35,11 +35,29 @@ func WithHeaderString(name, value string) RequestOpt {
 // Функции для конкретных заголовков
 
 // WithFrom устанавливает From заголовок
-func WithFrom(displayName string, uri sip.Uri) RequestOpt {
+func WithFrom(displayName string, uri interface{}) RequestOpt {
 	return func(msg sip.Message) {
+		var sipUri sip.Uri
+
+		// Поддерживаем как sip.Uri, так и строку
+		switch v := uri.(type) {
+		case sip.Uri:
+			sipUri = v
+		case string:
+			// Парсим строку в URI
+			err := sip.ParseUri(v, &sipUri)
+			if err != nil {
+				// Если ошибка парсинга, просто вернемся без изменений
+				return
+			}
+		default:
+			// Неподдерживаемый тип, вернемся без изменений
+			return
+		}
+
 		from := &sip.FromHeader{
 			DisplayName: displayName,
-			Address:     uri,
+			Address:     sipUri,
 			Params:      sip.NewParams(),
 		}
 		// Удаляем существующий From заголовок если есть
@@ -381,7 +399,13 @@ func ResponseWithExpires(seconds uint32) ResponseOpt {
 
 // Вспомогательные функции для создания URI
 
-// MakeSipUri создает SIP URI
+// MakeSipUri создает SIP URI с указанными параметрами.
+// Пример: sip:alice@example.com:5060
+//
+// Параметры:
+//   - user: имя пользователя
+//   - host: хост или IP адрес
+//   - port: порт (используется 5060 по умолчанию, если 0)
 func MakeSipUri(user, host string, port int) sip.Uri {
 	return sip.Uri{
 		Scheme:    "sip",
@@ -392,7 +416,14 @@ func MakeSipUri(user, host string, port int) sip.Uri {
 	}
 }
 
-// MakeSipsUri создает SIPS URI
+// MakeSipsUri создает защищенный SIPS URI с указанными параметрами.
+// SIPS использует TLS для защищенного соединения.
+// Пример: sips:alice@example.com:5061
+//
+// Параметры:
+//   - user: имя пользователя
+//   - host: хост или IP адрес
+//   - port: порт (используется 5061 по умолчанию, если 0)
 func MakeSipsUri(user, host string, port int) sip.Uri {
 	return sip.Uri{
 		Scheme:    "sips",
@@ -403,7 +434,11 @@ func MakeSipsUri(user, host string, port int) sip.Uri {
 	}
 }
 
-// MakeTelUri создает TEL URI
+// MakeTelUri создает TEL URI для телефонных номеров.
+// Пример: tel:+79001234567
+//
+// Параметры:
+//   - number: телефонный номер (может включать + для международного формата)
 func MakeTelUri(number string) sip.Uri {
 	return sip.Uri{
 		Scheme:    "tel",
@@ -412,7 +447,15 @@ func MakeTelUri(number string) sip.Uri {
 	}
 }
 
-// Функция для создания URI из строки
+// ParseUri парсит строку и возвращает SIP URI.
+// Поддерживает форматы: sip:, sips:, tel:
+//
+// Примеры:
+//   - "sip:alice@example.com"
+//   - "sips:bob@example.com:5061"
+//   - "tel:+79001234567"
+//
+// Возвращает ошибку, если формат URI некорректный.
 func ParseUri(uriStr string) (sip.Uri, error) {
 	var uri sip.Uri
 	err := sip.ParseUri(uriStr, &uri)

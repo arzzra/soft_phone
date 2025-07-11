@@ -11,9 +11,10 @@ import (
 
 type InviteOptions func()
 
-func (s *Dialog) makeReq() {
-
-}
+// makeReq создает запрос (зарезервировано для будущего использования)
+// func (s *Dialog) makeReq() {
+//
+// }
 
 // Invite отправляет INVITE запрос на вызов
 func (s *Dialog) Invite(ctx context.Context, target string, opts ...RequestOpt) (ITx, error) {
@@ -47,9 +48,80 @@ func (s *Dialog) Invite(ctx context.Context, target string, opts ...RequestOpt) 
 	return s.sendReq(ctx, req)
 }
 
-func (s *Dialog) Bye(ctx context.Context) error {
-	return nil
+// ReInvite отправляет re-INVITE запрос для изменения параметров существующего диалога.
+// Может использоваться для изменения кодеков, добавления/удаления медиа потоков и т.д.
+// Возвращает клиентскую транзакцию для отслеживания ответов.
+func (s *Dialog) ReInvite(ctx context.Context, opts ...RequestOpt) (IClientTX, error) {
+	// Проверяем, что диалог в правильном состоянии
+	if s.State() != InCall {
+		return nil, fmt.Errorf("re-INVITE разрешен только в состоянии InCall, текущее: %s", s.State())
+	}
 
+	// Создаем INVITE запрос с параметрами существующего диалога
+	req := s.makeRequest(sip.INVITE)
+
+	// Применяем опции (например, новое SDP тело)
+	for _, opt := range opts {
+		opt(req)
+	}
+
+	// Отправляем запрос
+	tx, err := s.sendReq(ctx, req)
+	if err != nil {
+		return nil, errors.Wrap(err, "не удалось отправить re-INVITE")
+	}
+
+	// Сохраняем транзакцию re-INVITE для отслеживания
+	s.setReInviteTX(tx)
+
+	return tx, nil
+}
+
+// Bye отправляет BYE запрос для завершения диалога.
+// Этот метод является альтернативой методу Terminate().
+func (s *Dialog) Bye(ctx context.Context) error {
+	// Проверяем состояние диалога
+	currentState := s.State()
+	if currentState != InCall {
+		return fmt.Errorf("BYE может быть отправлен только в состоянии InCall, текущее: %s", currentState)
+	}
+
+	// Создаем BYE запрос
+	req := s.makeRequest(sip.BYE)
+
+	// Отправляем запрос
+	tx, err := s.sendReq(ctx, req)
+	if err != nil {
+		return errors.Wrap(err, "не удалось отправить BYE")
+	}
+
+	// Меняем состояние на Terminating
+	if err := s.setState(Terminating, nil); err != nil {
+		return errors.Wrap(err, "не удалось изменить состояние")
+	}
+
+	// Ждем ответа на BYE запрос
+	select {
+	case <-tx.Done():
+		// Транзакция завершена
+		if tx.Err() != nil {
+			return errors.Wrap(tx.Err(), "ошибка BYE транзакции")
+		}
+
+		// Проверяем финальный ответ
+		resp := tx.Response()
+		if resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// Успешный ответ - переходим в состояние Ended
+			return s.setState(Ended, nil)
+		}
+
+		return fmt.Errorf("BYE завершился с кодом: %d", resp.StatusCode)
+
+	case <-ctx.Done():
+		// Контекст отменен
+		tx.Terminate()
+		return ctx.Err()
+	}
 }
 
 var (
@@ -58,6 +130,15 @@ var (
 	// ErrTagFromNotFount ошибка при отсутствии тега from
 	ErrTagFromNotFount = errors.New("tag from not found")
 )
+
+func (s *Dialog) sendAckWithoutTX() error {
+	req := s.makeRequest(sip.ACK)
+	err := s.uu.writeMsg(req)
+	if err != nil {
+		slog.Debug("failed to send ack", "error", err)
+	}
+	return nil
+}
 
 func createReferByHeader(contact sip.Uri) sip.Header {
 	builder := strings.Builder{}
@@ -99,73 +180,75 @@ func createReferToHeader(target sip.Uri, callID, toTag, fromTag string) sip.Head
 	return sip.NewHeader("Refer-To", builder.String())
 }
 
-func (s *Dialog) makeRequest2(method sip.RequestMethod) *sip.Request {
-	trg := s.remoteTarget
-	trg.Port = 0
-	newRequest := sip.NewRequest(method, trg)
-
-	// Получаем адрес из заголовка To входящего запроса для UAS
-	if s.uaType == UAS {
-		toHeader := s.initReq.To()
-		if toHeader != nil {
-			newRequest.Laddr = sip.Addr{
-				Hostname: toHeader.Address.Host,
-				Port:     toHeader.Address.Port,
-			}
-		}
-	} else {
-		// Для исходящих вызовов (UAC) использовать первый транспорт
-		if len(uu.config.TransportConfigs) > 0 {
-			tc := uu.config.TransportConfigs[0]
-			newRequest.Laddr = sip.Addr{
-				Hostname: tc.Host,
-				Port:     tc.Port,
-			}
-		}
-
-	}
-
-	fromTag := newTag()
-
-	fromHeader := sip.FromHeader{
-		DisplayName: s.profile.DisplayName,
-		Address:     s.profile.Address,
-		Params:      sip.NewParams().Add("tag", fromTag),
-	}
-	newRequest.AppendHeader(&fromHeader)
-
-	toHeader := sip.ToHeader{
-		DisplayName: "",
-		Address:     s.remoteTarget,
-		Params:      nil,
-	}
-	newRequest.AppendHeader(&toHeader)
-	newRequest.Recipient = s.remoteTarget
-
-	newRequest.AppendHeader(s.profile.Contact())
-	//newRequest.AppendHeader(sip.HeaderClone(s.to))
-	//newRequest.AppendHeader(sip.HeaderClone(s.from))
-	newRequest.AppendHeader(&s.callID)
-	newRequest.AppendHeader(&sip.CSeqHeader{SeqNo: s.NextLocalCSeq(), MethodName: method})
-	maxForwards := sip.MaxForwardsHeader(70)
-	newRequest.AppendHeader(&maxForwards)
-
-	if len(s.routeSet) > 0 {
-		for _, val := range s.routeSet {
-			newRequest.AppendHeader(&sip.RouteHeader{Address: val})
-		}
-	}
-
-	return newRequest
-}
+// makeRequest2 создает новый SIP запрос в рамках диалога (зарезервировано для будущего использования)
+// func (s *Dialog) makeRequest2(method sip.RequestMethod) *sip.Request {
+// 	trg := s.remoteTarget
+// 	trg.Port = 0
+// 	newRequest := sip.NewRequest(method, trg)
+//
+// 	// Получаем адрес из заголовка To входящего запроса для UAS
+// 	if s.uaType == UAS {
+// 		toHeader := s.initReq.To()
+// 		if toHeader != nil {
+// 			newRequest.Laddr = sip.Addr{
+// 				Hostname: toHeader.Address.Host,
+// 				Port:     toHeader.Address.Port,
+// 			}
+// 		}
+// 	} else {
+// 		// Для исходящих вызовов (UAC) использовать первый транспорт
+// 		if len(s.uu.config.TransportConfigs) > 0 {
+// 			tc := s.uu.config.TransportConfigs[0]
+// 			newRequest.Laddr = sip.Addr{
+// 				Hostname: tc.Host,
+// 				Port:     tc.Port,
+// 			}
+// 		}
+//
+// 	}
+//
+// 	fromTag := newTag()
+//
+// 	fromHeader := sip.FromHeader{
+// 		DisplayName: s.profile.DisplayName,
+// 		Address:     s.profile.Address,
+// 		Params:      sip.NewParams().Add("tag", fromTag),
+// 	}
+// 	newRequest.AppendHeader(&fromHeader)
+//
+// 	toHeader := sip.ToHeader{
+// 		DisplayName: "",
+// 		Address:     s.remoteTarget,
+// 		Params:      nil,
+// 	}
+// 	newRequest.AppendHeader(&toHeader)
+// 	newRequest.Recipient = s.remoteTarget
+//
+// 	newRequest.AppendHeader(s.profile.Contact())
+// 	//newRequest.AppendHeader(sip.HeaderClone(s.to))
+// 	//newRequest.AppendHeader(sip.HeaderClone(s.from))
+// 	newRequest.AppendHeader(&s.callID)
+// 	newRequest.AppendHeader(&sip.CSeqHeader{SeqNo: s.NextLocalCSeq(), MethodName: method})
+// 	maxForwards := sip.MaxForwardsHeader(70)
+// 	newRequest.AppendHeader(&maxForwards)
+//
+// 	if len(s.routeSet) > 0 {
+// 		for _, val := range s.routeSet {
+// 			newRequest.AppendHeader(&sip.RouteHeader{Address: val})
+// 		}
+// 	}
+//
+// 	return newRequest
+// }
 
 ///////////////////////////////////////////////////////////
 
 type ReqBuilderOpt func(*sip.Request)
 
-func makeReqWithOpts(name sip.RequestMethod, to sip.Uri, opts ...ReqBuilderOpt) (*sip.Request, error) {
-	return nil, nil
-}
+// makeReqWithOpts создает запрос с опциями (зарезервировано для будущего использования)
+// func makeReqWithOpts(name sip.RequestMethod, to sip.Uri, opts ...ReqBuilderOpt) (*sip.Request, error) {
+// 	return nil, nil
+// }
 
 //////////////////////////////////////////////////////////
 

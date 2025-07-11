@@ -8,8 +8,10 @@ import (
 )
 
 var (
+	// CallIDDoesNotExist - сообщение об ошибке при отсутствии Call-ID в запросе
 	CallIDDoesNotExist = "empty call id"
-	CallDoesNotExist   = "transaction not found"
+	// CallDoesNotExist - сообщение об ошибке при отсутствии транзакции
+	CallDoesNotExist = "transaction not found"
 )
 
 // handleInvite обрабатывает входящие INVITE запросы
@@ -95,11 +97,14 @@ func (u *UACUAS) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 			}
 			return
 		} else {
-			sessionDialog := newUAS(req, tx)
-			u.dialogs.Put(*callID, tagTo, GetBranchID(req), sessionDialog)
+			sessionDialog := u.newUAS(req, tx)
+			u.dialogs.Put(*callID, sessionDialog.LocalTag(), GetBranchID(req), sessionDialog)
 			lTX := newTX(req, tx, sessionDialog)
 			sessionDialog.setFirstTX(lTX)
-
+			if err := sessionDialog.setState(Ringing, lTX); err != nil {
+				slog.Error("Не удалось установить состояние Ringing", "error", err)
+				return
+			}
 			// Вызываем колбэк о новом входящем вызове
 			if u.cb != nil {
 				u.cb(sessionDialog, lTX)
@@ -280,13 +285,13 @@ func (u *UACUAS) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 				slog.String("CurrentState", sess.GetCurrentState().String()))
 		}
 
-		// Вызываем обработчик если он установлен
+		// Вызываем обработчик BYE если он установлен
 		sess.handlersMu.Lock()
-		handler := sess.requestHandler
+		byeHandler := sess.byeHandler
 		sess.handlersMu.Unlock()
 
-		if handler != nil {
-			handler(ltx)
+		if byeHandler != nil {
+			byeHandler(sess, ltx)
 		}
 	}
 

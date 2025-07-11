@@ -2,49 +2,70 @@ package dialog
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"time"
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
+	"golang.org/x/sync/errgroup"
 )
 
+// Config содержит конфигурацию для создания UACUAS менеджера диалогов.
 type Config struct {
-	// Имя контакта для исходящих запросов
-	Contact     string
+	// Contact - имя контакта для исходящих запросов
+	Contact string
+	// DisplayName - отображаемое имя пользователя
 	DisplayName string
-	UserAgent   string
-	// Для исходящих запросов
+	// UserAgent - строка User-Agent для SIP запросов
+	UserAgent string
+	// Endpoints - список конечных точек для исходящих запросов
 	Endpoints []Endpoint
-	//Все транспорты которые будут использоваться
+	// TransportConfigs - конфигурации транспортов (UDP, TCP, WS)
 	TransportConfigs []TransportConfig
-	// Тестовый режим
+	// TestMode - включает тестовый режим с предсказуемыми значениями
 	TestMode bool
 }
 
+// UACUAS является менеджером SIP диалогов, объединяющим функциональность
+// UAC (User Agent Client) для исходящих вызовов и UAS (User Agent Server)
+// для входящих вызовов.
+//
+// UACUAS управляет:
+//   - Жизненным циклом диалогов
+//   - SIP транспортами (UDP, TCP, WS)
+//   - Обработкой входящих SIP запросов
+//   - Маршрутизацией сообщений к соответствующим диалогам
+//
+// Потокобезопасен для одновременной работы с множеством диалогов.
 type UACUAS struct {
 	ua     *sipgo.UserAgent
 	uas    *sipgo.Server
 	uac    *sipgo.Client
 	config Config
-	// дефолтный профиль для контакта итп при исходящих вызовах
+	// profile - дефолтный профиль для контакта при исходящих вызовах
 	profile Profile
 	cb      OnIncomingCall
-	// Колбэк для обработки re-INVITE запросов
+	// onReInvite - колбэк для обработки re-INVITE запросов
 	onReInvite OnIncomingCall
-	// Хранилище регистраций
+	// registrations - хранилище регистраций SIP пользователей
 	registrations map[string]*Registration
 
 	dialogs *dialogsMap
 }
 
-// Registration представляет информацию о регистрации SIP пользователя
+// Registration представляет информацию о регистрации SIP пользователя.
+// Используется для отслеживания активных регистраций на SIP сервере.
 type Registration struct {
-	AOR        string    // Address of Record
-	Contact    string    // Contact URI
-	Expires    int       // Время жизни регистрации в секундах
-	Registered time.Time // Время регистрации
+	// AOR - Address of Record, основной адрес пользователя
+	AOR string
+	// Contact - контактный URI для получения входящих вызовов
+	Contact string
+	// Expires - время жизни регистрации в секундах
+	Expires int
+	// Registered - время последней успешной регистрации
+	Registered time.Time
 }
 
 type tagGen func() string
@@ -53,6 +74,13 @@ type callIdGen func() string
 var newTag tagGen
 var newCallId callIdGen
 
+// NewUACUAS создает новый менеджер SIP диалогов с указанной конфигурацией.
+// Инициализирует SIP user agent, сервер и клиент для обработки сообщений.
+//
+// Параметры:
+//   - cfg: конфигурация, включающая транспорты, user agent string и другие настройки
+//
+// Возвращает ошибку если не удалось инициализировать компоненты.
 func NewUACUAS(cfg Config) (*UACUAS, error) {
 	// Проверяем конфигурацию
 	if len(cfg.TransportConfigs) == 0 {
@@ -91,6 +119,7 @@ func NewUACUAS(cfg Config) (*UACUAS, error) {
 
 	// доп настройки для тестов
 	if uu.config.TestMode {
+		sip.SIPDebug = true
 		newTag = func() string {
 			return "testMode"
 		}
@@ -135,6 +164,54 @@ func (u *UACUAS) defaultProfile() *Profile {
 	return pr
 }
 
+func (u *UACUAS) ListenTransports(ctx context.Context) error {
+	if len(u.config.TransportConfigs) == 0 {
+		return fmt.Errorf("нет сконфигурированных транспортов")
+	}
+
+	// Используем errgroup для параллельного запуска транспортов
+	g, ctx := errgroup.WithContext(ctx)
+
+	for _, tc := range u.config.TransportConfigs {
+		// Копируем переменную для использования в горутине
+		transportConfig := tc
+
+		// Валидация конфигурации
+		if err := transportConfig.Validate(); err != nil {
+			return fmt.Errorf("некорректная конфигурация транспорта %s: %w", transportConfig.Type, err)
+		}
+
+		// Формируем адрес для прослушивания
+		addr := fmt.Sprintf("%s:%d", transportConfig.Host, transportConfig.Port)
+		if transportConfig.Port == 0 {
+			addr = fmt.Sprintf("%s:%d", transportConfig.Host, transportConfig.GetDefaultPort())
+		}
+
+		// Запускаем транспорт в горутине
+		g.Go(func() error {
+			switch transportConfig.Type {
+			case TransportUDP:
+				return u.uas.ListenAndServe(ctx, "udp", addr)
+			case TransportTCP:
+				return u.uas.ListenAndServe(ctx, "tcp", addr)
+			case TransportWS:
+				return u.uas.ListenAndServe(ctx, "ws", addr)
+			case TransportTLS:
+				// TODO: Добавить поддержку TLS конфигурации
+				return fmt.Errorf("TLS транспорт пока не поддерживается")
+			case TransportWSS:
+				// TODO: Добавить поддержку WSS конфигурации
+				return fmt.Errorf("WSS транспорт пока не поддерживается")
+			default:
+				return fmt.Errorf("неподдерживаемый тип транспорта: %s", transportConfig.Type)
+			}
+		})
+	}
+
+	// Ожидаем завершения всех транспортов
+	return g.Wait()
+}
+
 // ServeUDP serves a UDP connection or mock for tests
 func (u *UACUAS) ServeUDP(c net.PacketConn) error {
 	if c == nil {
@@ -171,6 +248,10 @@ func (u *UACUAS) onRequests() {
 	u.uas.OnRegister(u.handleRegister)
 }
 
+func (u *UACUAS) writeMsg(req *sip.Request) error {
+	return u.uac.WriteRequest(req, sipgo.ClientRequestAddVia)
+}
+
 func (u *UACUAS) initSessionsMap(f func() string) {
 	u.dialogs = newDialogsMap(f)
 }
@@ -179,6 +260,7 @@ func (u *UACUAS) createDefaultDialog() *Dialog {
 	dialog := &Dialog{
 		uaType:  UAC,
 		profile: &u.profile,
+		uu:      u,
 	}
 	return dialog
 }

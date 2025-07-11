@@ -5,6 +5,7 @@ import (
 	"strings"
 )
 
+// TransportType определяет тип транспортного протокола для SIP сообщений.
 type TransportType string
 
 const (
