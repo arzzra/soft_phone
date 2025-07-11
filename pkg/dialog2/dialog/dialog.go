@@ -108,6 +108,10 @@ type Dialog struct {
 
 	// Нужно хранить первую транзакцию
 	firstTX *TX
+	
+	// Транзакция re-INVITE для обновления параметров сессии
+	reInviteTX *TX
+	reInviteMu sync.Mutex
 }
 
 // ID возвращает уникальный идентификатор диалога.
@@ -782,6 +786,20 @@ func (s *Dialog) setFirstTX(tx *TX) {
 
 func (s *Dialog) getFirstTX() *TX {
 	return s.firstTX
+}
+
+// setReInviteTX сохраняет транзакцию re-INVITE
+func (s *Dialog) setReInviteTX(tx *TX) {
+	s.reInviteMu.Lock()
+	defer s.reInviteMu.Unlock()
+	s.reInviteTX = tx
+}
+
+// getReInviteTX возвращает текущую транзакцию re-INVITE
+func (s *Dialog) getReInviteTX() *TX {
+	s.reInviteMu.Lock()
+	defer s.reInviteMu.Unlock()
+	return s.reInviteTX
 }
 
 // generateTag генерирует уникальный тег для диалога

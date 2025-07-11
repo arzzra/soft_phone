@@ -3,6 +3,8 @@ package dialog
 import (
 	"github.com/emiago/sipgo/sip"
 	"log/slog"
+	"strconv"
+	"time"
 )
 
 var (
@@ -34,10 +36,40 @@ func handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 			// Это re-INVITE для существующего диалога
 			ltx := newTX(req, tx, sessia)
 			if ltx != nil {
-				// TODO: Обработать re-INVITE в рамках существующего диалога
+				// Обработка re-INVITE для изменения параметров существующего диалога
 				slog.Debug("Получен re-INVITE для существующего диалога",
 					slog.String("CallID", callID.String()),
 					slog.String("ToTag", tagTo))
+				
+				// Проверяем состояние диалога - re-INVITE допустим только в состоянии InCall
+				if sessia.GetCurrentState() != InCall {
+					resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Неверное состояние диалога для re-INVITE", nil)
+					err := tx.Respond(resp)
+					if err != nil {
+						slog.Error("Не удалось отправить ответ на re-INVITE в неверном состоянии",
+							slog.Any("error", err),
+							slog.String("CallID", callID.String()),
+							slog.String("State", sessia.GetCurrentState().String()))
+					}
+					return
+				}
+				
+				// Сохраняем re-INVITE транзакцию
+				sessia.setReInviteTX(ltx)
+				
+				// Вызываем колбэк для обработки re-INVITE если он установлен
+				if uu.onReInvite != nil {
+					uu.onReInvite(sessia, ltx)
+				} else {
+					// Если колбэк не установлен, отвечаем 200 OK по умолчанию
+					resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
+					err := tx.Respond(resp)
+					if err != nil {
+						slog.Error("Не удалось отправить ответ 200 OK на re-INVITE",
+							slog.Any("error", err),
+							slog.String("CallID", callID.String()))
+					}
+				}
 			}
 		} else {
 			resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, CallDoesNotExist, nil)
@@ -84,7 +116,7 @@ func handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 	slog.Debug("handleCancel",
 		slog.String("req", req.String()), slog.String("body", string(req.Body())))
 
-	// TODO: Изменить состояние диалога на завершенный
+	// CANCEL завершает диалог, который еще не установлен (до получения 200 OK на INVITE)
 
 	callID := req.CallID()
 	if callID == nil {
@@ -106,11 +138,41 @@ func handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 				slog.String("ToTag", tagTo))
 			return
 		}
+		// Изменяем состояние диалога на Terminating
+		err := sess.setState(Terminating, ltx)
+		if err != nil {
+			slog.Error("Ошибка изменения состояния диалога при CANCEL",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()),
+				slog.String("CurrentState", sess.GetCurrentState().String()))
+		}
+		
 		// Отправляем успешный ответ на CANCEL
 		resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-		err := tx.Respond(resp)
+		err = tx.Respond(resp)
 		if err != nil {
 			slog.Error("Ошибка отправки 200 OK на CANCEL",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()))
+		}
+		
+		// Отправляем 487 Request Terminated на оригинальный INVITE
+		if inviteTx := sess.getFirstTX(); inviteTx != nil && inviteTx.IsServer() {
+			terminatedResp := sip.NewResponseFromRequest(inviteTx.Request(), sip.StatusRequestTerminated, "Request Terminated", nil)
+			if serverTx := inviteTx.ServerTX(); serverTx != nil {
+				err = serverTx.Respond(terminatedResp)
+				if err != nil {
+					slog.Error("Ошибка отправки 487 на INVITE после CANCEL",
+						slog.Any("error", err),
+						slog.String("CallID", callID.String()))
+				}
+			}
+		}
+		
+		// Изменяем состояние на Ended
+		err = sess.setState(Ended, ltx)
+		if err != nil {
+			slog.Error("Ошибка изменения состояния диалога на Ended после CANCEL",
 				slog.Any("error", err),
 				slog.String("CallID", callID.String()))
 		}
@@ -124,11 +186,41 @@ func handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 					slog.String("BranchID", GetBranchID(req)))
 				return
 			}
+			// Изменяем состояние диалога на Terminating
+			err := sess.setState(Terminating, ltx)
+			if err != nil {
+				slog.Error("Ошибка изменения состояния диалога при CANCEL (поиск по branch)",
+					slog.Any("error", err),
+					slog.String("CallID", callID.String()),
+					slog.String("CurrentState", sess.GetCurrentState().String()))
+			}
+			
 			// Отправляем успешный ответ на CANCEL
 			resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-			err := tx.Respond(resp)
+			err = tx.Respond(resp)
 			if err != nil {
 				slog.Error("Ошибка отправки 200 OK на CANCEL (поиск по branch)",
+					slog.Any("error", err),
+					slog.String("CallID", callID.String()))
+			}
+			
+			// Отправляем 487 Request Terminated на оригинальный INVITE
+			if inviteTx := sess.getFirstTX(); inviteTx != nil && inviteTx.IsServer() {
+				terminatedResp := sip.NewResponseFromRequest(inviteTx.Request(), sip.StatusRequestTerminated, "Request Terminated", nil)
+				if serverTx := inviteTx.ServerTX(); serverTx != nil {
+					err = serverTx.Respond(terminatedResp)
+					if err != nil {
+						slog.Error("Ошибка отправки 487 на INVITE после CANCEL (поиск по branch)",
+							slog.Any("error", err),
+							slog.String("CallID", callID.String()))
+					}
+				}
+			}
+			
+			// Изменяем состояние на Ended
+			err = sess.setState(Ended, ltx)
+			if err != nil {
+				slog.Error("Ошибка изменения состояния диалога на Ended после CANCEL (поиск по branch)",
 					slog.Any("error", err),
 					slog.String("CallID", callID.String()))
 			}
@@ -179,7 +271,23 @@ func handleBye(req *sip.Request, tx sip.ServerTransaction) {
 	ltx := newTX(req, tx, sess)
 	if ltx != nil {
 		// Обрабатываем BYE в рамках диалога
-		// TODO: Добавить обработку BYE в самом диалоге
+		// Изменяем состояние диалога на Terminating
+		err := sess.setState(Terminating, ltx)
+		if err != nil {
+			slog.Error("Ошибка изменения состояния диалога при BYE",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()),
+				slog.String("CurrentState", sess.GetCurrentState().String()))
+		}
+		
+		// Вызываем обработчик если он установлен
+		sess.handlersMu.Lock()
+		handler := sess.requestHandler
+		sess.handlersMu.Unlock()
+		
+		if handler != nil {
+			handler(ltx)
+		}
 	}
 
 	// Отправляем успешный ответ
@@ -191,28 +299,35 @@ func handleBye(req *sip.Request, tx sip.ServerTransaction) {
 			slog.String("CallID", callID.String()))
 	}
 
-	// Завершаем диалог
+	// Изменяем состояние на Ended и завершаем диалог
+	if ltx != nil {
+		err = sess.setState(Ended, ltx)
+		if err != nil {
+			slog.Error("Ошибка изменения состояния диалога на Ended после BYE",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()))
+		}
+	}
+	
+	// Удаляем диалог из менеджера
 	dialogs.Delete(*callID, tagTo, GetBranchID(req))
 }
 
 // обработка ACK на ответ клиента на 200 OK
 func handleACK(req *sip.Request, tx sip.ServerTransaction) {
-	{
-		//todo debug logger
-		slog.Debug("handleAck",
-			slog.String("request", req.String()),
-			slog.String("body", string(req.Body())))
-	}
+	slog.Debug("handleAck",
+		slog.String("request", req.String()),
+		slog.String("body", string(req.Body())))
 
 	callID := req.CallID()
 	if callID != nil {
 		tagTo := GetToTag(req)
 		d, ok := dialogs.Get(*callID, tagTo)
 		if ok {
-			// TODO: Реализовать processAck в TX
 
 			// сам допиши
 			fTx := d.getFirstTX()
+			fTx.writeAck(req)
 
 			// Пока просто логируем получение ACK
 			slog.Debug("ACK получен для существующего диалога",
@@ -225,7 +340,6 @@ func handleACK(req *sip.Request, tx sip.ServerTransaction) {
 		resp := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "call id is empty", nil)
 		err := tx.Respond(resp)
 		if err != nil {
-			//todo log error
 			slog.Error("handleAck", slog.Any("error", err))
 		}
 		return
@@ -313,16 +427,65 @@ func handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	// TODO: Здесь должна быть логика регистрации
-	// Пока просто отвечаем успехом
+	// Обработка регистрации
+	// Проверяем Expires заголовок
+	expiresHeader := req.GetHeader("Expires")
+	var expires int
+	if expiresHdr, ok := expiresHeader.(*sip.ExpiresHeader); ok {
+		expires = int(*expiresHdr)
+	} else {
+		// Проверяем expires параметр в Contact заголовке
+		if contactParams := contactHeader.Params; contactParams != nil {
+			if expiresParam, ok := contactParams["expires"]; ok {
+				if exp, err := strconv.Atoi(expiresParam); err == nil {
+					expires = exp
+				}
+			}
+		}
+		// Если не указан expires, используем значение по умолчанию
+		if expires == 0 {
+			expires = 3600 // 1 час по умолчанию
+		}
+	}
+	
+	// Если expires = 0, это отмена регистрации
+	if expires == 0 {
+		slog.Info("Отмена регистрации",
+			slog.String("From", fromHeader.Address.String()),
+			slog.String("Contact", contactHeader.Address.String()))
+		
+		// Удаляем регистрацию из хранилища
+		if uu.registrations != nil {
+			delete(uu.registrations, fromHeader.Address.String())
+		}
+	} else {
+		// Сохраняем регистрацию
+		if uu.registrations == nil {
+			uu.registrations = make(map[string]*Registration)
+		}
+		
+		reg := &Registration{
+			AOR:        fromHeader.Address.String(),
+			Contact:    contactHeader.Address.String(),
+			Expires:    expires,
+			Registered: time.Now(),
+		}
+		
+		uu.registrations[fromHeader.Address.String()] = reg
+		
+		slog.Info("Новая регистрация",
+			slog.String("AOR", reg.AOR),
+			slog.String("Contact", reg.Contact),
+			slog.Int("Expires", reg.Expires))
+	}
 	resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
 
 	// Добавляем заголовок Contact в ответ
 	resp.AppendHeader(contactHeader)
 
 	// Добавляем Expires заголовок (время жизни регистрации в секундах)
-	expiresHeader := sip.ExpiresHeader(3600) // 1 час
-	resp.AppendHeader(&expiresHeader)
+	expiresHdr := sip.ExpiresHeader(expires)
+	resp.AppendHeader(&expiresHdr)
 
 	err := tx.Respond(resp)
 	if err != nil {

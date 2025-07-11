@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
@@ -35,6 +36,18 @@ type UACUAS struct {
 	// дефолтный профиль для контакта итп при исходящих вызовах
 	profile Profile
 	cb      OnIncomingCall
+	// Колбэк для обработки re-INVITE запросов
+	onReInvite OnIncomingCall
+	// Хранилище регистраций
+	registrations map[string]*Registration
+}
+
+// Registration представляет информацию о регистрации SIP пользователя
+type Registration struct {
+	AOR        string    // Address of Record
+	Contact    string    // Contact URI
+	Expires    int       // Время жизни регистрации в секундах
+	Registered time.Time // Время регистрации
 }
 
 type tagGen func() string
@@ -177,4 +190,9 @@ func (u *UACUAS) createDefaultDialog() *Dialog {
 // OnIncomingCall устанавливает обработчик для входящих вызовов
 func (u *UACUAS) OnIncomingCall(handler OnIncomingCall) {
 	u.cb = handler
+}
+
+// OnReInvite устанавливает обработчик для re-INVITE запросов
+func (u *UACUAS) OnReInvite(handler OnIncomingCall) {
+	u.onReInvite = handler
 }

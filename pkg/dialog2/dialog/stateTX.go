@@ -16,6 +16,8 @@ type TX struct {
 	// true если транзакция является серверной
 	isServer bool
 
+	ackChan chan *sip.Request
+
 	respChan     chan *sip.Response
 	lastResponse *sip.Response // последний полученный ответ
 }
@@ -47,16 +49,19 @@ func (t *TX) WaitAck() error {
 	if t.IsClient() {
 		return fmt.Errorf("cannot wait for ACK on client transaction")
 	}
-	
+
 	// Получаем серверную транзакцию
 	sTx, ok := t.tx.(sip.ServerTransaction)
 	if !ok {
 		return errors.New("transaction is not a server transaction")
 	}
-	
+
 	// Ждем ACK или завершения транзакции
 	select {
 	case <-sTx.Acks():
+		return nil
+	case <-t.ackChan:
+
 		return nil
 	case <-t.tx.Done():
 		// Транзакция завершилась до получения ACK
@@ -91,28 +96,28 @@ func (t *TX) Cancel() error {
 	if t.IsServer() {
 		return fmt.Errorf("cannot cancel server transaction")
 	}
-	
+
 	// Проверяем, что транзакция клиентская
 	if _, ok := t.tx.(sip.ClientTransaction); !ok {
 		return errors.New("transaction is not a client transaction")
 	}
-	
+
 	// Создаем CANCEL запрос на основе оригинального запроса
 	cancelReq := sip.NewRequest(sip.CANCEL, t.req.Recipient)
 	cancelReq.SipVersion = t.req.SipVersion
-	
+
 	// Копируем необходимые заголовки из оригинального запроса
 	if via := t.req.Via(); via != nil {
 		cancelReq.AppendHeader(via.Clone())
 	}
-	
+
 	// Копируем Route заголовки
 	sip.CopyHeaders("Route", t.req, cancelReq)
-	
+
 	// Добавляем Max-Forwards
 	maxForwards := sip.MaxForwardsHeader(70)
 	cancelReq.AppendHeader(&maxForwards)
-	
+
 	// Копируем From, To, Call-ID и CSeq
 	if h := t.req.From(); h != nil {
 		cancelReq.AppendHeader(sip.HeaderClone(h))
@@ -128,19 +133,19 @@ func (t *TX) Cancel() error {
 		cseq.MethodName = sip.CANCEL
 		cancelReq.AppendHeader(cseq)
 	}
-	
+
 	// Копируем транспортные параметры
 	cancelReq.SetTransport(t.req.Transport())
 	cancelReq.SetSource(t.req.Source())
 	cancelReq.SetDestination(t.req.Destination())
-	
+
 	// Отправляем CANCEL через UAC диалога
 	if t.dialog != nil && uu != nil && uu.uac != nil {
 		ctx := context.Background()
 		_, err := uu.uac.TransactionRequest(ctx, cancelReq)
 		return err
 	}
-	
+
 	return errors.New("unable to send CANCEL request")
 }
 
@@ -175,7 +180,7 @@ func (t *TX) toRespChan(resp *sip.Response) {
 func (t *TX) processingResponse(resp *sip.Response) {
 	// Сохраняем последний ответ
 	t.lastResponse = resp
-	
+
 	switch true {
 	case resp.StatusCode >= 100 && resp.StatusCode <= 199:
 		// Информационные ответы (1xx)
@@ -259,4 +264,15 @@ func (t *TX) ClientTX() sip.ClientTransaction {
 		return cTx
 	}
 	return nil
+}
+
+func (t *TX) writeAck(ack *sip.Request) {
+	if t.ackChan == nil {
+		return
+	}
+	select {
+	case t.ackChan <- ack:
+	default:
+		return
+	}
 }
