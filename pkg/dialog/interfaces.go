@@ -80,6 +80,9 @@ type IDialog interface {
 	// ReferReplace отправляет REFER с заменой существующего диалога
 	ReferReplace(ctx context.Context, replaceDialog IDialog, opts *ReqOpts) (sip.ClientTransaction, error)
 
+	// SendReINVITE отправляет re-INVITE запрос для изменения параметров сессии
+	SendReINVITE(ctx context.Context, body Body, headers map[string]string) (sip.ClientTransaction, error)
+
 	SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpts) (sip.ClientTransaction, error)
 
 	// Context and lifecycle

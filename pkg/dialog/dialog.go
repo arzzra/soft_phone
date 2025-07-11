@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/arzzra/soft_phone/pkg/dialog/headers"
@@ -51,7 +52,7 @@ type Dialog struct {
 	routeSet     []sip.RouteHeader
 
 	// Последовательность
-	localSeq   uint32
+	localSeq   atomic.Uint32
 	remoteSeq  uint32
 	remoteCSeq uint32 // CSeq из последнего полученного запроса
 
@@ -301,9 +302,7 @@ func (d *Dialog) RouteSet() []sip.RouteHeader {
 
 // LocalSeq возвращает локальный CSeq
 func (d *Dialog) LocalSeq() uint32 {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.localSeq
+	return d.localSeq.Load()
 }
 
 // RemoteSeq возвращает удаленный CSeq
@@ -689,6 +688,59 @@ func (d *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts *
 	return tx, nil
 }
 
+// SendReINVITE отправляет re-INVITE запрос для изменения параметров сессии
+func (d *Dialog) SendReINVITE(ctx context.Context, body Body, headers map[string]string) (sip.ClientTransaction, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Re-INVITE может быть отправлен только в подтвержденном диалоге
+	if d.stateMachine.Current() != "confirmed" {
+		return nil, fmt.Errorf("re-INVITE можно отправить только в подтвержденном диалоге, текущее состояние: %s", d.stateMachine.Current())
+	}
+
+	// Валидация тела сообщения
+	if body.Content != nil {
+		if err := d.securityValidator.ValidateBody(body.Content, body.ContentType); err != nil {
+			return nil, fmt.Errorf("ошибка валидации тела сообщения: %w", err)
+		}
+	}
+
+	// Валидация заголовков
+	if err := d.securityValidator.ValidateHeaders(headers); err != nil {
+		return nil, fmt.Errorf("ошибка валидации заголовков: %w", err)
+	}
+
+	// Создаем re-INVITE запрос
+	req := sip.NewRequest(sip.INVITE, d.remoteTarget)
+	d.applyDialogHeaders(req)
+
+	// Добавляем тело
+	if body.Content != nil {
+		req.SetBody(body.Content)
+		req.AppendHeader(sip.NewHeader("Content-Type", body.ContentType))
+		req.AppendHeader(sip.NewHeader("Content-Length", strconv.Itoa(len(body.Content))))
+	}
+
+	// Добавляем дополнительные заголовки
+	for name, value := range headers {
+		req.AppendHeader(sip.NewHeader(name, value))
+	}
+
+	// Проверяем наличие клиента
+	if d.uasuac == nil || d.uasuac.client == nil {
+		return nil, fmt.Errorf("клиент транзакций не инициализирован")
+	}
+
+	// Отправляем запрос
+	tx, err := d.uasuac.client.TransactionRequest(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка отправки re-INVITE: %w", err)
+	}
+
+	d.updateLastActivity()
+	return tx, nil
+}
+
 // SendRequest отправляет произвольный запрос в рамках диалога
 func (d *Dialog) SendRequest(ctx context.Context, target sip.Uri, opts ...ReqOpts) (sip.ClientTransaction, error) {
 	d.mu.Lock()
@@ -861,9 +913,9 @@ func (d *Dialog) applyDialogHeaders(req *sip.Request) {
 	req.ReplaceHeader(&d.callID)
 
 	// CSeq
-	d.localSeq++
+	seq := d.localSeq.Add(1)
 	var cseqBuilder strings.Builder
-	cseqBuilder.WriteString(strconv.FormatUint(uint64(d.localSeq), 10))
+	cseqBuilder.WriteString(strconv.FormatUint(uint64(seq), 10))
 	cseqBuilder.WriteByte(' ')
 	cseqBuilder.WriteString(string(req.Method))
 	req.ReplaceHeader(sip.NewHeader("CSeq", cseqBuilder.String()))
@@ -1022,6 +1074,9 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 	// который уже держит блокировку
 	referHandler := d.referHandler
 	uasuac := d.uasuac
+	// Копируем необходимые данные для использования в горутине
+	dialogID := d.id
+	logger := d.logger
 
 	// Проверяем что UASUAC инициализирован
 	if uasuac == nil || uasuac.client == nil {
@@ -1029,7 +1084,7 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 	}
 
 	// Запускаем обработку REFER в фоне
-	SafeGo(d.logger, "dialog-refer-handler", func() {
+	SafeGo(logger, "dialog-refer-handler", func() {
 		// Проверяем контекст на отмену
 		select {
 		case <-ctx.Done():
@@ -1051,8 +1106,8 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 			}
 			notifyErr := subscription.SendNotify(ctx)
 			if notifyErr != nil {
-				d.logger.Error("не удалось отправить NOTIFY с результатом REFER",
-					DialogField(d.id),
+				logger.Error("не удалось отправить NOTIFY с результатом REFER",
+					DialogField(dialogID),
 					F("refer_failed", err != nil),
 					ErrField(notifyErr))
 			}
@@ -1061,8 +1116,8 @@ func (d *Dialog) handleREFER(req *sip.Request, tx sip.ServerTransaction) error {
 			subscription.UpdateStatus(ReferStatusSuccess)
 			notifyErr := subscription.SendNotify(ctx)
 			if notifyErr != nil {
-				d.logger.Error("не удалось отправить NOTIFY об успехе",
-					DialogField(d.id),
+				logger.Error("не удалось отправить NOTIFY об успехе",
+					DialogField(dialogID),
 					ErrField(notifyErr))
 			}
 		}
@@ -1108,8 +1163,10 @@ func (d *Dialog) handleReINVITE(req *sip.Request, tx sip.ServerTransaction) erro
 	if d.requestHandler != nil {
 		// Передаем управление пользовательскому коду для обработки re-INVITE
 		// Пользователь должен вызвать Answer() или Reject() для ответа
-		SafeGo(d.logger, "dialog-request-handler", func() {
-			d.requestHandler(req, tx)
+		logger := d.logger
+		handler := d.requestHandler
+		SafeGo(logger, "dialog-request-handler", func() {
+			handler(req, tx)
 		})
 		return nil
 	}
@@ -1166,18 +1223,18 @@ func (d *Dialog) handleResponse(res *sip.Response) {
 				d.updateDialogID()
 
 				// Обновляем ID в менеджере диалогов
-				if d.uasuac != nil {
+				if d.uasuac != nil && d.uasuac.dialogManager != nil {
 					oldIDCopy := oldID
 					newIDCopy := d.id
-					SafeGo(d.logger, "dialog-id-update", func() {
-						if d.uasuac.dialogManager != nil {
-							err := d.uasuac.dialogManager.UpdateDialogID(oldIDCopy, newIDCopy, d)
-							if err != nil {
-								d.logger.Error("не удалось обновить ID диалога",
-									F("old_id", oldIDCopy),
-									F("new_id", newIDCopy),
-									ErrField(err))
-							}
+					dialogManager := d.uasuac.dialogManager
+					logger := d.logger
+					SafeGo(logger, "dialog-id-update", func() {
+						err := dialogManager.UpdateDialogID(oldIDCopy, newIDCopy, d)
+						if err != nil {
+							logger.Error("не удалось обновить ID диалога",
+								F("old_id", oldIDCopy),
+								F("new_id", newIDCopy),
+								ErrField(err))
 						}
 					})
 				}
@@ -1342,7 +1399,7 @@ func (d *Dialog) SetupFromInviteRequest(req *sip.Request) error {
 	}
 
 	// CSeq
-	d.localSeq = req.CSeq().SeqNo
+	d.localSeq.Store(req.CSeq().SeqNo)
 
 	return nil
 }
