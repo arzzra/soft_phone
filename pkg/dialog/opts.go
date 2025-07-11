@@ -208,11 +208,11 @@ func WithSDP(sdp string) RequestOpt {
 		// Устанавливаем Content-Type для SDP
 		ct := sip.ContentTypeHeader("application/sdp")
 		msg.AppendHeader(&ct)
-		
+
 		// Устанавливаем тело
 		body := []byte(sdp)
 		msg.SetBody(body)
-		
+
 		// Устанавливаем Content-Length
 		contentLength := sip.ContentLengthHeader(len(body))
 		msg.AppendHeader(&contentLength)
@@ -384,10 +384,10 @@ func ResponseWithExpires(seconds uint32) ResponseOpt {
 // MakeSipUri создает SIP URI
 func MakeSipUri(user, host string, port int) sip.Uri {
 	return sip.Uri{
-		Scheme: "sip",
-		User:   user,
-		Host:   host,
-		Port:   port,
+		Scheme:    "sip",
+		User:      user,
+		Host:      host,
+		Port:      port,
 		UriParams: sip.NewParams(),
 	}
 }
@@ -395,10 +395,10 @@ func MakeSipUri(user, host string, port int) sip.Uri {
 // MakeSipsUri создает SIPS URI
 func MakeSipsUri(user, host string, port int) sip.Uri {
 	return sip.Uri{
-		Scheme: "sips",
-		User:   user,
-		Host:   host,
-		Port:   port,
+		Scheme:    "sips",
+		User:      user,
+		Host:      host,
+		Port:      port,
 		UriParams: sip.NewParams(),
 	}
 }
@@ -406,8 +406,8 @@ func MakeSipsUri(user, host string, port int) sip.Uri {
 // MakeTelUri создает TEL URI
 func MakeTelUri(number string) sip.Uri {
 	return sip.Uri{
-		Scheme: "tel",
-		User:   number,
+		Scheme:    "tel",
+		User:      number,
 		UriParams: sip.NewParams(),
 	}
 }

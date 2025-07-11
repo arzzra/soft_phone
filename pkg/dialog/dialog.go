@@ -1,3 +1,53 @@
+// Package dialog предоставляет высокоуровневую абстракцию для работы с SIP диалогами.
+//
+// Пакет реализует полную поддержку SIP диалогов согласно RFC 3261, включая:
+//   - Управление состояниями диалога (IDLE, Calling, Ringing, InCall, Terminating, Ended)
+//   - Поддержку UAC (User Agent Client) и UAS (User Agent Server) режимов
+//   - Обработку SIP транзакций с автоматическим управлением CSeq
+//   - Поддержку операций переадресации (REFER, REFER with Replaces)
+//   - Управление маршрутизацией через Route/Record-Route заголовки
+//
+// Основные компоненты:
+//   - Dialog - представляет SIP диалог с полным управлением состоянием
+//   - UACUAS - менеджер диалогов, обрабатывающий входящие и исходящие вызовы
+//   - TX - обертка над SIP транзакциями с удобным API
+//   - Profile - профиль пользователя для идентификации в SIP сообщениях
+//
+// Пример использования:
+//
+//	// Создание менеджера диалогов
+//	cfg := dialog.Config{
+//	    UserAgent: "MySoftPhone/1.0",
+//	    TransportConfigs: []dialog.TransportConfig{
+//	        {Type: dialog.TransportUDP, Host: "192.168.1.100", Port: 5060},
+//	    },
+//	}
+//	uacuas, err := dialog.NewUACUAS(cfg)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Обработка входящих вызовов
+//	uacuas.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
+//	    // Принять вызов
+//	    err := tx.Accept(dialog.ResponseWithSDP(localSDP))
+//	    if err != nil {
+//	        tx.Reject(486, "Busy Here")
+//	    }
+//	})
+//
+//	// Создание исходящего вызова
+//	ctx := context.Background()
+//	dialog, err := uacuas.NewDialog(ctx)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	tx, err := dialog.Start(ctx, "sip:alice@example.com",
+//	    dialog.WithSDP(localSDP))
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 package dialog
 
 import (
@@ -9,6 +59,7 @@ import (
 	"github.com/pkg/errors"
 	"log/slog"
 	"math/rand"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,18 +69,25 @@ import (
 // Проверяем, что Dialog реализует интерфейс IDialog
 var _ IDialog = (*Dialog)(nil)
 
+// DialogState представляет состояние SIP диалога в конечном автомате.
+// Диалог проходит через определенную последовательность состояний
+// от создания до завершения.
 type DialogState string
 
 func (s DialogState) String() string {
 	return string(s)
 }
 
+// dualValue используется для представления роли участника в диалоге.
+// Может быть либо UAC (инициатор вызова), либо UAS (принимающая сторона).
 type dualValue struct {
 	value string
 }
 
 var (
+	// UAC представляет User Agent Client - инициатора вызова
 	UAC = dualValue{"UAC"}
+	// UAS представляет User Agent Server - принимающую сторону
 	UAS = dualValue{"UAS"}
 )
 
@@ -52,8 +110,26 @@ const (
 	Ended DialogState = "Ended"
 )
 
+// Dialog представляет SIP диалог между двумя user agents.
+// Реализует полную логику управления диалогом согласно RFC 3261.
+//
+// Диалог идентифицируется тремя параметрами:
+//   - Call-ID - уникальный идентификатор вызова
+//   - Local tag - локальный тег из From/To заголовка
+//   - Remote tag - удаленный тег из From/To заголовка
+//
+// Поддерживает:
+//   - Автоматическое управление состояниями через FSM
+//   - Отправку и получение SIP запросов в рамках диалога
+//   - Обработку re-INVITE для изменения параметров сессии
+//   - Операции переадресации (REFER)
+//   - Корректное завершение через BYE
+//
+// Все методы потокобезопасны.
 type Dialog struct {
 	fsm *fsm.FSM
+
+	uu *UACUAS
 
 	// Идентификация диалога
 	id        string
@@ -104,6 +180,8 @@ type Dialog struct {
 	stateChangeHandler func(DialogState)
 	bodyHandler        func(*Body)
 	requestHandler     func(IServerTX)
+	byeHandler         func(IDialog, IServerTX)
+	terminateHandler   func()
 	handlersMu         sync.Mutex
 
 	// Нужно хранить первую транзакцию
@@ -310,7 +388,7 @@ func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (
 		slog.Debug("Dialog.Start sendReq failed",
 			slog.String("error", err.Error()))
 		// Возвращаем состояние обратно
-		s.setState(IDLE, nil)
+		_ = s.setState(IDLE, nil)
 		return nil, errors.Wrap(err, "failed to send INVITE")
 	}
 
@@ -444,10 +522,9 @@ func (s *Dialog) SendRequest(ctx context.Context, opts ...RequestOpt) (IClientTX
 
 	// Определяем метод запроса из опций
 	method := sip.INFO // По умолчанию INFO
-	var req *sip.Request
 
 	// Создаем запрос
-	req = s.makeRequest(method)
+	req := s.makeRequest(method)
 
 	// Применяем все опции
 	for _, opt := range opts {
@@ -547,13 +624,35 @@ func (s *Dialog) OnRequestHandler(handler func(IServerTX)) {
 	s.requestHandler = handler
 }
 
-// Без  opts cоздается по дефолту
-func NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, error) {
+// OnBye устанавливает обработчик для входящих BYE запросов.
+// Обработчик получает диалог и серверную транзакцию для ответа.
+// Метод потокобезопасен.
+func (s *Dialog) OnBye(handler func(IDialog, IServerTX)) {
+	s.handlersMu.Lock()
+	defer s.handlersMu.Unlock()
+	s.byeHandler = handler
+}
 
-	if uu == nil {
-		return nil, fmt.Errorf("ua not created")
-	}
-	di := uu.createDefaultDialog()
+// OnTerminate устанавливает обработчик для события завершения диалога.
+// Обработчик вызывается когда диалог переходит в состояние Ended.
+// Метод потокобезопасен.
+func (s *Dialog) OnTerminate(handler func()) {
+	s.handlersMu.Lock()
+	defer s.handlersMu.Unlock()
+	s.terminateHandler = handler
+}
+
+// NewDialog создает новый SIP диалог.
+// Диалог создается в состоянии IDLE и готов для отправки исходящего вызова.
+//
+// Параметры:
+//   - ctx: контекст для управления жизненным циклом диалога
+//   - opts: дополнительные опции для настройки диалога (профиль, таймауты и т.д.)
+//
+// Возвращает созданный диалог или ошибку при неудачном создании.
+func (u *UACUAS) NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, error) {
+
+	di := u.createDefaultDialog()
 
 	for _, opt := range opts {
 		opt(di)
@@ -593,64 +692,67 @@ func NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, error) {
 	return di, nil
 }
 
+// newUAS создает новый диалог для входящего вызова (User Agent Server).
+// Используется когда получен INVITE запрос от удаленной стороны.
+// Диалог создается на основе информации из входящего запроса.
 func newUAS(req *sip.Request, tx sip.ServerTransaction) *Dialog {
-	session := new(Dialog)
-	session.uaType = UAS
-	session.callID = *req.CallID()
-	session.initReq = req
+	di := new(Dialog)
+	di.uaType = UAS
+	di.callID = *req.CallID()
+	di.initReq = req
 
 	// Устанавливаем временные метки
-	session.createdAt = time.Now()
-	session.lastActivity = session.createdAt
+	di.createdAt = time.Now()
+	di.lastActivity = di.createdAt
 
 	// Устанавливаем контекст
-	session.ctx = context.Background()
+	di.ctx = context.Background()
 
 	toHeader := req.To()
 	if toHeader != nil && toHeader.Params != nil && toHeader.Params.Has("tag") {
 		if tagValue, ok := toHeader.Params.Get("tag"); ok {
-			session.remoteTag = tagValue
+			di.remoteTag = tagValue
 		}
 	}
 
 	// Генерируем localTag для UAS
-	session.localTag = generateTag()
+	di.localTag = generateTag()
 
-	session.initFSM()
+	di.initFSM()
 
 	if req.CSeq() != nil {
-		session.remoteCSeq.Store(req.CSeq().SeqNo)
+		di.remoteCSeq.Store(req.CSeq().SeqNo)
 	}
 
-	session.localURI = req.Recipient
-	session.remoteURI = req.From().Address
+	di.localURI = req.Recipient
+	di.remoteURI = req.From().Address
 
 	if req.Contact() != nil {
-		session.remoteTarget = req.Contact().Address
+		di.remoteTarget = req.Contact().Address
 	}
 
-	session.localContact = &sip.ContactHeader{
+	di.localContact = &sip.ContactHeader{
 		DisplayName: "",
 		Address:     req.Recipient,
 		Params:      nil,
 	}
-	session.remoteContact = req.Contact()
+	di.remoteContact = req.Contact()
 
 	// Обрабатываем from/to заголовки
-	session.from = req.From()
-	session.to = req.To()
+	di.from = req.From()
+	di.to = req.To()
 
 	// Обрабатываем remoteTag из From заголовка (для UAS)
-	if session.from.Params != nil && session.from.Params.Has("tag") {
-		if tagValue, ok := session.from.Params.Get("tag"); ok {
-			session.remoteTag = tagValue
+	if di.from.Params != nil && di.from.Params.Has("tag") {
+		if tagValue, ok := di.from.Params.Get("tag"); ok {
+			di.remoteTag = tagValue
 		}
 	}
 
 	// Устанавливаем ID диалога
-	session.updateDialogID()
+	di.updateDialogID()
 
-	return session
+	return di
 }
 
 func formEventName(src, dst DialogState) string {
@@ -743,10 +845,16 @@ func (s *Dialog) afterStateChange(ctx context.Context, e *fsm.Event) {
 	// Уведомляем о смене состояния
 	s.handlersMu.Lock()
 	handler := s.stateChangeHandler
+	terminateHandler := s.terminateHandler
 	s.handlersMu.Unlock()
 
 	if handler != nil {
 		handler(DialogState(e.Dst))
+	}
+
+	// Если перешли в состояние Ended, вызываем terminateHandler
+	if DialogState(e.Dst) == Ended && terminateHandler != nil {
+		terminateHandler()
 	}
 }
 
@@ -777,9 +885,10 @@ func (s *Dialog) GetCurrentState() DialogState {
 	return DialogState(s.fsm.Current())
 }
 
-func (s *Dialog) saveHeaders(req *sip.Request) {
-
-}
+// saveHeaders сохраняет заголовки из запроса (зарезервировано для будущего использования)
+// func (s *Dialog) saveHeaders(req *sip.Request) {
+//
+// }
 
 func (s *Dialog) setFirstTX(tx *TX) {
 	s.firstTX = tx
@@ -796,12 +905,12 @@ func (s *Dialog) setReInviteTX(tx *TX) {
 	s.reInviteTX = tx
 }
 
-// getReInviteTX возвращает текущую транзакцию re-INVITE
-func (s *Dialog) getReInviteTX() *TX {
-	s.reInviteMu.Lock()
-	defer s.reInviteMu.Unlock()
-	return s.reInviteTX
-}
+// getReInviteTX возвращает текущую транзакцию re-INVITE (зарезервировано для будущего использования)
+// func (s *Dialog) getReInviteTX() *TX {
+// 	s.reInviteMu.Lock()
+// 	defer s.reInviteMu.Unlock()
+// 	return s.reInviteTX
+// }
 
 // generateTag генерирует уникальный тег для диалога
 func generateTag() string {
@@ -821,28 +930,25 @@ func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
 		toHeader := s.initReq.To()
 		if toHeader != nil {
 			newRequest.Laddr = sip.Addr{
+				IP:       net.ParseIP(toHeader.Address.Host),
 				Hostname: toHeader.Address.Host,
 				Port:     toHeader.Address.Port,
 			}
 		}
 	} else {
 		// Для исходящих вызовов (UAC) использовать первый транспорт
-		if len(uu.config.TransportConfigs) > 0 {
-			tc := uu.config.TransportConfigs[0]
+		if len(s.uu.config.TransportConfigs) > 0 {
+			tc := s.uu.config.TransportConfigs[0]
 			newRequest.Laddr = sip.Addr{
+				IP:       net.ParseIP(tc.Host),
 				Hostname: tc.Host,
 				Port:     tc.Port,
 			}
 		}
 	}
 
-	fromTag := newTag()
+	fromHeader := s.buildFromHeader()
 
-	fromHeader := sip.FromHeader{
-		DisplayName: s.profile.DisplayName,
-		Address:     s.profile.Address,
-		Params:      sip.NewParams().Add("tag", fromTag),
-	}
 	newRequest.AppendHeader(&fromHeader)
 
 	toHeader := sip.ToHeader{
@@ -868,10 +974,54 @@ func (s *Dialog) makeRequest(method sip.RequestMethod) *sip.Request {
 	slog.Debug("Dialog.makeRequest created",
 		slog.String("method", string(method)),
 		slog.String("callID", string(s.callID)),
-		slog.String("fromTag", fromTag),
+		slog.String("localTag", s.localTag),
 		slog.String("localAddr", fmt.Sprintf("%s:%d", newRequest.Laddr.Hostname, newRequest.Laddr.Port)))
 
 	return newRequest
+}
+
+func (s *Dialog) buildFromHeader() sip.FromHeader {
+	var fromHeader = sip.FromHeader{}
+
+	// если профиль nil то берем из первой транзакции
+	if s.profile != nil {
+		fromHeader = sip.FromHeader{
+			DisplayName: s.profile.DisplayName,
+			Address:     s.profile.Address,
+			Params:      sip.NewParams().Add("tag", s.localTag),
+		}
+	} else if s.firstTX != nil && s.firstTX.req != nil {
+		switch s.uaType {
+		case UAS:
+			// Для UAS берем To заголовок из первого запроса (это наш локальный адрес)
+			if toHeader := s.firstTX.req.To(); toHeader != nil {
+				fromHeader = sip.FromHeader{
+					DisplayName: toHeader.DisplayName,
+					Address:     toHeader.Address,
+					Params:      sip.NewParams().Add("tag", s.localTag),
+				}
+			}
+		case UAC:
+			// Для UAC берем From заголовок из первого запроса
+			if fromHeaderOrig := s.firstTX.req.From(); fromHeaderOrig != nil {
+				fromHeader = sip.FromHeader{
+					DisplayName: fromHeaderOrig.DisplayName,
+					Address:     fromHeaderOrig.Address,
+					Params:      sip.NewParams().Add("tag", s.localTag),
+				}
+			}
+		}
+	}
+	
+	// Если все еще не удалось создать заголовок, используем локальный URI
+	if fromHeader.Address.Host == "" && s.localURI.Host != "" {
+		fromHeader = sip.FromHeader{
+			Address: s.localURI,
+			Params:  sip.NewParams().Add("tag", s.localTag),
+		}
+	}
+	
+	return fromHeader
 }
 
 // sendReq отправляет запрос через транспортный уровень и создает транзакцию.
@@ -881,8 +1031,11 @@ func (s *Dialog) sendReq(ctx context.Context, req *sip.Request) (*TX, error) {
 	s.lastActivity = time.Now()
 	s.activityMu.Unlock()
 
+	{
+		slog.Debug("sendReq", slog.Any("req.Laddr", req.Laddr))
+	}
 	// Отправляем через глобальный UAC
-	tx, err := uu.uac.TransactionRequest(ctx, req, sipgo.ClientRequestAddVia)
+	tx, err := s.uu.uac.TransactionRequest(ctx, req, sipgo.ClientRequestAddVia)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to send request")
 	}
