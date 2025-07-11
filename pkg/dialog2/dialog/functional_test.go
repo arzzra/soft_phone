@@ -2,7 +2,6 @@ package dialog
 
 import (
 	"github.com/stretchr/testify/assert"
-	"stash.delta.sbrf.ru/opskt/srp-sip/v2/tools"
 	"testing"
 )
 

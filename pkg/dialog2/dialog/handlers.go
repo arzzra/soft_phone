@@ -67,7 +67,7 @@ func handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 			dialogs.Put(*callID, tagTo, GetBranchID(req), sessionDialog)
 			lTX := newTX(req, tx, sessionDialog)
 			sessionDialog.setFirstTX(lTX)
-			
+
 			// Вызываем колбэк о новом входящем вызове
 			if uu.cb != nil {
 				uu.cb(sessionDialog, lTX)
@@ -101,7 +101,7 @@ func handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 	if ok {
 		ltx := newTX(req, tx, sess)
 		if ltx == nil {
-			slog.Error("Ошибка создания транзакции для CANCEL", 
+			slog.Error("Ошибка создания транзакции для CANCEL",
 				slog.String("CallID", callID.String()),
 				slog.String("ToTag", tagTo))
 			return
@@ -110,7 +110,7 @@ func handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 		resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
 		err := tx.Respond(resp)
 		if err != nil {
-			slog.Error("Ошибка отправки 200 OK на CANCEL", 
+			slog.Error("Ошибка отправки 200 OK на CANCEL",
 				slog.Any("error", err),
 				slog.String("CallID", callID.String()))
 		}
@@ -119,7 +119,7 @@ func handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 		if is {
 			ltx := newTX(req, tx, sess)
 			if ltx == nil {
-				slog.Error("Ошибка создания транзакции для CANCEL (поиск по branch)", 
+				slog.Error("Ошибка создания транзакции для CANCEL (поиск по branch)",
 					slog.String("CallID", callID.String()),
 					slog.String("BranchID", GetBranchID(req)))
 				return
@@ -128,7 +128,7 @@ func handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 			resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
 			err := tx.Respond(resp)
 			if err != nil {
-				slog.Error("Ошибка отправки 200 OK на CANCEL (поиск по branch)", 
+				slog.Error("Ошибка отправки 200 OK на CANCEL (поиск по branch)",
 					slog.Any("error", err),
 					slog.String("CallID", callID.String()))
 			}
@@ -137,7 +137,7 @@ func handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 			resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Транзакция не найдена", nil)
 			err := tx.Respond(resp)
 			if err != nil {
-				slog.Error("Ошибка отправки 481 на CANCEL для несуществующей транзакции", 
+				slog.Error("Ошибка отправки 481 на CANCEL для несуществующей транзакции",
 					slog.Any("error", err),
 					slog.String("CallID", callID.String()))
 			}
@@ -168,7 +168,7 @@ func handleBye(req *sip.Request, tx sip.ServerTransaction) {
 		resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Диалог не найден", nil)
 		err := tx.Respond(resp)
 		if err != nil {
-			slog.Error("Ошибка отправки ответа 481 на BYE", 
+			slog.Error("Ошибка отправки ответа 481 на BYE",
 				slog.Any("error", err),
 				slog.String("CallID", callID.String()))
 		}
@@ -186,11 +186,11 @@ func handleBye(req *sip.Request, tx sip.ServerTransaction) {
 	resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
 	err := tx.Respond(resp)
 	if err != nil {
-		slog.Error("Ошибка отправки 200 OK на BYE", 
+		slog.Error("Ошибка отправки 200 OK на BYE",
 			slog.Any("error", err),
 			slog.String("CallID", callID.String()))
 	}
-	
+
 	// Завершаем диалог
 	dialogs.Delete(*callID, tagTo, GetBranchID(req))
 }
@@ -207,11 +207,13 @@ func handleACK(req *sip.Request, tx sip.ServerTransaction) {
 	callID := req.CallID()
 	if callID != nil {
 		tagTo := GetToTag(req)
-		_, ok := dialogs.Get(*callID, tagTo)
+		d, ok := dialogs.Get(*callID, tagTo)
 		if ok {
 			// TODO: Реализовать processAck в TX
-			// sess.getFirstIncomingTX().processAck(req)
-			
+
+			// сам допиши
+			fTx := d.getFirstTX()
+
 			// Пока просто логируем получение ACK
 			slog.Debug("ACK получен для существующего диалога",
 				slog.String("CallID", callID.String()),
@@ -232,7 +234,7 @@ func handleACK(req *sip.Request, tx sip.ServerTransaction) {
 
 // handleUpdate обрабатывает входящие UPDATE запросы
 func handleUpdate(req *sip.Request, tx sip.ServerTransaction) {
-		slog.Debug("handleUpdate",
+	slog.Debug("handleUpdate",
 		slog.String("req", req.String()),
 		slog.String("body", string(req.Body())))
 
@@ -247,7 +249,7 @@ func handleUpdate(req *sip.Request, tx sip.ServerTransaction) {
 
 // handleOptions обрабатывает входящие OPTIONS запросы
 func handleOptions(req *sip.Request, tx sip.ServerTransaction) {
-		slog.Debug("handleOptions",
+	slog.Debug("handleOptions",
 		slog.String("req", req.String()),
 		slog.String("body", string(req.Body())))
 
@@ -262,7 +264,7 @@ func handleOptions(req *sip.Request, tx sip.ServerTransaction) {
 
 // handleNotify обрабатывает входящие NOTIFY запросы
 func handleNotify(req *sip.Request, tx sip.ServerTransaction) {
-		slog.Debug("handleNotify",
+	slog.Debug("handleNotify",
 		slog.String("req", req.String()),
 		slog.String("body", string(req.Body())))
 
@@ -283,11 +285,11 @@ func handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 
 	// REGISTER обычно используется для регистрации на SIP сервере
 	// В контексте софтфона это может быть не нужно, но добавим базовую обработку
-	
+
 	// Проверяем заголовки
 	fromHeader := req.From()
 	toHeader := req.To()
-	
+
 	if fromHeader == nil || toHeader == nil {
 		resp := sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Отсутствуют обязательные заголовки", nil)
 		err := tx.Respond(resp)
@@ -304,7 +306,7 @@ func handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 		resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
 		err := tx.Respond(resp)
 		if err != nil {
-			slog.Error("Ошибка отправки ответа на REGISTER (query)", 
+			slog.Error("Ошибка отправки ответа на REGISTER (query)",
 				slog.Any("error", err),
 				slog.String("From", fromHeader.Address.String()))
 		}
@@ -314,21 +316,21 @@ func handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 	// TODO: Здесь должна быть логика регистрации
 	// Пока просто отвечаем успехом
 	resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-	
+
 	// Добавляем заголовок Contact в ответ
 	resp.AppendHeader(contactHeader)
-	
+
 	// Добавляем Expires заголовок (время жизни регистрации в секундах)
 	expiresHeader := sip.ExpiresHeader(3600) // 1 час
 	resp.AppendHeader(&expiresHeader)
-	
+
 	err := tx.Respond(resp)
 	if err != nil {
-		slog.Error("Ошибка отправки 200 OK на REGISTER", 
+		slog.Error("Ошибка отправки 200 OK на REGISTER",
 			slog.Any("error", err),
 			slog.String("From", fromHeader.Address.String()))
 	}
-	
+
 	slog.Info("Регистрация обработана",
 		slog.String("From", fromHeader.Address.String()),
 		slog.String("Contact", contactHeader.Address.String()))

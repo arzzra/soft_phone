@@ -780,7 +780,7 @@ func (s *Dialog) setFirstTX(tx *TX) {
 	s.firstTX = tx
 }
 
-func (s *Dialog) getFirstIncomingTX() *TX {
+func (s *Dialog) getFirstTX() *TX {
 	return s.firstTX
 }
 
