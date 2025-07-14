@@ -71,8 +71,12 @@ func TestBasicCallWithTestify(t *testing.T) {
 	require.NotNil(t, ua2, "UA2 should not be nil")
 	
 	// Запускаем транспорты
-	go ua1.ListenTransports(ctx)
-	go ua2.ListenTransports(ctx)
+	go func() {
+		_ = ua1.ListenTransports(ctx)
+	}()
+	go func() {
+		_ = ua2.ListenTransports(ctx)
+	}()
 	
 	time.Sleep(500 * time.Millisecond)
 	

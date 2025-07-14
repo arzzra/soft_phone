@@ -47,7 +47,7 @@ func NewTestEventCollector() *TestEventCollector {
 func (tec *TestEventCollector) Add(source, eventType, details string) {
 	tec.mu.Lock()
 	defer tec.mu.Unlock()
-	
+
 	event := TestEvent{
 		Time:      time.Now(),
 		Source:    source,
@@ -61,7 +61,7 @@ func (tec *TestEventCollector) Add(source, eventType, details string) {
 func (tec *TestEventCollector) Has(source, eventType string) bool {
 	tec.mu.RLock()
 	defer tec.mu.RUnlock()
-	
+
 	for _, e := range tec.events {
 		if e.Source == source && e.EventType == eventType {
 			return true
@@ -86,21 +86,21 @@ func (s *DialogTestSuite) SetupTest() {
 	s.ctx, s.cancelFunc = context.WithCancel(context.Background())
 	s.cleanup = make([]func(), 0)
 	s.events.Clear()
-	
+
 	// Инициализируем UA
 	var err error
 	s.ua1, err = s.initUA(25060, "UA1")
 	s.Require().NoError(err, "Failed to init UA1")
-	
+
 	s.ua2, err = s.initUA(26060, "UA2")
 	s.Require().NoError(err, "Failed to init UA2")
-	
+
 	s.ua3, err = s.initUA(27060, "UA3")
 	s.Require().NoError(err, "Failed to init UA3")
-	
+
 	// Запускаем транспорты
 	s.startTransports()
-	
+
 	// Даем время на инициализацию
 	time.Sleep(500 * time.Millisecond)
 }
@@ -110,11 +110,11 @@ func (s *DialogTestSuite) TearDownTest() {
 	if s.cancelFunc != nil {
 		s.cancelFunc()
 	}
-	
+
 	for _, cleanupFunc := range s.cleanup {
 		cleanupFunc()
 	}
-	
+
 	time.Sleep(500 * time.Millisecond)
 }
 
@@ -122,7 +122,7 @@ func (s *DialogTestSuite) TearDownTest() {
 func (s *DialogTestSuite) initUA(port int, name string) (*dialog.UACUAS, error) {
 	cfg := dialog.Config{
 		Contact:     fmt.Sprintf("contact-%s-%d", name, port),
-		DisplayName: fmt.Sprintf("%s", name),
+		DisplayName: name,
 		UserAgent:   fmt.Sprintf("TestAgent-%s-%d", name, port),
 		Endpoints:   nil,
 		TransportConfigs: []dialog.TransportConfig{
@@ -135,7 +135,7 @@ func (s *DialogTestSuite) initUA(port int, name string) (*dialog.UACUAS, error) 
 		},
 		TestMode: true,
 	}
-	
+
 	return dialog.NewUACUAS(cfg)
 }
 
@@ -147,14 +147,14 @@ func (s *DialogTestSuite) startTransports() {
 			log.Printf("UA1 transport error: %v", err)
 		}
 	}()
-	
+
 	go func() {
 		err := s.ua2.ListenTransports(s.ctx)
 		if err != nil {
 			log.Printf("UA2 transport error: %v", err)
 		}
 	}()
-	
+
 	go func() {
 		err := s.ua3.ListenTransports(s.ctx)
 		if err != nil {
@@ -183,7 +183,7 @@ a=sendrecv
 func (s *DialogTestSuite) waitForResponse(tx dialog.IClientTX, expectedCode int, timeout time.Duration) (*sip.Response, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	
+
 	for {
 		select {
 		case resp := <-tx.Responses():
@@ -205,23 +205,24 @@ func (s *DialogTestSuite) createBasicCall() (dialog.IDialog, dialog.IDialog) {
 	var ua2Dialog dialog.IDialog
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	
+
 	// Обработчик для UA2
 	s.ua2.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
+		time.Sleep(500 * time.Millisecond)
 		ua2Dialog = d
 		s.events.Add("UA2", "INVITE_RECEIVED", "Incoming call")
-		
+
 		// Отправляем 180 Ringing
 		err := tx.Provisional(180, "Ringing")
 		s.Require().NoError(err)
 		s.events.Add("UA2", "180_SENT", "Ringing")
-		
+
 		// Принимаем вызов
 		sdp := s.getTestSDP(26000)
 		err = tx.Accept(dialog.ResponseWithSDP(sdp))
 		s.Require().NoError(err)
 		s.events.Add("UA2", "200_SENT", "Call accepted")
-		
+
 		// Ждем ACK
 		go func() {
 			err := tx.WaitAck()
@@ -230,20 +231,20 @@ func (s *DialogTestSuite) createBasicCall() (dialog.IDialog, dialog.IDialog) {
 			wg.Done()
 		}()
 	})
-	
+
 	// UA1 инициирует звонок
 	d1, err := s.ua1.NewDialog(s.ctx)
 	s.Require().NoError(err)
-	
+
 	sdp := s.getTestSDP(25000)
 	tx, err := d1.Start(s.ctx, "sip:user2@127.0.0.1:26060", dialog.WithSDP(sdp))
 	s.Require().NoError(err)
 	s.events.Add("UA1", "INVITE_SENT", "Call initiated")
-	
+
 	// Ждем ответы (180 и 200)
 	responseCount := 0
 	timeout := time.After(5 * time.Second)
-	
+
 	for responseCount < 2 {
 		select {
 		case resp := <-tx.Responses():
@@ -252,7 +253,7 @@ func (s *DialogTestSuite) createBasicCall() (dialog.IDialog, dialog.IDialog) {
 				return d1, ua2Dialog
 			}
 			responseCount++
-			
+
 			if resp.StatusCode == 180 {
 				s.events.Add("UA1", "180_RECEIVED", "Ringing")
 			} else if resp.StatusCode == 200 {
@@ -263,13 +264,13 @@ func (s *DialogTestSuite) createBasicCall() (dialog.IDialog, dialog.IDialog) {
 			return d1, ua2Dialog
 		}
 	}
-	
+
 	// Ждем установления соединения
 	wg.Wait()
-	
+
 	// Небольшая пауза для стабилизации
 	time.Sleep(100 * time.Millisecond)
-	
+
 	return d1, ua2Dialog
 }
 
@@ -282,29 +283,29 @@ type ExtendedDialogTestSuite struct {
 func (s *ExtendedDialogTestSuite) TestBasicCallScenario() {
 	// Создаем звонок
 	ua1Dialog, ua2Dialog := s.createBasicCall()
-	
+
 	// Проверяем состояние диалогов
 	s.Equal(dialog.InCall, ua1Dialog.State())
 	s.Equal(dialog.InCall, ua2Dialog.State())
-	
+
 	// Проверяем атрибуты диалога
 	s.NotEmpty(ua1Dialog.ID())
 	s.NotEmpty(ua1Dialog.CallID())
 	s.NotEmpty(ua1Dialog.LocalTag())
 	s.NotEmpty(ua1Dialog.RemoteTag())
-	
+
 	// Проверяем, что Call-ID совпадает
 	// CallID() возвращает sip.CallIDHeader (не указатель)
 	s.Equal(string(ua1Dialog.CallID()), string(ua2Dialog.CallID()))
-	
+
 	// Завершаем звонок
 	err := ua1Dialog.Terminate()
 	s.NoError(err)
 	s.events.Add("UA1", "BYE_SENT", "Call terminated")
-	
+
 	// Даем время на обработку
 	time.Sleep(500 * time.Millisecond)
-	
+
 	// Проверяем события
 	s.True(s.events.Has("UA1", "INVITE_SENT"))
 	s.True(s.events.Has("UA2", "INVITE_RECEIVED"))
@@ -316,35 +317,35 @@ func (s *ExtendedDialogTestSuite) TestBasicCallScenario() {
 func (s *ExtendedDialogTestSuite) TestReInviteScenario() {
 	// Создаем звонок
 	ua1Dialog, ua2Dialog := s.createBasicCall()
-	
+
 	// Настраиваем обработчик re-INVITE для UA2
 	reInviteReceived := make(chan bool, 1)
-	
+
 	// UACUAS имеет метод OnReInvite
 	s.ua2.OnReInvite(func(d dialog.IDialog, tx dialog.IServerTX) {
 		s.events.Add("UA2", "REINVITE_RECEIVED", "Got re-INVITE")
-		
+
 		// Принимаем re-INVITE с новым SDP
 		newSdp := s.getTestSDP(26002)
 		err := tx.Accept(dialog.ResponseWithSDP(newSdp))
 		s.Require().NoError(err)
 		s.events.Add("UA2", "REINVITE_ACCEPTED", "Sent 200 OK")
-		
+
 		reInviteReceived <- true
 	})
-	
+
 	// UA1 отправляет re-INVITE
 	newSdp := s.getTestSDP(25002)
 	reinviteTx, err := ua1Dialog.ReInvite(s.ctx, dialog.WithSDP(newSdp))
 	s.Require().NoError(err)
 	s.events.Add("UA1", "REINVITE_SENT", "Sent re-INVITE")
-	
+
 	// Ждем ответ
 	resp, err := s.waitForResponse(reinviteTx, 200, 5*time.Second)
 	s.Require().NoError(err)
 	s.Equal(200, resp.StatusCode)
 	s.events.Add("UA1", "REINVITE_SUCCESS", "re-INVITE completed")
-	
+
 	// Ждем обработки
 	select {
 	case <-reInviteReceived:
@@ -352,11 +353,11 @@ func (s *ExtendedDialogTestSuite) TestReInviteScenario() {
 	case <-time.After(2 * time.Second):
 		s.Fail("Timeout waiting for re-INVITE processing")
 	}
-	
+
 	// Проверяем события
 	s.True(s.events.Has("UA2", "REINVITE_RECEIVED"))
 	s.True(s.events.Has("UA1", "REINVITE_SUCCESS"))
-	
+
 	// Завершаем звонок
 	err = ua2Dialog.Terminate()
 	s.NoError(err)
@@ -366,27 +367,27 @@ func (s *ExtendedDialogTestSuite) TestReInviteScenario() {
 func (s *ExtendedDialogTestSuite) TestReferScenario() {
 	// Создаем звонок между UA1 и UA2
 	ua1Dialog, ua2Dialog := s.createBasicCall()
-	
+
 	// Настраиваем обработчик для UA3
 	ua3Ready := make(chan bool, 1)
 	var ua3Dialog dialog.IDialog
-	
+
 	s.ua3.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
 		ua3Dialog = d
 		s.events.Add("UA3", "INVITE_RECEIVED", "Transfer target call")
-		
+
 		// Принимаем звонок
 		sdp := s.getTestSDP(27000)
 		err := tx.Accept(dialog.ResponseWithSDP(sdp))
 		s.Require().NoError(err)
 		s.events.Add("UA3", "200_SENT", "Call accepted")
-		
+
 		go func() {
-			tx.WaitAck()
+			_ = tx.WaitAck()
 			ua3Ready <- true
 		}()
 	})
-	
+
 	// UA2 инициирует переадресацию на UA3
 	// Создаем SIP URI для target
 	targetURI := sip.Uri{
@@ -395,11 +396,11 @@ func (s *ExtendedDialogTestSuite) TestReferScenario() {
 		Host:   "127.0.0.1",
 		Port:   27060,
 	}
-	
+
 	referTx, err := ua2Dialog.Refer(s.ctx, targetURI)
 	s.Require().NoError(err)
 	s.events.Add("UA2", "REFER_SENT", "Transfer initiated")
-	
+
 	// Ждем ответ на REFER
 	resp, err := s.waitForResponse(referTx, 202, 5*time.Second)
 	if err != nil {
@@ -408,16 +409,16 @@ func (s *ExtendedDialogTestSuite) TestReferScenario() {
 	} else {
 		s.Equal(202, resp.StatusCode)
 	}
-	
+
 	// Даем время на обработку
 	time.Sleep(1 * time.Second)
-	
+
 	// Завершаем звонки
 	if ua1Dialog != nil {
-		ua1Dialog.Terminate()
+		_ = ua1Dialog.Terminate()
 	}
 	if ua3Dialog != nil {
-		ua3Dialog.Terminate()
+		_ = ua3Dialog.Terminate()
 	}
 }
 
@@ -425,37 +426,38 @@ func (s *ExtendedDialogTestSuite) TestReferScenario() {
 func (s *ExtendedDialogTestSuite) TestByeHandling() {
 	// Устанавливаем обработчик BYE для UA2
 	byeReceived := make(chan bool, 1)
-	
+
 	// Сначала настраиваем обработчик для входящих вызовов
 	var ua2Dialog dialog.IDialog
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	
+
 	s.ua2.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
+		time.Sleep(500 * time.Millisecond)
 		ua2Dialog = d
 		s.events.Add("UA2", "INVITE_RECEIVED", "Incoming call")
-		
+
 		// Устанавливаем обработчик BYE сразу
 		d.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-		s.events.Add("UA2", "BYE_RECEIVED", "Got BYE from UA1")
-		
-		// Отвечаем 200 OK
-		err := tx.Accept()
-		s.Require().NoError(err)
-		s.events.Add("UA2", "BYE_ACCEPTED", "Sent 200 OK")
-		
-		byeReceived <- true
+			s.events.Add("UA2", "BYE_RECEIVED", "Got BYE from UA1")
+
+			// Отвечаем 200 OK
+			err := tx.Accept()
+			s.Require().NoError(err)
+			s.events.Add("UA2", "BYE_ACCEPTED", "Sent 200 OK")
+
+			byeReceived <- true
 		})
-		
+
 		// Отправляем 180 Ringing
 		err := tx.Provisional(180, "Ringing")
 		s.Require().NoError(err)
-		
+
 		// Принимаем вызов
 		sdp := s.getTestSDP(26000)
 		err = tx.Accept(dialog.ResponseWithSDP(sdp))
 		s.Require().NoError(err)
-		
+
 		// Ждем ACK
 		go func() {
 			err := tx.WaitAck()
@@ -463,19 +465,19 @@ func (s *ExtendedDialogTestSuite) TestByeHandling() {
 			wg.Done()
 		}()
 	})
-	
+
 	// UA1 инициирует звонок
 	d1, err := s.ua1.NewDialog(s.ctx)
 	s.Require().NoError(err)
-	
+
 	sdp := s.getTestSDP(25000)
 	tx, err := d1.Start(s.ctx, "sip:user2@127.0.0.1:26060", dialog.WithSDP(sdp))
 	s.Require().NoError(err)
-	
+
 	// Ждем ответы
 	responseCount := 0
 	timeout := time.After(5 * time.Second)
-	
+
 	for responseCount < 2 {
 		select {
 		case resp := <-tx.Responses():
@@ -489,15 +491,15 @@ func (s *ExtendedDialogTestSuite) TestByeHandling() {
 			return
 		}
 	}
-	
+
 	// Ждем установления соединения
 	wg.Wait()
-	
+
 	// UA1 завершает звонок
 	err = d1.Terminate()
 	s.NoError(err)
 	s.events.Add("UA1", "BYE_SENT", "Terminating call")
-	
+
 	// Ждем обработки BYE
 	select {
 	case <-byeReceived:
@@ -505,11 +507,11 @@ func (s *ExtendedDialogTestSuite) TestByeHandling() {
 	case <-time.After(2 * time.Second):
 		s.Fail("Timeout waiting for BYE")
 	}
-	
+
 	// Проверяем события
 	s.True(s.events.Has("UA1", "BYE_SENT"))
 	s.True(s.events.Has("UA2", "BYE_RECEIVED"))
-	
+
 	// Проверяем, что диалог существовал
 	s.NotNil(ua2Dialog)
 }
@@ -521,35 +523,35 @@ func (s *ExtendedDialogTestSuite) TestConcurrentCalls() {
 		ua1Dialog dialog.IDialog
 		ua2Dialog dialog.IDialog
 	}
-	
+
 	calls := make([]callPair, numCalls)
 	var wg sync.WaitGroup
-	
+
 	for i := 0; i < numCalls; i++ {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			
+
 			// Небольшая задержка для распределения нагрузки
 			time.Sleep(time.Duration(index*100) * time.Millisecond)
-			
+
 			// Создаем звонок
 			ua1Dialog, ua2Dialog := s.createBasicCall()
 			calls[index] = callPair{ua1Dialog, ua2Dialog}
-			
+
 			s.T().Logf("Call %d established", index)
 		}(i)
 	}
-	
+
 	// Ждем установления всех звонков
 	wg.Wait()
-	
+
 	// Проверяем, что все звонки установлены
 	for i, call := range calls {
 		if call.ua1Dialog != nil && call.ua2Dialog != nil {
 			s.Equal(dialog.InCall, call.ua1Dialog.State(), "Call %d UA1 should be InCall", i)
 			s.Equal(dialog.InCall, call.ua2Dialog.State(), "Call %d UA2 should be InCall", i)
-			
+
 			// Проверяем уникальность Call-ID
 			for j := i + 1; j < numCalls; j++ {
 				if calls[j].ua1Dialog != nil {
@@ -561,7 +563,7 @@ func (s *ExtendedDialogTestSuite) TestConcurrentCalls() {
 			}
 		}
 	}
-	
+
 	// Завершаем все звонки
 	for i, call := range calls {
 		if call.ua1Dialog != nil {
@@ -576,11 +578,11 @@ func (s *ExtendedDialogTestSuite) TestConcurrentCalls() {
 func (s *ExtendedDialogTestSuite) TestStateChangeCallback() {
 	stateChanges := make([]dialog.DialogState, 0)
 	mu := sync.Mutex{}
-	
+
 	// Создаем диалог
 	d1, err := s.ua1.NewDialog(s.ctx)
 	s.Require().NoError(err)
-	
+
 	// Устанавливаем обработчик изменения состояния
 	d1.OnStateChange(func(state dialog.DialogState) {
 		mu.Lock()
@@ -588,38 +590,40 @@ func (s *ExtendedDialogTestSuite) TestStateChangeCallback() {
 		mu.Unlock()
 		s.events.Add("UA1", "STATE_CHANGE", state.String())
 	})
-	
+
 	// Начальное состояние
 	s.Equal(dialog.IDLE, d1.State())
-	
+
 	// Обработчик для UA2
 	s.ua2.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
 		// Отправляем provisional
-		tx.Provisional(180, "Ringing")
+		_ = tx.Provisional(180, "Ringing")
 		time.Sleep(200 * time.Millisecond)
-		
+
 		// Принимаем
 		sdp := s.getTestSDP(26000)
-		tx.Accept(dialog.ResponseWithSDP(sdp))
-		
-		go tx.WaitAck()
+		_ = tx.Accept(dialog.ResponseWithSDP(sdp))
+
+		go func() {
+			_ = tx.WaitAck()
+		}()
 	})
-	
+
 	// Инициируем звонок
 	sdp := s.getTestSDP(25000)
 	_, err = d1.Start(s.ctx, "sip:user2@127.0.0.1:26060", dialog.WithSDP(sdp))
 	s.Require().NoError(err)
-	
+
 	// Даем время на обработку
 	time.Sleep(1 * time.Second)
-	
+
 	// Проверяем, что были изменения состояния
 	mu.Lock()
 	s.NotEmpty(stateChanges, "Should have state changes")
 	mu.Unlock()
-	
+
 	// Завершаем
-	d1.Terminate()
+	_ = d1.Terminate()
 }
 
 func TestExtendedDialogSuite(t *testing.T) {

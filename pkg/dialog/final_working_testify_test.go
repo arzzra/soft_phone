@@ -139,8 +139,12 @@ func TestSimpleCall(t *testing.T) {
 	require.NoError(t, err)
 
 	// Запускаем транспорты
-	go ua1.ListenTransports(ctx)
-	go ua2.ListenTransports(ctx)
+	go func() {
+		_ = ua1.ListenTransports(ctx)
+	}()
+	go func() {
+		_ = ua2.ListenTransports(ctx)
+	}()
 	time.Sleep(200 * time.Millisecond)
 
 	// Настраиваем обработчик для UA2
@@ -155,7 +159,7 @@ func TestSimpleCall(t *testing.T) {
 		
 		// Ждем ACK
 		go func() {
-			tx.WaitAck()
+			_ = tx.WaitAck()
 			callReceived <- true
 		}()
 	})
@@ -215,11 +219,11 @@ func TestErrorScenarios(t *testing.T) {
 	t.Log("ReInvite correctly failed on IDLE dialog")
 
 	// Тест 2: Terminate на неустановленном диалоге (не должно паниковать)
-	err = d.Terminate()
+	_ = d.Terminate()
 	t.Log("Terminate on IDLE dialog completed without panic")
 
 	// Тест 3: Close диалога
-	err = d.Close()
+	_ = d.Close()
 	t.Log("Dialog closed successfully")
 }
 
@@ -240,8 +244,12 @@ func TestReInviteOnEstablishedCall(t *testing.T) {
 		TestMode:         true,
 	})
 
-	go ua1.ListenTransports(ctx)
-	go ua2.ListenTransports(ctx)
+	go func() {
+		_ = ua1.ListenTransports(ctx)
+	}()
+	go func() {
+		_ = ua2.ListenTransports(ctx)
+	}()
 	time.Sleep(200 * time.Millisecond)
 
 	callReady := make(chan bool, 1)
@@ -249,9 +257,9 @@ func TestReInviteOnEstablishedCall(t *testing.T) {
 
 	// Обработчик для UA2
 	ua2.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
-		tx.Accept()
+		_ = tx.Accept()
 		go func() {
-			tx.WaitAck()
+			_ = tx.WaitAck()
 			callReady <- true
 		}()
 	})
@@ -299,21 +307,6 @@ func TestReInviteOnEstablishedCall(t *testing.T) {
 	}
 
 	// Завершаем
-	d1.Terminate()
+	_ = d1.Terminate()
 }
 
-// generateSDP генерирует простой SDP для тестов
-func generateSDP(port int) string {
-	return fmt.Sprintf(`v=0
-o=- %d %d IN IP4 127.0.0.1
-s=Test Session
-c=IN IP4 127.0.0.1
-t=0 0
-m=audio %d RTP/AVP 0 8 101
-a=rtpmap:0 PCMU/8000
-a=rtpmap:8 PCMA/8000
-a=rtpmap:101 telephone-event/8000
-a=fmtp:101 0-15
-a=sendrecv
-`, time.Now().Unix(), time.Now().Unix(), port)
-}

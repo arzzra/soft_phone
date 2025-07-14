@@ -39,8 +39,8 @@ func (sa *SIPAssertions) AssertHasHeader(msg sip.Message, headerName string) {
 	case *sip.Request:
 		headers := m.Headers()
 		found := false
-		for name := range headers {
-			if string(name) == headerName {
+		for _, header := range headers {
+			if header.Name() == headerName {
 				found = true
 				break
 			}
@@ -49,8 +49,8 @@ func (sa *SIPAssertions) AssertHasHeader(msg sip.Message, headerName string) {
 	case *sip.Response:
 		headers := m.Headers()
 		found := false
-		for name := range headers {
-			if string(name) == headerName {
+		for _, header := range headers {
+			if header.Name() == headerName {
 				found = true
 				break
 			}
@@ -253,7 +253,7 @@ func (ma *MediaAssertions) AssertMediaPorts(sdp string, minPort, maxPort int) {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				var port int
-				fmt.Sscanf(parts[1], "%d", &port)
+				_, _ = fmt.Sscanf(parts[1], "%d", &port)
 				assert.GreaterOrEqual(ma.t, port, minPort,
 					"Media port should be >= %d", minPort)
 				assert.LessOrEqual(ma.t, port, maxPort,

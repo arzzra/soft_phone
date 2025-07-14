@@ -76,7 +76,7 @@ func (t *TX) Provisional(code int, reason string, opts ...ResponseOpt) error {
 	}
 
 	// Создаем предварительный ответ
-	resp := sip.NewResponseFromRequest(t.req, code, reason, nil)
+	resp := newRespFromReq(t.Request(), code, reason, nil, t.dialog.localTag)
 
 	// Применяем опциональные модификаторы ответа
 	for _, opt := range opts {
@@ -224,7 +224,8 @@ func newTX(req *sip.Request, tx sip.Transaction, di *Dialog) *TX {
 	}
 
 	mTx.ackChan = make(chan *sip.Request)
-	mTx.respChan = make(chan *sip.Response)
+	// попробуем буферизированный канал на 1
+	mTx.respChan = make(chan *sip.Response, 1)
 
 	return mTx
 }
@@ -263,6 +264,7 @@ func (t *TX) processingResponse(resp *sip.Response) {
 			}
 			_ = t.dialog.sendAckWithoutTX()
 		}
+		//todo добавить логики при 300-600 ответах
 	case resp.StatusCode >= 300 && resp.StatusCode <= 399:
 		// Перенаправления (3xx)
 		slog.Debug("received redirect response", "status", resp.StatusCode)
@@ -312,9 +314,9 @@ func (t *TX) loopResponse() {
 			close(t.respChan)
 			return
 		case resp := <-tx.Responses():
+			slog.Debug("Received response", "status", resp.StatusCode)
 			t.processingResponse(resp)
 			t.toRespChan(resp)
-
 		}
 	}
 }

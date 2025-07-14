@@ -182,65 +182,16 @@ func (u *UACUAS) handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 				slog.String("CallID", callID.String()))
 		}
 	} else {
-		sess, is := u.dialogs.GetWithTX(GetBranchID(req))
-		if is {
-			ltx := newTX(req, tx, sess)
-			if ltx == nil {
-				slog.Error("Ошибка создания транзакции для CANCEL (поиск по branch)",
-					slog.String("CallID", callID.String()),
-					slog.String("BranchID", GetBranchID(req)))
-				return
-			}
-			// Изменяем состояние диалога на Terminating
-			err := sess.setState(Terminating, ltx)
-			if err != nil {
-				slog.Error("Ошибка изменения состояния диалога при CANCEL (поиск по branch)",
-					slog.Any("error", err),
-					slog.String("CallID", callID.String()),
-					slog.String("CurrentState", sess.GetCurrentState().String()))
-			}
 
-			// Отправляем успешный ответ на CANCEL
-			resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
-			err = tx.Respond(resp)
-			if err != nil {
-				slog.Error("Ошибка отправки 200 OK на CANCEL (поиск по branch)",
-					slog.Any("error", err),
-					slog.String("CallID", callID.String()))
-			}
-
-			// Отправляем 487 Request Terminated на оригинальный INVITE
-			if inviteTx := sess.getFirstTX(); inviteTx != nil && inviteTx.IsServer() {
-				terminatedResp := sip.NewResponseFromRequest(inviteTx.Request(), sip.StatusRequestTerminated, "Request Terminated", nil)
-				if serverTx := inviteTx.ServerTX(); serverTx != nil {
-					err = serverTx.Respond(terminatedResp)
-					if err != nil {
-						slog.Error("Ошибка отправки 487 на INVITE после CANCEL (поиск по branch)",
-							slog.Any("error", err),
-							slog.String("CallID", callID.String()))
-					}
-				}
-			}
-
-			// Изменяем состояние на Ended
-			err = sess.setState(Ended, ltx)
-			if err != nil {
-				slog.Error("Ошибка изменения состояния диалога на Ended после CANCEL (поиск по branch)",
-					slog.Any("error", err),
-					slog.String("CallID", callID.String()))
-			}
-		} else {
-			// CANCEL для несуществующей транзакции
-			resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Транзакция не найдена", nil)
-			err := tx.Respond(resp)
-			if err != nil {
-				slog.Error("Ошибка отправки 481 на CANCEL для несуществующей транзакции",
-					slog.Any("error", err),
-					slog.String("CallID", callID.String()))
-			}
+		// CANCEL для несуществующей транзакции
+		resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Транзакция не найдена", nil)
+		err := tx.Respond(resp)
+		if err != nil {
+			slog.Error("Ошибка отправки 481 на CANCEL для несуществующей транзакции",
+				slog.Any("error", err),
+				slog.String("CallID", callID.String()))
 		}
 	}
-
 }
 
 // handleBye обрабатывает входящие BYE запросы
@@ -329,12 +280,9 @@ func (u *UACUAS) handleACK(req *sip.Request, tx sip.ServerTransaction) {
 		tagTo := GetToTag(req)
 		d, ok := u.dialogs.Get(*callID, tagTo)
 		if ok {
-
-			// сам допиши
 			fTx := d.getFirstTX()
 			fTx.writeAck(req)
 
-			// Пока просто логируем получение ACK
 			slog.Debug("ACK получен для существующего диалога",
 				slog.String("CallID", callID.String()),
 				slog.String("ToTag", tagTo))

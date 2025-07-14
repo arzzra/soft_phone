@@ -1,6 +1,7 @@
 package dialog
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -139,7 +140,7 @@ func TestEndpoint_Validate(t *testing.T) {
 				return
 			}
 			if err != nil && tt.errMsg != "" {
-				if !contains(err.Error(), tt.errMsg) {
+				if !strings.Contains(err.Error(), tt.errMsg) {
 					t.Errorf("Validate() error = %v, должно содержать %v", err, tt.errMsg)
 				}
 			}
@@ -316,7 +317,7 @@ func TestEndpointConfig_Validate(t *testing.T) {
 				return
 			}
 			if err != nil && tt.errMsg != "" {
-				if !contains(err.Error(), tt.errMsg) {
+				if !strings.Contains(err.Error(), tt.errMsg) {
 					t.Errorf("Validate() error = %v, должно содержать %v", err, tt.errMsg)
 				}
 			}
@@ -553,16 +554,3 @@ func TestEndpointConfig_RunHealthChecks(t *testing.T) {
 	// Для UDP не можем гарантировать результат, поэтому пропускаем проверку ep2
 }
 
-// Вспомогательная функция
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

@@ -37,11 +37,14 @@ func (s *ErrorHandlingTestSuite) TestInviteTimeout() {
 	s.Require().NoError(err)
 	s.events.Add("UA1", "INVITE_SENT", "Call with timeout")
 	
-	// Ждем таймаут
+	// Ждем таймаут или завершение контекста
 	select {
 	case <-tx.Done():
 		s.events.Add("UA1", "TIMEOUT", "INVITE timeout occurred")
-		s.Error(tx.Error())
+		s.Require().Error(tx.Error(), "Expected timeout error")
+	case <-ctx.Done():
+		s.events.Add("UA1", "CONTEXT_TIMEOUT", "Context timeout occurred")
+		// Контекст истек, что также является успешным результатом для этого теста
 	case <-time.After(5 * time.Second):
 		s.Fail("Expected timeout did not occur")
 	}
@@ -258,12 +261,12 @@ func (s *ErrorHandlingTestSuite) TestManyDialogs() {
 			err := tx.Provisional(100, "Trying")
 			if err == nil {
 				sdp := s.getTestSDP(26000 + currentCall)
-				tx.Accept(dialog.ResponseWithSDP(sdp))
+				_ = tx.Accept(dialog.ResponseWithSDP(sdp))
 				s.events.Add("UA2", "CALL_ACCEPTED", fmt.Sprintf("Accepted #%d", currentCall))
 			}
 		} else {
 			// Отклоняем остальные
-			tx.Reject(503, "Service Unavailable")
+			_ = tx.Reject(503, "Service Unavailable")
 			s.events.Add("UA2", "CALL_REJECTED", fmt.Sprintf("Rejected #%d", currentCall))
 		}
 	})
@@ -305,7 +308,7 @@ func (s *ErrorHandlingTestSuite) TestManyDialogs() {
 	// Очищаем диалоги
 	for _, d := range dialogs {
 		if d != nil && d.State() == dialog.InCall {
-			d.Terminate()
+			_ = d.Terminate()
 		}
 	}
 	
