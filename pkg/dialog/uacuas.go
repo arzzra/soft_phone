@@ -120,10 +120,17 @@ func NewUACUAS(cfg Config) (*UACUAS, error) {
 	// доп настройки для тестов
 	if uu.config.TestMode {
 		sip.SIPDebug = true
+		// В тестовом режиме используем предсказуемые, но уникальные значения
+		testCounter := 0
 		newTag = func() string {
-			return "testMode"
+			testCounter++
+			return fmt.Sprintf("testMode%d", testCounter)
 		}
-		newCallId = func() string { return "test12345678test" }
+		testCallIdCounter := 0
+		newCallId = func() string {
+			testCallIdCounter++
+			return fmt.Sprintf("test%d%d", time.Now().UnixNano(), testCallIdCounter)
+		}
 
 		uu.initSessionsMap(func() string {
 			return "qwerty"

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/arzzra/soft_phone/pkg/dialog"
-	"github.com/emiago/sipgo/sip"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
