@@ -153,18 +153,34 @@ if err != nil {
 
 ### Обработка входящих BYE
 
+BYE запросы обрабатываются автоматически через изменение состояния диалога. Для отслеживания завершения вызова используйте обработчики состояния:
+
 ```go
-dialog.OnBye(func(d IDialog, tx IServerTX) {
-    log.Println("Received BYE request")
-    
-    // Отправить 200 OK
-    err := tx.Accept()
-    if err != nil {
-        log.Printf("Failed to respond to BYE: %v", err)
+// Отслеживание изменения состояния
+dialog.OnStateChange(func(state DialogState) {
+    switch state {
+    case Terminating:
+        log.Println("Call is terminating (BYE received or sent)")
+    case Ended:
+        log.Println("Call has ended")
+        // Освободить ресурсы
     }
-    
+})
+
+// Или используйте обработчик завершения
+dialog.OnTerminate(func() {
+    log.Println("Dialog terminated")
     // Освободить ресурсы
-    // ...
+})
+
+// Для обработки входящих запросов (включая BYE) на низком уровне
+dialog.OnRequestHandler(func(tx IServerTX) {
+    req := tx.Request()
+    if req.Method == sip.BYE {
+        log.Println("Received BYE request")
+        // BYE автоматически обрабатывается в handleBye
+        // 200 OK отправляется автоматически
+    }
 })
 ```
 

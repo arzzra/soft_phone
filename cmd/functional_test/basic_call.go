@@ -132,14 +132,24 @@ func scenario1_SuccessfulCall(ua1, ua2 *dialog.UACUAS) error {
 		return fmt.Errorf("failed to create dialog: %w", err)
 	}
 
-	// Устанавливаем обработчик BYE для UA1
-	d1.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-		events.add("UA1: Received BYE")
-		err := tx.Accept()
-		if err != nil {
-			log.Printf("UA1: Failed to respond to BYE: %v", err)
+	// Устанавливаем обработчик изменения состояния для UA1
+	d1.OnStateChange(func(state dialog.DialogState) {
+		if state == dialog.Terminating {
+			events.add("UA1: State changed to Terminating (BYE received)")
 		}
-		events.add("UA1: Sent 200 OK for BYE")
+	})
+	
+	// Устанавливаем обработчик запросов для обработки BYE
+	d1.OnRequestHandler(func(tx dialog.IServerTX) {
+		req := tx.Request()
+		if req.Method == sip.BYE {
+			events.add("UA1: Received BYE")
+			err := tx.Accept()
+			if err != nil {
+				log.Printf("UA1: Failed to respond to BYE: %v", err)
+			}
+			events.add("UA1: Sent 200 OK for BYE")
+		}
 	})
 
 	// Начинаем вызов с SDP
@@ -217,9 +227,10 @@ func scenario1_SuccessfulCall(ua1, ua2 *dialog.UACUAS) error {
 		"UA1: Received 200 OK",
 		"UA2: Received ACK",
 		"UA2: Sent BYE",
+		"UA1: State changed to Terminating (BYE received)",
 		"UA1: Received BYE",
 		"UA1: Sent 200 OK for BYE",
-		// "UA2: Call terminated", // Нет метода OnTerminate
+		"UA2: Call terminated",
 	}
 
 	for _, event := range expectedEvents {
