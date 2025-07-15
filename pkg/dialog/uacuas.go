@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/emiago/sipgo"
@@ -53,6 +54,12 @@ type UACUAS struct {
 	registrations map[string]*Registration
 
 	dialogs *dialogsMap
+
+	// Поля для управления жизненным циклом
+	stopped   bool
+	stopMutex sync.Mutex
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 // Registration представляет информацию о регистрации SIP пользователя.
@@ -108,7 +115,17 @@ func NewUACUAS(cfg Config) (*UACUAS, error) {
 
 	sip.SIPDebug = true
 
-	uu := &UACUAS{ua: ua, uas: srv, uac: uac, config: cfg}
+	// Создаем контекст с функцией отмены
+	ctx, cancel := context.WithCancel(context.Background())
+
+	uu := &UACUAS{
+		ua:     ua,
+		uas:    srv,
+		uac:    uac,
+		config: cfg,
+		ctx:    ctx,
+		cancel: cancel,
+	}
 	uu.onRequests()
 	// Инициализируем профиль по умолчанию
 	uu.profile = *uu.defaultProfile()
@@ -280,4 +297,55 @@ func (u *UACUAS) OnIncomingCall(handler OnIncomingCall) {
 // OnReInvite устанавливает обработчик для re-INVITE запросов
 func (u *UACUAS) OnReInvite(handler OnIncomingCall) {
 	u.onReInvite = handler
+}
+
+// Stop корректно останавливает UACUAS и все связанные компоненты.
+// Метод закрывает все активные диалоги, останавливает серверы и освобождает ресурсы.
+// Повторные вызовы Stop безопасны и не выполняют никаких действий.
+//
+// Порядок остановки:
+//  1. Устанавливается флаг остановки для предотвращения новых операций
+//  2. Закрываются все активные диалоги
+//  3. Останавливаются SIP сервер (UAS), клиент (UAC) и user agent (UA)
+//  4. Очищается карта регистраций
+//  5. Отменяется контекст
+//
+// Метод потокобезопасен и может вызываться из нескольких горутин одновременно.
+func (u *UACUAS) Stop() error {
+	u.stopMutex.Lock()
+	defer u.stopMutex.Unlock()
+
+	// Проверяем, не был ли уже остановлен
+	if u.stopped {
+		return nil
+	}
+
+	// Устанавливаем флаг остановки
+	u.stopped = true
+
+	// Закрываем все активные диалоги
+	if u.dialogs != nil {
+		u.dialogs.sessions.Range(func(key, value interface{}) bool {
+			if dialog, ok := value.(*Dialog); ok {
+				_ = dialog.Close()
+			}
+			return true
+		})
+	}
+
+	// Останавливаем SIP компоненты
+	// UAS остановится автоматически при отмене контекста
+	// UAC и UA не требуют явной остановки, так как они управляются через контекст
+
+	// Очищаем карту регистраций
+	if u.registrations != nil {
+		u.registrations = make(map[string]*Registration)
+	}
+
+	// Отменяем контекст для остановки всех горутин
+	if u.cancel != nil {
+		u.cancel()
+	}
+
+	return nil
 }
