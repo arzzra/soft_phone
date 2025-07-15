@@ -180,7 +180,6 @@ type Dialog struct {
 	stateChangeHandler func(DialogState)
 	bodyHandler        func(*Body)
 	requestHandler     func(IServerTX)
-	byeHandler         func(IDialog, IServerTX)
 	terminateHandler   func()
 	handlersMu         sync.Mutex
 
@@ -624,14 +623,6 @@ func (s *Dialog) OnRequestHandler(handler func(IServerTX)) {
 	s.requestHandler = handler
 }
 
-// OnBye устанавливает обработчик для входящих BYE запросов.
-// Обработчик получает диалог и серверную транзакцию для ответа.
-// Метод потокобезопасен.
-func (s *Dialog) OnBye(handler func(IDialog, IServerTX)) {
-	s.handlersMu.Lock()
-	defer s.handlersMu.Unlock()
-	s.byeHandler = handler
-}
 
 // OnTerminate устанавливает обработчик для события завершения диалога.
 // Обработчик вызывается когда диалог переходит в состояние Ended.

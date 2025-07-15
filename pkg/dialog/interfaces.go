@@ -75,8 +75,6 @@ type IDialog interface {
 	OnStateChange(handler func(DialogState))
 	OnBody(handler func(body *Body))
 	OnRequestHandler(handler func(IServerTX))
-	// OnBye устанавливает обработчик для входящих BYE запросов
-	OnBye(handler func(IDialog, IServerTX))
 	// OnTerminate устанавливает обработчик для события завершения диалога
 	OnTerminate(handler func())
 }

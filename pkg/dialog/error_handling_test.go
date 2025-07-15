@@ -185,22 +185,24 @@ func (s *ErrorHandlingTestSuite) TestSimultaneousBye() {
 	s.Equal(dialog.InCall, ua1Dialog.State())
 	s.Equal(dialog.InCall, ua2Dialog.State())
 	
-	// Обработчики BYE
+	// Обработчики изменения состояния
 	byeWg := sync.WaitGroup{}
 	byeWg.Add(2)
 	
-	ua1Dialog.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-		s.events.Add("UA1", "BYE_RECEIVED", "Got BYE from UA2")
-		err := tx.Accept()
-		s.Require().NoError(err)
-		byeWg.Done()
+	ua1Dialog.OnStateChange(func(state dialog.DialogState) {
+		if state == dialog.Terminating {
+			s.events.Add("UA1", "BYE_RECEIVED", "Got BYE from UA2")
+			// Ответ 200 OK на BYE отправляется автоматически
+			byeWg.Done()
+		}
 	})
 	
-	ua2Dialog.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-		s.events.Add("UA2", "BYE_RECEIVED", "Got BYE from UA1")
-		err := tx.Accept()
-		s.Require().NoError(err)
-		byeWg.Done()
+	ua2Dialog.OnStateChange(func(state dialog.DialogState) {
+		if state == dialog.Terminating {
+			s.events.Add("UA2", "BYE_RECEIVED", "Got BYE from UA1")
+			// Ответ 200 OK на BYE отправляется автоматически
+			byeWg.Done()
+		}
 	})
 	
 	// Одновременно отправляем BYE

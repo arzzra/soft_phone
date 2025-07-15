@@ -437,16 +437,14 @@ func (s *ExtendedDialogTestSuite) TestByeHandling() {
 		ua2Dialog = d
 		s.events.Add("UA2", "INVITE_RECEIVED", "Incoming call")
 
-		// Устанавливаем обработчик BYE сразу
-		d.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-			s.events.Add("UA2", "BYE_RECEIVED", "Got BYE from UA1")
-
-			// Отвечаем 200 OK
-			err := tx.Accept()
-			s.Require().NoError(err)
-			s.events.Add("UA2", "BYE_ACCEPTED", "Sent 200 OK")
-
-			byeReceived <- true
+		// Устанавливаем обработчик изменения состояния
+		d.OnStateChange(func(state dialog.DialogState) {
+			if state == dialog.Terminating {
+				s.events.Add("UA2", "BYE_RECEIVED", "Got BYE from UA1")
+				// Ответ 200 OK на BYE отправляется автоматически
+				s.events.Add("UA2", "BYE_ACCEPTED", "Sent 200 OK")
+				byeReceived <- true
+			}
 		})
 
 		// Отправляем 180 Ringing

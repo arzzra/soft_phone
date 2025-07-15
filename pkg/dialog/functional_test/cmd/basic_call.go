@@ -132,14 +132,13 @@ func scenario1_SuccessfulCall(ua1, ua2 *dialog.UACUAS) error {
         return fmt.Errorf("failed to create dialog: %w", err)
     }
 
-    // Устанавливаем обработчик BYE для UA1
-    d1.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-        events.add("UA1: Received BYE")
-        err := tx.Accept()
-        if err != nil {
-            log.Printf("UA1: Failed to respond to BYE: %v", err)
+    // Устанавливаем обработчик изменения состояния для UA1
+    d1.OnStateChange(func(state dialog.DialogState) {
+        if state == dialog.Terminating {
+            events.add("UA1: Received BYE")
+            // Ответ 200 OK на BYE отправляется автоматически
+            events.add("UA1: Sent 200 OK for BYE")
         }
-        events.add("UA1: Sent 200 OK for BYE")
     })
 
     // Начинаем вызов с SDP

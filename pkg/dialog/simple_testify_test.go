@@ -295,15 +295,13 @@ func TestCallbacks(t *testing.T) {
 	
 	// OnStateChange
 	stateChanged := false
+	byeReceived := false
 	d.OnStateChange(func(state dialog.DialogState) {
 		stateChanged = true
 		assert.NotNil(t, state)
-	})
-	
-	// OnBye
-	byeReceived := false
-	d.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-		byeReceived = true
+		if state == dialog.Terminating {
+			byeReceived = true
+		}
 	})
 	
 	// OnTerminate

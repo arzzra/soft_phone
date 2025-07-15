@@ -190,12 +190,13 @@ func TestSuccessfulCall(t *testing.T) {
 	d1, err := ua1.NewDialog(ctx)
 	require.NoError(t, err, "Failed to create dialog")
 
-	// Устанавливаем обработчик BYE для UA1
-	d1.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-		events.add("UA1: Received BYE")
-		err := tx.Accept()
-		require.NoError(t, err, "UA1: Failed to respond to BYE")
-		events.add("UA1: Sent 200 OK for BYE")
+	// Устанавливаем обработчик изменения состояния для UA1
+	d1.OnStateChange(func(state dialog.DialogState) {
+		if state == dialog.Terminating {
+			events.add("UA1: Received BYE")
+			// Ответ 200 OK на BYE отправляется автоматически
+			events.add("UA1: Sent 200 OK for BYE")
+		}
 	})
 
 	// Начинаем вызов с SDP

@@ -272,20 +272,15 @@ func ExampleHandleIncomingReInvite() {
 			}
 		})
 
-		// Устанавливаем обработчик для BYE
-		d.OnBye(func(dialog dialog.IDialog, tx dialog.IServerTX) {
-			fmt.Println("Получен BYE запрос, вызов завершается")
-
-			// Отправляем 200 OK на BYE
-			err := tx.Accept()
-			if err != nil {
-				log.Printf("Failed to respond to BYE: %v", err)
+		// Обрабатываем изменения состояния диалога
+		d.OnStateChange(func(state dialog.DialogState) {
+			if state == dialog.Terminating {
+				fmt.Println("Получен BYE запрос, вызов завершается")
+				// Выполняем очистку ресурсов
+				// ... освобождение медиа ресурсов ...
+			} else if state == dialog.Ended {
+				fmt.Println("Вызов завершен")
 			}
-
-			// Выполняем очистку ресурсов
-			// ... освобождение медиа ресурсов ...
-
-			fmt.Println("Вызов завершен")
 		})
 	})
 

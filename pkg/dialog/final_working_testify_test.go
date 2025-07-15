@@ -64,14 +64,13 @@ func TestDialogCallbacks(t *testing.T) {
 
 	// Устанавливаем callbacks
 	stateChanged := false
+	byeCalled := false
 	d.OnStateChange(func(state dialog.DialogState) {
 		stateChanged = true
 		t.Logf("State changed to: %s", state)
-	})
-
-	byeCalled := false
-	d.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-		byeCalled = true
+		if state == dialog.Terminating {
+			byeCalled = true
+		}
 	})
 
 	terminateCalled := false

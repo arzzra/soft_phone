@@ -229,12 +229,13 @@ func TestByeCallback(t *testing.T) {
 
 		ua2Dialog = d
 
-		// Устанавливаем обработчик BYE
-		d.OnBye(func(d dialog.IDialog, tx dialog.IServerTX) {
-			t.Log("UA2: BYE received")
-			err := tx.Accept()
-			assert.NoError(t, err)
-			byeReceived <- true
+		// Устанавливаем обработчик изменения состояния
+		d.OnStateChange(func(state dialog.DialogState) {
+			if state == dialog.Terminating {
+				t.Log("UA2: BYE received")
+				// Ответ 200 OK на BYE отправляется автоматически
+				byeReceived <- true
+			}
 		})
 
 		// Принимаем звонок

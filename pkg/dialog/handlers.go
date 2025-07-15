@@ -236,14 +236,11 @@ func (u *UACUAS) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 				slog.String("CurrentState", sess.GetCurrentState().String()))
 		}
 
-		// Вызываем обработчик BYE если он установлен
-		sess.handlersMu.Lock()
-		byeHandler := sess.byeHandler
-		sess.handlersMu.Unlock()
-
-		if byeHandler != nil {
-			byeHandler(sess, ltx)
-		}
+		// BYE обрабатывается через stateChangeHandler
+		// при переходе в состояние Terminating
+		slog.Debug("BYE обрабатывается через изменение состояния",
+			slog.String("CallID", callID.String()),
+			slog.String("NewState", "Terminating"))
 	}
 
 	// Отправляем успешный ответ
