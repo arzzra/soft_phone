@@ -225,7 +225,6 @@ func newTX(req *sip.Request, tx sip.Transaction, di *Dialog) *TX {
 
 	mTx.ackChan = make(chan *sip.Request)
 	// попробуем буферизированный канал на 1
-	mTx.respChan = make(chan *sip.Response, 1)
 
 	return mTx
 }

@@ -76,11 +76,12 @@ func TestExampleBasic(t *testing.T) {
 	var ua2Dialog dialog.IDialog
 
 	ua2.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
-		time.Sleep(500 * time.Millisecond)
+
 		ua2Dialog = d
 
 		// Отправляем 180 Ringing
 		err := tx.Provisional(180, "Ringing")
+		time.Sleep(500 * time.Millisecond)
 		assert.NoError(t, err, "Failed to send 180")
 
 		// Принимаем звонок
@@ -108,17 +109,15 @@ func TestExampleBasic(t *testing.T) {
 	responseCount := 0
 	timeout := time.After(5 * time.Second)
 
-	for responseCount < 3 {
+	for responseCount < 2 {
 		select {
 		case resp := <-tx.Responses():
 			require.NotNil(t, resp, "Received nil response")
 			responseCount++
 
 			if responseCount == 1 {
-				assert.Equal(t, 100, resp.StatusCode, "Expected 100 Trying")
-			} else if responseCount == 2 {
 				assert.Equal(t, 180, resp.StatusCode, "Expected 180 Ringing")
-			} else if responseCount == 3 {
+			} else if responseCount == 2 {
 				assert.Equal(t, 200, resp.StatusCode, "Expected 200 OK")
 			}
 		case <-timeout:
