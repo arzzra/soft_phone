@@ -397,10 +397,10 @@ func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (
 		_ = s.setState(IDLE, nil)
 		return nil, errors.Wrap(err, "failed to send INVITE")
 	}
-	
+
 	// Сохраняем как первую транзакцию диалога
 	s.setFirstTX(tx)
-	
+
 	slog.Debug("Dialog.Start INVITE sent successfully",
 		slog.String("branchID", GetBranchID(tx.Request())))
 
@@ -616,11 +616,11 @@ func (s *Dialog) Close() error {
 func (s *Dialog) GetLastTransitionReason() *StateTransitionReason {
 	s.transitionMu.RLock()
 	defer s.transitionMu.RUnlock()
-	
+
 	if len(s.transitionHistory) == 0 {
 		return nil
 	}
-	
+
 	// Возвращаем копию последнего элемента
 	last := s.transitionHistory[len(s.transitionHistory)-1]
 	return &last
@@ -632,7 +632,7 @@ func (s *Dialog) GetLastTransitionReason() *StateTransitionReason {
 func (s *Dialog) GetTransitionHistory() []StateTransitionReason {
 	s.transitionMu.RLock()
 	defer s.transitionMu.RUnlock()
-	
+
 	// Создаем копию истории
 	history := make([]StateTransitionReason, len(s.transitionHistory))
 	copy(history, s.transitionHistory)
@@ -929,7 +929,7 @@ func (s *Dialog) enterCalling(ctx context.Context, e *fsm.Event) {
 // Метод потокобезопасен.
 func (s *Dialog) setStateWithReason(status DialogState, tx *TX, reason StateTransitionReason) error {
 	// Дополняем информацию о переходе
-	reason.FromState = s.GetCurrentState()
+	reason.FromState = s.State()
 	reason.ToState = status
 	reason.Timestamp = time.Now()
 
@@ -959,15 +959,6 @@ func (s *Dialog) setState(status DialogState, tx *TX) error {
 	}
 	return s.setStateWithReason(status, tx, reason)
 }
-
-func (s *Dialog) GetCurrentState() DialogState {
-	return DialogState(s.fsm.Current())
-}
-
-// saveHeaders сохраняет заголовки из запроса (зарезервировано для будущего использования)
-// func (s *Dialog) saveHeaders(req *sip.Request) {
-//
-// }
 
 func (s *Dialog) setFirstTX(tx *TX) {
 	s.firstTX = tx

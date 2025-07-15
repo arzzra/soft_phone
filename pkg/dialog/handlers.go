@@ -55,14 +55,14 @@ func (u *UACUAS) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 					slog.String("ToTag", tagTo))
 
 				// Проверяем состояние диалога - re-INVITE допустим только в состоянии InCall
-				if sessia.GetCurrentState() != InCall {
+				if sessia.State() != InCall {
 					resp := sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Неверное состояние диалога для re-INVITE", nil)
 					err := tx.Respond(resp)
 					if err != nil {
 						slog.Error("Не удалось отправить ответ на re-INVITE в неверном состоянии",
 							slog.Any("error", err),
 							slog.String("CallID", callID.String()),
-							slog.String("State", sessia.GetCurrentState().String()))
+							slog.String("State", sessia.State().String()))
 					}
 					return
 				}
@@ -191,7 +191,7 @@ func (u *UACUAS) handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 			slog.Error("Ошибка изменения состояния диалога при CANCEL",
 				slog.Any("error", err),
 				slog.String("CallID", callID.String()),
-				slog.String("CurrentState", sess.GetCurrentState().String()))
+				slog.String("CurrentState", sess.State().String()))
 		}
 
 		// Отправляем успешный ответ на CANCEL
@@ -285,7 +285,7 @@ func (u *UACUAS) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 			slog.Error("Ошибка изменения состояния диалога при BYE",
 				slog.Any("error", err),
 				slog.String("CallID", callID.String()),
-				slog.String("CurrentState", sess.GetCurrentState().String()))
+				slog.String("CurrentState", sess.State().String()))
 		}
 
 		// BYE обрабатывается через stateChangeHandler

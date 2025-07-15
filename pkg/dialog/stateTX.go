@@ -344,7 +344,7 @@ func (t *TX) processingIncomingResponse(resp *sip.Response) {
 		// Информационные ответы (1xx)
 		// Меняем состояние диалога
 		// тут всегда false, потом удалить
-		if t.dialog.GetCurrentState() == IDLE {
+		if t.dialog.State() == IDLE {
 			reason := StateTransitionReason{
 				Reason:       "Provisional response received",
 				Method:       t.req.Method,
@@ -372,7 +372,7 @@ func (t *TX) processingIncomingResponse(resp *sip.Response) {
 			}
 		}
 
-		if t.dialog.GetCurrentState() == Calling {
+		if t.dialog.State() == Calling {
 			reason := StateTransitionReason{
 				Reason:       "Call answered",
 				Method:       sip.INVITE,
@@ -412,7 +412,7 @@ func (t *TX) processingIncomingResponse(resp *sip.Response) {
 func (t *TX) processErrorResponse(resp *sip.Response) {
 	// Проверяем, является ли это ответом на первичный INVITE
 	if t.dialog.getFirstTX() == t && t.req.Method == sip.INVITE {
-		currentState := t.dialog.GetCurrentState()
+		currentState := t.dialog.State()
 		// Обрабатываем только если диалог в начальных состояниях
 		if currentState == Calling || currentState == IDLE {
 			// Создаем причину перехода в Terminating

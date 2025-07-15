@@ -12,7 +12,7 @@ import "testing"
 // 	panic("implement me")
 // }
 //
-// func (t testDialog) GetCurrentState() DialogState {
+// func (t testDialog) State() DialogState {
 // 	//TODO implement me
 // 	panic("implement me")
 // }

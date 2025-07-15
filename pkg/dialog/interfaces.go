@@ -2,78 +2,143 @@ package dialog
 
 import (
 	"context"
-	"github.com/emiago/sipgo/sip"
+	"net"
 	"time"
+
+	"github.com/emiago/sipgo/sip"
 )
 
 // IUU определяет интерфейс менеджера диалогов.
 // Отвечает за создание новых диалогов и обработку входящих вызовов.
 // Управляет жизненным циклом всех диалогов в системе.
 type IUU interface {
-	NewDialog(ctx context.Context) error
-	// устанавливаем хендлер
+	// NewDialog создает новый SIP диалог для исходящих вызовов.
+	// Диалог создается в состоянии IDLE и готов для инициации вызова.
+	// Параметры:
+	//   - ctx: контекст для управления жизненным циклом диалога
+	//   - opts: дополнительные опции для настройки диалога (профиль, таймауты)
+	// Возвращает созданный диалог или ошибку.
+	NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, error)
+
+	// OnIncomingCall устанавливает обработчик для входящих вызовов.
+	// Обработчик будет вызван при получении INVITE запроса.
 	OnIncomingCall(handler OnIncomingCall)
 
-	Start(ctx context.Context) error
-	Terminate() error
+	// OnReInvite устанавливает обработчик для re-INVITE запросов.
+	// Используется для изменения параметров существующей сессии.
+	OnReInvite(handler OnIncomingCall)
+
+	// ListenTransports запускает прослушивание на всех настроенных транспортах.
+	// Транспорты определяются в конфигурации при создании менеджера.
+	// Поддерживаются: UDP, TCP, WS. TLS и WSS планируются к реализации.
+	// Блокирует выполнение до завершения контекста или ошибки.
+	ListenTransports(ctx context.Context) error
+
+	// ServeUDP обслуживает UDP соединение для SIP сообщений.
+	// Если conn равен nil, создается новое соединение на основе конфигурации.
+	// Используется для тестирования с mock-соединениями.
+	ServeUDP(conn net.PacketConn) error
+
+	// ServeTCP обслуживает TCP соединение для SIP сообщений.
+	// Принимает слушатель TCP для обработки входящих соединений.
+	ServeTCP(listener net.Listener) error
+
+	// Stop корректно останавливает менеджер диалогов.
+	// Закрывает все активные диалоги, останавливает транспорты и освобождает ресурсы.
+	// Повторные вызовы безопасны и не выполняют действий.
+	// Возвращает агрегированную ошибку при проблемах с закрытием диалогов.
+	Stop() error
 }
 
 // IDialog определяет интерфейс для работы с SIP диалогом.
 // Предоставляет методы для управления жизненным циклом диалога,
 // отправки запросов и получения информации о состоянии.
 type IDialog interface {
+	// Идентификация диалога
+	// ID возвращает уникальный идентификатор диалога в формате "callID:localTag:remoteTag"
 	ID() string
-	SetID(newID string) // Обновляет ID диалога (используется менеджером)
+	// SetID обновляет ID диалога (используется менеджером диалогов)
+	SetID(newID string)
+	// State возвращает текущее состояние диалога (IDLE, Calling, Ringing, InCall, Terminating, Ended)
 	State() DialogState
+	// CallID возвращает заголовок Call-ID диалога
 	CallID() sip.CallIDHeader
+	// LocalTag возвращает локальный тег диалога
 	LocalTag() string
+	// RemoteTag возвращает удаленный тег диалога
 	RemoteTag() string
 
-	// Addressing
+	// Адресация
+	// LocalURI возвращает локальный URI (From для UAC, To для UAS)
 	LocalURI() sip.Uri
+	// RemoteURI возвращает удаленный URI (To для UAC, From для UAS)
 	RemoteURI() sip.Uri
-	LocalTarget() sip.Uri  // Contact URI
-	RemoteTarget() sip.Uri // Contact URI
+	// LocalTarget возвращает локальный Contact URI для маршрутизации
+	LocalTarget() sip.Uri
+	// RemoteTarget возвращает удаленный Contact URI для маршрутизации
+	RemoteTarget() sip.Uri
+	// RouteSet возвращает набор Route заголовков для маршрутизации
 	RouteSet() []sip.RouteHeader
 
-	// Sequencing
+	// Последовательность запросов
+	// LocalSeq возвращает локальный порядковый номер CSeq
 	LocalSeq() uint32
+	// RemoteSeq возвращает удаленный порядковый номер CSeq
 	RemoteSeq() uint32
 
-	// Terminate завершает диалог, отправляя BYE запрос
+	// Управление диалогом
+	// Terminate завершает диалог, отправляя BYE запрос (не ждет ответа)
 	Terminate() error
 
-	// Start отправляет инвайт на указанный таргет
+	// Start начинает новый диалог, отправляя INVITE запрос на указанный адрес
 	Start(ctx context.Context, target string, opts ...RequestOpt) (IClientTX, error)
 
 	// ReInvite отправляет re-INVITE запрос для изменения параметров существующего диалога
 	ReInvite(ctx context.Context, opts ...RequestOpt) (IClientTX, error)
 
-	// Bye отправляет BYE запрос для завершения диалога
+	// Bye отправляет BYE запрос для завершения диалога и ожидает ответ
 	Bye(ctx context.Context) error
 
-	// Transfer operations - Операции переадресации
-
-	// Refer отправляет REFER запрос для переадресации вызова
+	// Операции переадресации
+	// Refer отправляет REFER запрос для слепой переадресации вызова
 	Refer(ctx context.Context, target sip.Uri, opts ...RequestOpt) (IClientTX, error)
 
-	// ReferReplace отправляет REFER с заменой существующего диалога
+	// ReferReplace отправляет REFER с заменой существующего диалога (attended transfer)
 	ReferReplace(ctx context.Context, replaceDialog IDialog, opts ...RequestOpt) (IClientTX, error)
 
+	// SendRequest отправляет произвольный SIP запрос в рамках диалога
 	SendRequest(ctx context.Context, opts ...RequestOpt) (IClientTX, error)
 
-	// Context and lifecycle
+	// Контекст и время жизни
+	// Context возвращает контекст диалога
 	Context() context.Context
+	// SetContext устанавливает новый контекст для диалога
 	SetContext(ctx context.Context)
+	// CreatedAt возвращает время создания диалога
 	CreatedAt() time.Time
+	// LastActivity возвращает время последней активности в диалоге
 	LastActivity() time.Time
 
-	// Close закрывает диалог и освобождает все ресурсы. Не отправляет бай
+	// Close закрывает диалог без отправки BYE запроса и освобождает ресурсы
 	Close() error
 
-	// Когда меняется состояние диалога
+	// История переходов состояний
+	// GetLastTransitionReason возвращает последнюю причину перехода состояния диалога.
+	// Возвращает nil если история переходов пуста.
+	// Метод потокобезопасен.
+	GetLastTransitionReason() *StateTransitionReason
+
+	// GetTransitionHistory возвращает полную историю переходов состояний диалога.
+	// Возвращает копию истории для безопасного использования.
+	// Метод потокобезопасен.
+	GetTransitionHistory() []StateTransitionReason
+
+	// Обработчики событий
+	// OnStateChange устанавливает обработчик изменения состояния диалога
 	OnStateChange(handler func(DialogState))
+	// OnBody устанавливает обработчик получения тела SIP сообщения (например, SDP)
 	OnBody(handler func(body *Body))
+	// OnRequestHandler устанавливает обработчик входящих запросов
 	OnRequestHandler(handler func(IServerTX))
 	// OnTerminate устанавливает обработчик для события завершения диалога
 	OnTerminate(handler func())
