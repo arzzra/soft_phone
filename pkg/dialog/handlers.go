@@ -70,6 +70,16 @@ func (u *UACUAS) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 				// Сохраняем re-INVITE транзакцию
 				sessia.setReInviteTX(ltx)
 
+				// Извлекаем тело из re-INVITE запроса
+				if body := extractBody(req); body != nil {
+					// Сохраняем тело от удаленной стороны
+					sessia.SetRemoteSDP(body.ContentType(), body.Content())
+					// Вызываем обработчик тела если он установлен
+					if sessia.bodyHandler != nil {
+						sessia.bodyHandler(body)
+					}
+				}
+
 				// Вызываем колбэк для обработки re-INVITE если он установлен
 				if u.onReInvite != nil {
 					u.onReInvite(sessia, ltx)
@@ -112,6 +122,16 @@ func (u *UACUAS) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 			u.dialogs.Put(*callID, sessionDialog.LocalTag(), GetBranchID(req), sessionDialog)
 			lTX := newTX(req, tx, sessionDialog)
 			sessionDialog.setFirstTX(lTX)
+			// Извлекаем тело из INVITE запроса
+			if body := extractBody(req); body != nil {
+				// Сохраняем тело от удаленной стороны
+				sessionDialog.SetRemoteSDP(body.ContentType(), body.Content())
+				// Вызываем обработчик тела если он установлен
+				if sessionDialog.bodyHandler != nil {
+					sessionDialog.bodyHandler(body)
+				}
+			}
+
 			reason := StateTransitionReason{
 				Reason: "Incoming INVITE received",
 				Method: sip.INVITE,
@@ -319,6 +339,16 @@ func (u *UACUAS) handleACK(req *sip.Request, tx sip.ServerTransaction) {
 			fTx := d.getFirstTX()
 			fTx.writeAck(req)
 
+			// Извлекаем тело из ACK запроса (может содержать SDP для late offer)
+			if body := extractBody(req); body != nil {
+				// Сохраняем тело от удаленной стороны
+				d.SetRemoteSDP(body.ContentType(), body.Content())
+				// Вызываем обработчик тела если он установлен
+				if d.bodyHandler != nil {
+					d.bodyHandler(body)
+				}
+			}
+
 			slog.Debug("ACK получен для существующего диалога",
 				slog.String("CallID", callID.String()),
 				slog.String("ToTag", tagTo))
@@ -340,6 +370,23 @@ func (u *UACUAS) handleUpdate(req *sip.Request, tx sip.ServerTransaction) {
 	slog.Debug("handleUpdate",
 		slog.String("req", req.String()),
 		slog.String("body", string(req.Body())))
+
+	// Пытаемся найти диалог для UPDATE
+	callID := req.CallID()
+	if callID != nil {
+		tagTo := GetToTag(req)
+		if sess, ok := u.dialogs.Get(*callID, tagTo); ok {
+			// Извлекаем тело из UPDATE запроса
+			if body := extractBody(req); body != nil {
+				// Сохраняем тело от удаленной стороны
+				sess.SetRemoteSDP(body.ContentType(), body.Content())
+				// Вызываем обработчик тела если он установлен
+				if sess.bodyHandler != nil {
+					sess.bodyHandler(body)
+				}
+			}
+		}
+	}
 
 	response := sip.NewResponseFromRequest(req, sip.StatusOK, "", nil)
 	err := tx.Respond(response)
@@ -370,6 +417,21 @@ func (u *UACUAS) handleNotify(req *sip.Request, tx sip.ServerTransaction) {
 	slog.Debug("handleNotify",
 		slog.String("req", req.String()),
 		slog.String("body", string(req.Body())))
+
+	// Пытаемся найти диалог для NOTIFY
+	callID := req.CallID()
+	if callID != nil {
+		tagTo := GetToTag(req)
+		if sess, ok := u.dialogs.Get(*callID, tagTo); ok {
+			// Извлекаем тело из NOTIFY запроса
+			if body := extractBody(req); body != nil {
+				// Вызываем обработчик тела если он установлен
+				if sess.bodyHandler != nil {
+					sess.bodyHandler(body)
+				}
+			}
+		}
+	}
 
 	response := sip.NewResponseFromRequest(req, sip.StatusOK, "", nil)
 	err := tx.Respond(response)

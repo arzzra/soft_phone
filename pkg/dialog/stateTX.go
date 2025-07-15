@@ -23,6 +23,7 @@ type TX struct {
 
 	respChan     chan *sip.Response
 	lastResponse *sip.Response // последний полученный ответ
+	body         *Body         // тело сообщения
 }
 
 func (t *TX) Accept(opts ...ResponseOpt) error {
@@ -193,6 +194,11 @@ func (t *TX) Response() *sip.Response {
 	return t.lastResponse
 }
 
+// Body возвращает тело сообщения транзакции
+func (t *TX) Body() *Body {
+	return t.body
+}
+
 func (t *TX) Terminate() {
 	close(t.respChan)
 }
@@ -285,6 +291,9 @@ func newTX(req *sip.Request, tx sip.Transaction, di *Dialog) *TX {
 		mTx.isServer = true
 	}
 
+	// Извлекаем тело из запроса
+	mTx.body = extractBody(req)
+
 	// Инициализируем канал для клиентских транзакций
 	if mTx.IsClient() {
 		mTx.respChan = make(chan *sip.Response, 10)
@@ -352,6 +361,16 @@ func (t *TX) processingIncomingResponse(resp *sip.Response) {
 		// Успешные ответы (2xx)
 		// Сохраняем remote tag из ответа
 		t.saveRemoteTag(resp)
+
+		// Извлекаем тело из успешного ответа
+		if body := extractBody(resp); body != nil {
+			// Сохраняем тело от удаленной стороны
+			t.dialog.SetRemoteSDP(body.ContentType(), body.Content())
+			// Вызываем обработчик тела если он установлен
+			if t.dialog.bodyHandler != nil {
+				t.dialog.bodyHandler(body)
+			}
+		}
 
 		if t.dialog.GetCurrentState() == Calling {
 			reason := StateTransitionReason{

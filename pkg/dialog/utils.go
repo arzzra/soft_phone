@@ -139,6 +139,25 @@ func GetBranchID(msg sip.Message) string {
 // 	msg.AppendHeader(&typeC)
 // }
 
+// extractBody извлекает тело и Content-Type из SIP сообщения.
+// Возвращает nil, если тело отсутствует.
+func extractBody(msg sip.Message) *Body {
+	bodyContent := msg.Body()
+	if len(bodyContent) == 0 {
+		return nil
+	}
+
+	contentType := ""
+	if headers := msg.GetHeaders("Content-Type"); len(headers) > 0 {
+		contentType = headers[0].Value()
+	}
+
+	return &Body{
+		contentType: contentType,
+		content:     bodyContent,
+	}
+}
+
 // getHostPortFromVia извлекает хост и порт из заголовка Via (зарезервировано)
 // func getHostPortFromVia(req *sip.Request) (string, uint16) {
 // 	viaHeader := req.Via()
