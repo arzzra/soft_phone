@@ -110,6 +110,19 @@ const (
 	Ended DialogState = "Ended"
 )
 
+// StateTransitionReason содержит информацию о причине перехода состояния диалога.
+// Используется для отслеживания истории изменений состояния и диагностики.
+type StateTransitionReason struct {
+	FromState    DialogState       // Исходное состояние
+	ToState      DialogState       // Целевое состояние
+	Timestamp    time.Time         // Время перехода
+	Reason       string            // Описание причины перехода
+	Method       sip.RequestMethod // Связанный SIP метод (INVITE, BYE, CANCEL и т.д.)
+	StatusCode   int               // Код ответа (если применимо)
+	StatusReason string            // Фраза причины ответа
+	Details      string            // Дополнительный контекст
+}
+
 // Dialog представляет SIP диалог между двумя user agents.
 // Реализует полную логику управления диалогом согласно RFC 3261.
 //
@@ -124,6 +137,7 @@ const (
 //   - Обработку re-INVITE для изменения параметров сессии
 //   - Операции переадресации (REFER)
 //   - Корректное завершение через BYE
+//   - Отслеживание истории переходов состояний с контекстом
 //
 // Все методы потокобезопасны.
 type Dialog struct {
@@ -189,6 +203,10 @@ type Dialog struct {
 	// Транзакция re-INVITE для обновления параметров сессии
 	reInviteTX *TX
 	reInviteMu sync.Mutex
+
+	// История переходов состояний
+	transitionHistory []StateTransitionReason
+	transitionMu      sync.RWMutex
 }
 
 // ID возвращает уникальный идентификатор диалога.
@@ -320,7 +338,12 @@ func (s *Dialog) Terminate() error {
 		slog.String("branchID", GetBranchID(tx.Request())))
 
 	// Переводим диалог в состояние завершения
-	if err := s.setState(Terminating, tx); err != nil {
+	reason := StateTransitionReason{
+		Reason:  "Call termination requested",
+		Method:  sip.BYE,
+		Details: "User initiated hangup",
+	}
+	if err := s.setStateWithReason(Terminating, tx, reason); err != nil {
 		slog.Debug("Dialog.Terminate setState failed",
 			slog.String("error", err.Error()))
 		return err
@@ -375,7 +398,12 @@ func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (
 		slog.String("request", req.String()))
 
 	// Переводим диалог в состояние вызова
-	if err := s.setState(Calling, nil); err != nil {
+	reason := StateTransitionReason{
+		Reason:  "Outgoing call initiated",
+		Method:  sip.INVITE,
+		Details: fmt.Sprintf("Calling %s", target),
+	}
+	if err := s.setStateWithReason(Calling, nil, reason); err != nil {
 		slog.Debug("Dialog.Start setState failed",
 			slog.String("error", err.Error()))
 		return nil, err
@@ -591,12 +619,45 @@ func (s *Dialog) Close() error {
 	}
 
 	// Переводим в состояние Ended
-	if err := s.setState(Ended, nil); err != nil {
+	reason := StateTransitionReason{
+		Reason:  "Dialog closed without BYE",
+		Details: "Administrative close or cleanup",
+	}
+	if err := s.setStateWithReason(Ended, nil, reason); err != nil {
 		return err
 	}
 
 	// TODO: Освободить ресурсы
 	return nil
+}
+
+// GetLastTransitionReason возвращает последнюю причину перехода состояния.
+// Возвращает nil если история переходов пуста.
+// Метод потокобезопасен.
+func (s *Dialog) GetLastTransitionReason() *StateTransitionReason {
+	s.transitionMu.RLock()
+	defer s.transitionMu.RUnlock()
+	
+	if len(s.transitionHistory) == 0 {
+		return nil
+	}
+	
+	// Возвращаем копию последнего элемента
+	last := s.transitionHistory[len(s.transitionHistory)-1]
+	return &last
+}
+
+// GetTransitionHistory возвращает полную историю переходов состояний диалога.
+// Возвращает копию истории для безопасного использования.
+// Метод потокобезопасен.
+func (s *Dialog) GetTransitionHistory() []StateTransitionReason {
+	s.transitionMu.RLock()
+	defer s.transitionMu.RUnlock()
+	
+	// Создаем копию истории
+	history := make([]StateTransitionReason, len(s.transitionHistory))
+	copy(history, s.transitionHistory)
+	return history
 }
 
 // OnStateChange устанавливает обработчик изменения состояния диалога.
@@ -877,9 +938,40 @@ func (s *Dialog) enterCalling(ctx context.Context, e *fsm.Event) {
 	// TODO: Дополнительная логика при необходимости
 }
 
-func (s *Dialog) setState(status DialogState, tx *TX) error {
+// setStateWithReason устанавливает новое состояние диалога с указанием причины перехода.
+// Сохраняет информацию о переходе в истории для последующего анализа.
+// Метод потокобезопасен.
+func (s *Dialog) setStateWithReason(status DialogState, tx *TX, reason StateTransitionReason) error {
+	// Дополняем информацию о переходе
+	reason.FromState = s.GetCurrentState()
+	reason.ToState = status
+	reason.Timestamp = time.Now()
+
+	// Сохраняем в историю
+	s.transitionMu.Lock()
+	s.transitionHistory = append(s.transitionHistory, reason)
+	s.transitionMu.Unlock()
+
+	// Логируем переход с контекстом
+	slog.Info("Dialog state transition",
+		slog.String("dialogID", s.id),
+		slog.String("from", reason.FromState.String()),
+		slog.String("to", reason.ToState.String()),
+		slog.String("reason", reason.Reason),
+		slog.String("method", string(reason.Method)),
+		slog.Int("statusCode", reason.StatusCode),
+		slog.String("details", reason.Details))
 
 	return s.fsm.Event(context.TODO(), formEventName(DialogState(s.fsm.Current()), status), tx)
+}
+
+// setState устанавливает новое состояние диалога.
+// Для обратной совместимости создает простую причину перехода.
+func (s *Dialog) setState(status DialogState, tx *TX) error {
+	reason := StateTransitionReason{
+		Reason: "State transition",
+	}
+	return s.setStateWithReason(status, tx, reason)
 }
 
 func (s *Dialog) GetCurrentState() DialogState {

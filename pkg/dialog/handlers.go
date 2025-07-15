@@ -1,6 +1,7 @@
 package dialog
 
 import (
+	"fmt"
 	"github.com/emiago/sipgo/sip"
 	"log/slog"
 	"strconv"
@@ -101,7 +102,12 @@ func (u *UACUAS) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 			u.dialogs.Put(*callID, sessionDialog.LocalTag(), GetBranchID(req), sessionDialog)
 			lTX := newTX(req, tx, sessionDialog)
 			sessionDialog.setFirstTX(lTX)
-			if err := sessionDialog.setState(Ringing, lTX); err != nil {
+			reason := StateTransitionReason{
+				Reason:  "Incoming INVITE received",
+				Method:  sip.INVITE,
+				Details: fmt.Sprintf("Call from %s", req.From().Address.String()),
+			}
+			if err := sessionDialog.setStateWithReason(Ringing, lTX, reason); err != nil {
 				slog.Error("Не удалось установить состояние Ringing", "error", err)
 				return
 			}
@@ -144,7 +150,12 @@ func (u *UACUAS) handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 			return
 		}
 		// Изменяем состояние диалога на Terminating
-		err := sess.setState(Terminating, ltx)
+		reason := StateTransitionReason{
+			Reason:  "CANCEL received",
+			Method:  sip.CANCEL,
+			Details: "Call cancelled before answer",
+		}
+		err := sess.setStateWithReason(Terminating, ltx, reason)
 		if err != nil {
 			slog.Error("Ошибка изменения состояния диалога при CANCEL",
 				slog.Any("error", err),
@@ -175,7 +186,12 @@ func (u *UACUAS) handleCancel(req *sip.Request, tx sip.ServerTransaction) {
 		}
 
 		// Изменяем состояние на Ended
-		err = sess.setState(Ended, ltx)
+		endReason := StateTransitionReason{
+			Reason:  "Call cancelled",
+			Method:  sip.CANCEL,
+			Details: "CANCEL processed successfully",
+		}
+		err = sess.setStateWithReason(Ended, ltx, endReason)
 		if err != nil {
 			slog.Error("Ошибка изменения состояния диалога на Ended после CANCEL",
 				slog.Any("error", err),
@@ -228,7 +244,12 @@ func (u *UACUAS) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 	if ltx != nil {
 		// Обрабатываем BYE в рамках диалога
 		// Изменяем состояние диалога на Terminating
-		err := sess.setState(Terminating, ltx)
+		reason := StateTransitionReason{
+			Reason:  "BYE received from remote party",
+			Method:  sip.BYE,
+			Details: fmt.Sprintf("Remote party %s terminated the call", req.From().Address.String()),
+		}
+		err := sess.setStateWithReason(Terminating, ltx, reason)
 		if err != nil {
 			slog.Error("Ошибка изменения состояния диалога при BYE",
 				slog.Any("error", err),
@@ -254,7 +275,14 @@ func (u *UACUAS) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 
 	// Изменяем состояние на Ended и завершаем диалог
 	if ltx != nil {
-		err = sess.setState(Ended, ltx)
+		endReason := StateTransitionReason{
+			Reason:       "BYE processed",
+			Method:       sip.BYE,
+			StatusCode:   200,
+			StatusReason: "OK",
+			Details:      "Call terminated by remote party",
+		}
+		err = sess.setStateWithReason(Ended, ltx, endReason)
 		if err != nil {
 			slog.Error("Ошибка изменения состояния диалога на Ended после BYE",
 				slog.Any("error", err),

@@ -96,7 +96,12 @@ func (s *Dialog) Bye(ctx context.Context) error {
 	}
 
 	// Меняем состояние на Terminating
-	if err := s.setState(Terminating, nil); err != nil {
+	reason := StateTransitionReason{
+		Reason:  "BYE request sent",
+		Method:  sip.BYE,
+		Details: "User initiated call termination",
+	}
+	if err := s.setStateWithReason(Terminating, nil, reason); err != nil {
 		return errors.Wrap(err, "не удалось изменить состояние")
 	}
 
@@ -112,7 +117,14 @@ func (s *Dialog) Bye(ctx context.Context) error {
 		resp := tx.Response()
 		if resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			// Успешный ответ - переходим в состояние Ended
-			return s.setState(Ended, nil)
+			endReason := StateTransitionReason{
+				Reason:       "BYE confirmed",
+				Method:       sip.BYE,
+				StatusCode:   resp.StatusCode,
+				StatusReason: resp.Reason,
+				Details:      "Call terminated successfully",
+			}
+			return s.setStateWithReason(Ended, nil, endReason)
 		}
 
 		return fmt.Errorf("BYE завершился с кодом: %d", resp.StatusCode)

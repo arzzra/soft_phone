@@ -55,7 +55,14 @@ func (t *TX) Accept(opts ...ResponseOpt) error {
 
 func (t *TX) processingOutgoingResponse(resp *sip.Response) error {
 	if t.dialog.getFirstTX() == t && resp.StatusCode == 200 {
-		err := t.dialog.setState(InCall, t)
+		reason := StateTransitionReason{
+			Reason:       "Accepted incoming call",
+			Method:       t.req.Method,
+			StatusCode:   resp.StatusCode,
+			StatusReason: "OK",
+			Details:      "Incoming call accepted by user",
+		}
+		err := t.dialog.setStateWithReason(InCall, t, reason)
 		if err != nil {
 			return err
 		}
@@ -246,7 +253,14 @@ func (t *TX) processingResponse(resp *sip.Response) {
 		// Информационные ответы (1xx)
 		// Меняем состояние диалога
 		if t.dialog.GetCurrentState() == IDLE {
-			err := t.dialog.setState(Calling, t)
+			reason := StateTransitionReason{
+				Reason:       "Provisional response received",
+				Method:       t.req.Method,
+				StatusCode:   resp.StatusCode,
+				StatusReason: resp.Reason,
+				Details:      fmt.Sprintf("Received %d %s", resp.StatusCode, resp.Reason),
+			}
+			err := t.dialog.setStateWithReason(Calling, t, reason)
 			if err != nil {
 				slog.Error("failed to set dialog state", "error", err)
 			}
@@ -257,7 +271,14 @@ func (t *TX) processingResponse(resp *sip.Response) {
 		t.saveRemoteTag(resp)
 
 		if t.dialog.GetCurrentState() == Calling {
-			err := t.dialog.setState(InCall, t)
+			reason := StateTransitionReason{
+				Reason:       "Call answered",
+				Method:       sip.INVITE,
+				StatusCode:   resp.StatusCode,
+				StatusReason: resp.Reason,
+				Details:      "200 OK received for INVITE",
+			}
+			err := t.dialog.setStateWithReason(InCall, t, reason)
 			if err != nil {
 				slog.Error("failed to set dialog state to InCall", "error", err)
 			}
@@ -292,35 +313,36 @@ func (t *TX) processErrorResponse(resp *sip.Response) {
 		currentState := t.dialog.GetCurrentState()
 		// Обрабатываем только если диалог в начальных состояниях
 		if currentState == Calling || currentState == IDLE {
-			slog.Info("Processing error response for initial INVITE",
-				slog.String("dialogID", t.dialog.id),
-				slog.Int("status", resp.StatusCode),
-				slog.String("reason", resp.Reason),
-				slog.String("currentState", currentState.String()),
-				slog.String("callID", string(t.dialog.callID)))
+			// Создаем причину перехода в Terminating
+			reason := StateTransitionReason{
+				Reason:       "Error response for initial INVITE",
+				Method:       sip.INVITE,
+				StatusCode:   resp.StatusCode,
+				StatusReason: resp.Reason,
+				Details:      fmt.Sprintf("Call failed with %d %s", resp.StatusCode, resp.Reason),
+			}
 			
 			// Переводим в Terminating
-			err := t.dialog.setState(Terminating, t)
+			err := t.dialog.setStateWithReason(Terminating, t, reason)
 			if err != nil {
 				slog.Error("Failed to set dialog state to Terminating", 
 					slog.String("error", err.Error()),
 					slog.String("dialogID", t.dialog.id))
-			} else {
-				slog.Debug("Dialog state changed to Terminating due to error response",
-					slog.String("dialogID", t.dialog.id),
-					slog.Int("status", resp.StatusCode))
 			}
 			
 			// Затем сразу в Ended
-			err = t.dialog.setState(Ended, t)
+			endReason := StateTransitionReason{
+				Reason:       "Dialog terminated after error",
+				Method:       sip.INVITE,
+				StatusCode:   resp.StatusCode,
+				StatusReason: resp.Reason,
+				Details:      "Error response caused dialog termination",
+			}
+			err = t.dialog.setStateWithReason(Ended, t, endReason)
 			if err != nil {
 				slog.Error("Failed to set dialog state to Ended", 
 					slog.String("error", err.Error()),
 					slog.String("dialogID", t.dialog.id))
-			} else {
-				slog.Debug("Dialog state changed to Ended due to error response",
-					slog.String("dialogID", t.dialog.id),
-					slog.Int("status", resp.StatusCode))
 			}
 		}
 	}
