@@ -284,8 +284,8 @@ func (t *TX) processingResponse(resp *sip.Response) {
 			}
 			_ = t.dialog.sendAckWithoutTX()
 		}
-		//todo добавить логики при 300-600 ответах
 	case resp.StatusCode >= 300 && resp.StatusCode <= 399:
+		//todo
 		// Перенаправления (3xx)
 		slog.Debug("received redirect response", "status", resp.StatusCode)
 	case resp.StatusCode >= 400 && resp.StatusCode <= 499:
@@ -321,15 +321,15 @@ func (t *TX) processErrorResponse(resp *sip.Response) {
 				StatusReason: resp.Reason,
 				Details:      fmt.Sprintf("Call failed with %d %s", resp.StatusCode, resp.Reason),
 			}
-			
+
 			// Переводим в Terminating
 			err := t.dialog.setStateWithReason(Terminating, t, reason)
 			if err != nil {
-				slog.Error("Failed to set dialog state to Terminating", 
+				slog.Error("Failed to set dialog state to Terminating",
 					slog.String("error", err.Error()),
 					slog.String("dialogID", t.dialog.id))
 			}
-			
+
 			// Затем сразу в Ended
 			endReason := StateTransitionReason{
 				Reason:       "Dialog terminated after error",
@@ -340,7 +340,7 @@ func (t *TX) processErrorResponse(resp *sip.Response) {
 			}
 			err = t.dialog.setStateWithReason(Ended, t, endReason)
 			if err != nil {
-				slog.Error("Failed to set dialog state to Ended", 
+				slog.Error("Failed to set dialog state to Ended",
 					slog.String("error", err.Error()),
 					slog.String("dialogID", t.dialog.id))
 			}
