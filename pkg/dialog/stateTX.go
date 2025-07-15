@@ -54,17 +54,39 @@ func (t *TX) Accept(opts ...ResponseOpt) error {
 }
 
 func (t *TX) processingOutgoingResponse(resp *sip.Response) error {
-	if t.dialog.getFirstTX() == t && resp.StatusCode == 200 {
-		reason := StateTransitionReason{
-			Reason:       "Accepted incoming call",
-			Method:       t.req.Method,
-			StatusCode:   resp.StatusCode,
-			StatusReason: "OK",
-			Details:      "Incoming call accepted by user",
-		}
-		err := t.dialog.setStateWithReason(InCall, t, reason)
-		if err != nil {
-			return err
+	if t.dialog.getFirstTX() == t {
+		switch true {
+		case resp.StatusCode == 200:
+			reason := StateTransitionReason{
+				Reason:       "Accepted incoming call",
+				Method:       t.req.Method,
+				StatusCode:   resp.StatusCode,
+				StatusReason: resp.Reason,
+				Details:      "Incoming call accepted by user",
+			}
+			return t.dialog.setStateWithReason(InCall, t, reason)
+
+		case resp.StatusCode >= 100 && resp.StatusCode < 200:
+			reason := StateTransitionReason{
+				Reason:       "Ringing incoming call",
+				Method:       t.req.Method,
+				StatusCode:   resp.StatusCode,
+				StatusReason: resp.Reason,
+				Details:      "",
+			}
+			return t.dialog.setStateWithReason(Ringing, t, reason)
+		case resp.StatusCode >= 400 && resp.StatusCode < 700:
+			reason := StateTransitionReason{
+				Reason:       "Rejected by user",
+				Method:       t.req.Method,
+				StatusCode:   resp.StatusCode,
+				StatusReason: resp.Reason,
+				Details:      "",
+			}
+			return t.dialog.setStateWithReason(Terminating, t, reason)
+		default:
+			return errors.New("unexpected response from server")
+
 		}
 	}
 	return nil
@@ -125,6 +147,46 @@ func (t *TX) WaitAck() error {
 		return errors.New("transaction terminated without ACK")
 	}
 }
+
+func newRespFromReq(req *sip.Request,
+	statusCode int, reason string, body *Body, remoteTag string) *sip.Response {
+
+	resp := sip.NewResponseFromRequest(req, statusCode, reason, nil)
+
+	if _, ok := resp.To().Params["tag"]; ok {
+		resp.To().Params["tag"] = remoteTag
+	}
+
+	if body != nil {
+		head := sip.ContentTypeHeader(body.contentType)
+		resp.SetBody(body.Content())
+		resp.AppendHeader(&head)
+	}
+
+	return resp
+}
+
+func (t *TX) Reject(code int, reason string, opts ...ResponseOpt) error {
+	if t.IsClient() {
+		return fmt.Errorf("cannot answer client transaction")
+	}
+	resp := newRespFromReq(t.Request(), code, reason, nil, t.dialog.remoteTag)
+
+	for _, opt := range opts {
+		opt(resp)
+	}
+
+	if sTx, ok := t.tx.(sip.ServerTransaction); ok {
+		err := sTx.Respond(resp)
+		if err != nil {
+			return err
+		}
+		return t.processingOutgoingResponse(resp)
+	}
+	return errors.New("not supported for client transactions")
+}
+
+/////////////////////////////////////////////////////////////////////
 
 func (t *TX) Response() *sip.Response {
 	// Возвращаем последний полученный ответ
@@ -244,14 +306,35 @@ func (t *TX) toRespChan(resp *sip.Response) {
 	}
 }
 
-func (t *TX) processingResponse(resp *sip.Response) {
+func (t *TX) byeResponseProcessing() {
+	if t.lastResponse != nil && t.lastResponse.StatusCode == 200 {
+		reason := StateTransitionReason{
+			Reason:     "200 ok response received",
+			Method:     sip.BYE,
+			StatusCode: t.lastResponse.StatusCode,
+			Details:    "User initiated call termination",
+		}
+		if err := t.dialog.setStateWithReason(Ended, t, reason); err != nil {
+			slog.Error("failed to set dialog state", "error", err)
+		}
+	}
+}
+
+func (t *TX) processingIncomingResponse(resp *sip.Response) {
 	// Сохраняем последний ответ
 	t.lastResponse = resp
+
+	// отдельно обрабатываем ответы bye
+	if t.req.Method == sip.BYE {
+		t.byeResponseProcessing()
+		return
+	}
 
 	switch true {
 	case resp.StatusCode >= 100 && resp.StatusCode <= 199:
 		// Информационные ответы (1xx)
 		// Меняем состояние диалога
+		// тут всегда false, потом удалить
 		if t.dialog.GetCurrentState() == IDLE {
 			reason := StateTransitionReason{
 				Reason:       "Provisional response received",
@@ -380,7 +463,7 @@ func (t *TX) loopResponse() {
 			return
 		case resp := <-tx.Responses():
 			slog.Debug("Received response", "status", resp.StatusCode)
-			t.processingResponse(resp)
+			t.processingIncomingResponse(resp)
 			t.toRespChan(resp)
 		}
 	}
@@ -419,6 +502,7 @@ func (t *TX) ClientTX() sip.ClientTransaction {
 	return nil
 }
 
+// приватный метод для того чтобы написать Ack, который в новой транзакции
 func (t *TX) writeAck(ack *sip.Request) {
 	if t.ackChan == nil {
 		slog.Debug("no ack channel")

@@ -113,8 +113,9 @@ func (u *UACUAS) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 			lTX := newTX(req, tx, sessionDialog)
 			sessionDialog.setFirstTX(lTX)
 			reason := StateTransitionReason{
-				Reason:  "Incoming INVITE received",
-				Method:  sip.INVITE,
+				Reason: "Incoming INVITE received",
+				Method: sip.INVITE,
+				//todo убрать  Sprintf
 				Details: fmt.Sprintf("Call from %s", req.From().Address.String()),
 			}
 			if err := sessionDialog.setStateWithReason(Ringing, lTX, reason); err != nil {
