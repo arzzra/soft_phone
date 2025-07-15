@@ -303,52 +303,31 @@ func (s *Dialog) RemoteSeq() uint32 {
 // Terminate завершает диалог, отправляя BYE запрос.
 // Может быть вызван только в состоянии InCall.
 // Переводит диалог в состояние Terminating.
+// В отличие от Bye(), этот метод не ожидает ответа на BYE запрос.
 func (s *Dialog) Terminate() error {
-	// Отправляем BYE запрос
-	slog.Debug("Dialog.Terminate",
-		slog.String("dialogID", s.id),
-		slog.String("state", s.State().String()),
-		slog.String("callID", string(s.callID)))
-
-	if s.State() != InCall {
-		err := fmt.Errorf("dialog not in call state, current state: %s", s.State())
-		slog.Debug("Dialog.Terminate failed", slog.String("error", err.Error()))
-		return err
-	}
-
-	// Создаем BYE запрос
+	// Определяем контекст для вызова
 	ctx := context.Background()
 	if s.ctx != nil {
 		ctx = s.ctx
 	}
 
-	req := s.makeRequest(sip.BYE)
-	slog.Debug("Dialog.Terminate creating BYE request",
-		slog.String("request", req.String()))
+	// Логируем вызов
+	slog.Debug("Dialog.Terminate",
+		slog.String("dialogID", s.id),
+		slog.String("state", s.State().String()),
+		slog.String("callID", string(s.callID)))
 
-	// Отправляем запрос
-	tx, err := s.sendReq(ctx, req)
+	// Используем общий метод sendBye для отправки BYE запроса
+	tx, err := s.sendBye(ctx)
 	if err != nil {
-		slog.Debug("Dialog.Terminate sendReq failed",
-			slog.String("error", err.Error()))
-		return errors.Wrap(err, "failed to send BYE request")
+		slog.Debug("Dialog.Terminate failed", slog.String("error", err.Error()))
+		return err
 	}
 
 	slog.Debug("Dialog.Terminate BYE sent successfully",
 		slog.String("branchID", GetBranchID(tx.Request())))
 
-	// Переводим диалог в состояние завершения
-	reason := StateTransitionReason{
-		Reason:  "Call termination requested",
-		Method:  sip.BYE,
-		Details: "User initiated hangup",
-	}
-	if err := s.setStateWithReason(Terminating, tx, reason); err != nil {
-		slog.Debug("Dialog.Terminate setState failed",
-			slog.String("error", err.Error()))
-		return err
-	}
-
+	// В отличие от Bye(), мы не ждем ответа
 	return nil
 }
 

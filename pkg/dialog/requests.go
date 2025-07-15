@@ -77,13 +77,13 @@ func (s *Dialog) ReInvite(ctx context.Context, opts ...RequestOpt) (IClientTX, e
 	return tx, nil
 }
 
-// Bye отправляет BYE запрос для завершения диалога.
-// Этот метод является альтернативой методу Terminate().
-func (s *Dialog) Bye(ctx context.Context) error {
+// sendBye отправляет BYE запрос и переводит диалог в состояние Terminating.
+// Это приватный метод, используемый как в Bye(), так и в Terminate().
+func (s *Dialog) sendBye(ctx context.Context) (*TX, error) {
 	// Проверяем состояние диалога
 	currentState := s.State()
 	if currentState != InCall {
-		return fmt.Errorf("BYE может быть отправлен только в состоянии InCall, текущее: %s", currentState)
+		return nil, fmt.Errorf("BYE может быть отправлен только в состоянии InCall, текущее: %s", currentState)
 	}
 
 	// Создаем BYE запрос
@@ -92,7 +92,7 @@ func (s *Dialog) Bye(ctx context.Context) error {
 	// Отправляем запрос
 	tx, err := s.sendReq(ctx, req)
 	if err != nil {
-		return errors.Wrap(err, "не удалось отправить BYE")
+		return nil, errors.Wrap(err, "не удалось отправить BYE")
 	}
 
 	// Меняем состояние на Terminating
@@ -101,8 +101,20 @@ func (s *Dialog) Bye(ctx context.Context) error {
 		Method:  sip.BYE,
 		Details: "User initiated call termination",
 	}
-	if err := s.setStateWithReason(Terminating, nil, reason); err != nil {
-		return errors.Wrap(err, "не удалось изменить состояние")
+	if err := s.setStateWithReason(Terminating, tx, reason); err != nil {
+		return nil, errors.Wrap(err, "не удалось изменить состояние")
+	}
+
+	return tx, nil
+}
+
+// Bye отправляет BYE запрос для завершения диалога.
+// Этот метод является альтернативой методу Terminate().
+func (s *Dialog) Bye(ctx context.Context) error {
+	// Отправляем BYE и получаем транзакцию
+	tx, err := s.sendBye(ctx)
+	if err != nil {
+		return err
 	}
 
 	// Ждем ответа на BYE запрос
