@@ -2,6 +2,7 @@ package dialog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -12,6 +13,9 @@ import (
 	"github.com/emiago/sipgo/sip"
 	"golang.org/x/sync/errgroup"
 )
+
+// ErrUACUASStopped возвращается при попытке выполнить операцию после остановки UACUAS
+var ErrUACUASStopped = errors.New("UACUAS уже остановлен")
 
 // Config содержит конфигурацию для создания UACUAS менеджера диалогов.
 type Config struct {
@@ -273,6 +277,14 @@ func (u *UACUAS) onRequests() {
 }
 
 func (u *UACUAS) writeMsg(req *sip.Request) error {
+	// Проверяем, не остановлен ли UACUAS
+	u.stopMutex.Lock()
+	if u.stopped {
+		u.stopMutex.Unlock()
+		return ErrUACUASStopped
+	}
+	u.stopMutex.Unlock()
+
 	return u.uac.WriteRequest(req, sipgo.ClientRequestAddVia)
 }
 
@@ -310,6 +322,7 @@ func (u *UACUAS) OnReInvite(handler OnIncomingCall) {
 //  4. Очищается карта регистраций
 //  5. Отменяется контекст
 //
+// Возвращает агрегированную ошибку, если при закрытии диалогов произошли ошибки.
 // Метод потокобезопасен и может вызываться из нескольких горутин одновременно.
 func (u *UACUAS) Stop() error {
 	u.stopMutex.Lock()
@@ -323,11 +336,18 @@ func (u *UACUAS) Stop() error {
 	// Устанавливаем флаг остановки
 	u.stopped = true
 
+	// Собираем ошибки при закрытии диалогов
+	var errs []error
+
 	// Закрываем все активные диалоги
 	if u.dialogs != nil {
 		u.dialogs.sessions.Range(func(key, value interface{}) bool {
 			if dialog, ok := value.(*Dialog); ok {
-				_ = dialog.Close()
+				if err := dialog.Close(); err != nil {
+					errs = append(errs, fmt.Errorf("ошибка закрытия диалога %s: %w", dialog.ID(), err))
+				}
+				// Удаляем диалог из карты
+				u.dialogs.sessions.Delete(key)
 			}
 			return true
 		})
@@ -345,6 +365,11 @@ func (u *UACUAS) Stop() error {
 	// Отменяем контекст для остановки всех горутин
 	if u.cancel != nil {
 		u.cancel()
+	}
+
+	// Возвращаем агрегированную ошибку, если были проблемы при закрытии диалогов
+	if len(errs) > 0 {
+		return fmt.Errorf("ошибки при остановке UACUAS: %v", errs)
 	}
 
 	return nil

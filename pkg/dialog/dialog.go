@@ -684,6 +684,13 @@ func (s *Dialog) OnTerminate(handler func()) {
 //
 // Возвращает созданный диалог или ошибку при неудачном создании.
 func (u *UACUAS) NewDialog(ctx context.Context, opts ...OptDialog) (*Dialog, error) {
+	// Проверяем, не остановлен ли UACUAS
+	u.stopMutex.Lock()
+	if u.stopped {
+		u.stopMutex.Unlock()
+		return nil, ErrUACUASStopped
+	}
+	u.stopMutex.Unlock()
 
 	di := u.createDefaultDialog()
 

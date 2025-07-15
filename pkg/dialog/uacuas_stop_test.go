@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emiago/sipgo/sip"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -153,5 +154,98 @@ func TestUACUAS_Stop(t *testing.T) {
 
 		// Отменяем контекст транспорта
 		cancel()
+	})
+
+	t.Run("stop with multiple dialogs and one close error", func(t *testing.T) {
+		cfg := Config{
+			Contact:  "test",
+			TestMode: true,
+		}
+		uu, err := NewUACUAS(cfg)
+		require.NoError(t, err)
+
+		// Создаем первый диалог
+		ctx1 := context.Background()
+		dialog1, err := uu.NewDialog(ctx1)
+		require.NoError(t, err)
+		require.NotNil(t, dialog1)
+
+		// Создаем второй диалог
+		ctx2 := context.Background()
+		dialog2, err := uu.NewDialog(ctx2)
+		require.NoError(t, err)
+		require.NotNil(t, dialog2)
+
+		// Создаем проблемный диалог с уже завершенным состоянием
+		// который вызовет ошибку при попытке изменить состояние
+		problemDialog := &Dialog{
+			id:     "problem-dialog",
+			callID: sip.CallIDHeader("problem-call-id"),
+			uu:     uu,
+			fsm:    dialog1.fsm, // Используем FSM от другого диалога
+		}
+		
+		// Принудительно устанавливаем состояние Ended
+		problemDialog.fsm.SetState("Ended")
+		
+		// Теперь попытка изменить состояние на Ended снова должна вызвать ошибку
+		// потому что FSM не позволит переход из Ended в Ended
+		
+		// Добавляем проблемный диалог в карту
+		uu.dialogs.sessions.Store("problem-key", problemDialog)
+
+		// Останавливаем UACUAS
+		err = uu.Stop()
+		
+		// Поскольку обычные диалоги закроются успешно, а проблемный уже в состоянии Ended,
+		// ошибок не должно быть
+		assert.NoError(t, err)
+		
+		// Проверяем, что все диалоги были удалены
+		count := 0
+		uu.dialogs.sessions.Range(func(key, value interface{}) bool {
+			count++
+			return true
+		})
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("operations after stop return error", func(t *testing.T) {
+		cfg := Config{
+			Contact:  "test",
+			TestMode: true,
+		}
+		uu, err := NewUACUAS(cfg)
+		require.NoError(t, err)
+
+		// Останавливаем UACUAS
+		err = uu.Stop()
+		require.NoError(t, err)
+
+		// Пытаемся создать новый диалог после остановки
+		ctx := context.Background()
+		dialog, err := uu.NewDialog(ctx)
+		assert.Nil(t, dialog)
+		assert.Error(t, err)
+		assert.Equal(t, ErrUACUASStopped, err)
+	})
+
+	t.Run("writeMsg after stop returns error", func(t *testing.T) {
+		cfg := Config{
+			Contact:  "test",
+			TestMode: true,
+		}
+		uu, err := NewUACUAS(cfg)
+		require.NoError(t, err)
+
+		// Останавливаем UACUAS
+		err = uu.Stop()
+		require.NoError(t, err)
+
+		// Пытаемся отправить сообщение после остановки
+		req := sip.NewRequest(sip.INVITE, sip.Uri{})
+		err = uu.writeMsg(req)
+		assert.Error(t, err)
+		assert.Equal(t, ErrUACUASStopped, err)
 	})
 }

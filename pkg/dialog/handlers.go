@@ -17,6 +17,16 @@ var (
 
 // handleInvite обрабатывает входящие INVITE запросы
 func (u *UACUAS) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
+	// Проверяем, не остановлен ли UACUAS
+	u.stopMutex.Lock()
+	if u.stopped {
+		u.stopMutex.Unlock()
+		resp := sip.NewResponseFromRequest(req, sip.StatusServiceUnavailable, "Service stopped", nil)
+		_ = tx.Respond(resp)
+		return
+	}
+	u.stopMutex.Unlock()
+
 	slog.Debug("handleInvite",
 		slog.String("req", req.String()),
 		slog.String("body", string(req.Body())))
