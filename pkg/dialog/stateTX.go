@@ -269,16 +269,60 @@ func (t *TX) processingResponse(resp *sip.Response) {
 		slog.Debug("received redirect response", "status", resp.StatusCode)
 	case resp.StatusCode >= 400 && resp.StatusCode <= 499:
 		// Ошибки клиента (4xx)
-		slog.Debug("received client error response", "status", resp.StatusCode)
+		slog.Debug("received client error response", "status", resp.StatusCode, "reason", resp.Reason)
+		t.processErrorResponse(resp)
 	case resp.StatusCode >= 500 && resp.StatusCode <= 599:
 		// Ошибки сервера (5xx)
-		slog.Debug("received server error response", "status", resp.StatusCode)
+		slog.Debug("received server error response", "status", resp.StatusCode, "reason", resp.Reason)
+		t.processErrorResponse(resp)
 	case resp.StatusCode >= 600 && resp.StatusCode <= 699:
 		// Глобальные ошибки (6xx)
-		slog.Debug("received global failure response", "status", resp.StatusCode)
+		slog.Debug("received global failure response", "status", resp.StatusCode, "reason", resp.Reason)
+		t.processErrorResponse(resp)
 	default:
 		// Неизвестный код ответа
 		slog.Warn("received response with unknown status code", "status", resp.StatusCode)
+	}
+}
+
+// processErrorResponse обрабатывает ошибочные ответы (4xx, 5xx, 6xx) на запросы
+func (t *TX) processErrorResponse(resp *sip.Response) {
+	// Проверяем, является ли это ответом на первичный INVITE
+	if t.dialog.getFirstTX() == t && t.req.Method == sip.INVITE {
+		currentState := t.dialog.GetCurrentState()
+		// Обрабатываем только если диалог в начальных состояниях
+		if currentState == Calling || currentState == IDLE {
+			slog.Info("Processing error response for initial INVITE",
+				slog.String("dialogID", t.dialog.id),
+				slog.Int("status", resp.StatusCode),
+				slog.String("reason", resp.Reason),
+				slog.String("currentState", currentState.String()),
+				slog.String("callID", string(t.dialog.callID)))
+			
+			// Переводим в Terminating
+			err := t.dialog.setState(Terminating, t)
+			if err != nil {
+				slog.Error("Failed to set dialog state to Terminating", 
+					slog.String("error", err.Error()),
+					slog.String("dialogID", t.dialog.id))
+			} else {
+				slog.Debug("Dialog state changed to Terminating due to error response",
+					slog.String("dialogID", t.dialog.id),
+					slog.Int("status", resp.StatusCode))
+			}
+			
+			// Затем сразу в Ended
+			err = t.dialog.setState(Ended, t)
+			if err != nil {
+				slog.Error("Failed to set dialog state to Ended", 
+					slog.String("error", err.Error()),
+					slog.String("dialogID", t.dialog.id))
+			} else {
+				slog.Debug("Dialog state changed to Ended due to error response",
+					slog.String("dialogID", t.dialog.id),
+					slog.Int("status", resp.StatusCode))
+			}
+		}
 	}
 }
 

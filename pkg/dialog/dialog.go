@@ -390,7 +390,10 @@ func (s *Dialog) Start(ctx context.Context, target string, opts ...RequestOpt) (
 		_ = s.setState(IDLE, nil)
 		return nil, errors.Wrap(err, "failed to send INVITE")
 	}
-
+	
+	// Сохраняем как первую транзакцию диалога
+	s.setFirstTX(tx)
+	
 	slog.Debug("Dialog.Start INVITE sent successfully",
 		slog.String("branchID", GetBranchID(tx.Request())))
 
@@ -623,7 +626,6 @@ func (s *Dialog) OnRequestHandler(handler func(IServerTX)) {
 	s.requestHandler = handler
 }
 
-
 // OnTerminate устанавливает обработчик для события завершения диалога.
 // Обработчик вызывается когда диалог переходит в состояние Ended.
 // Метод потокобезопасен.
@@ -807,6 +809,8 @@ FSM (Конечный автомат) для session:
 [IDLE] → [Ringing] → [InCall] → [Terminating] → [Ended]
 [Calling] → [Terminating] → [Ended]
 [Ringing] → [Terminating] → [Ended]
+[IDLE] → [Terminating] → [Ended] (для быстрых ошибок)
+[IDLE] → [Ended] (для очень быстрых ошибок)
 */
 
 func (s *Dialog) initFSM() {
@@ -821,6 +825,9 @@ func (s *Dialog) initFSM() {
 			{Name: formEventName(Terminating, Ended), Src: []string{string(Terminating)}, Dst: string(Ended)},
 			{Name: formEventName(Calling, Terminating), Src: []string{string(Calling)}, Dst: string(Terminating)},
 			{Name: formEventName(Ringing, Terminating), Src: []string{string(Ringing)}, Dst: string(Terminating)},
+			// Новые переходы для обработки быстрых ошибок
+			{Name: formEventName(IDLE, Terminating), Src: []string{string(IDLE)}, Dst: string(Terminating)},
+			{Name: formEventName(IDLE, Ended), Src: []string{string(IDLE)}, Dst: string(Ended)},
 		}, fsm.Callbacks{
 			"after_event":               s.afterStateChange,
 			"enter_" + Ringing.String(): s.enterRinging,
