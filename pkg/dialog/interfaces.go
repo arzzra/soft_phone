@@ -108,6 +108,8 @@ type ITx interface {
 	Done() <-chan struct{}
 	// Error возвращает ошибку транзакции (аналогично Err)
 	Error() error
+	//
+	Body() *Body
 }
 
 // IClientTX определяет интерфейс клиентской транзакции.
