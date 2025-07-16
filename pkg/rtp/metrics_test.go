@@ -14,9 +14,9 @@ import (
 func TestMetricsCollectorBasic(t *testing.T) {
 	config := MetricsConfig{
 		SamplingRate:        1.0,
-		MaxCardinality:     100,
-		HTTPEnabled:        true,
-		PrometheusEnabled:  true,
+		MaxCardinality:      100,
+		HTTPEnabled:         true,
+		PrometheusEnabled:   true,
 		HealthCheckInterval: time.Second,
 		QualityThresholds: QualityThresholds{
 			MaxJitter:       50.0,
@@ -214,7 +214,7 @@ func TestMetricsUpdate(t *testing.T) {
 
 	expectedLossRate := float64(5) / float64(95+5)
 	if abs(metrics.PacketLossRate-expectedLossRate) > 0.001 {
-		t.Errorf("Неверный packet loss rate: получен %.4f, ожидался %.4f", 
+		t.Errorf("Неверный packet loss rate: получен %.4f, ожидался %.4f",
 			metrics.PacketLossRate, expectedLossRate)
 	}
 
@@ -234,7 +234,7 @@ func TestHistogram(t *testing.T) {
 
 	// Проверяем количество observations
 	if histogram.GetCount() != uint64(len(values)) {
-		t.Errorf("Неверное количество observations: получено %d, ожидалось %d", 
+		t.Errorf("Неверное количество observations: получено %d, ожидалось %d",
 			histogram.GetCount(), len(values))
 	}
 
@@ -242,7 +242,7 @@ func TestHistogram(t *testing.T) {
 	expectedMean := (0.5 + 2.0 + 7.0 + 15.0 + 75.0 + 150.0) / 6.0
 	actualMean := histogram.GetMean()
 	if abs(actualMean-expectedMean) > 0.1 {
-		t.Errorf("Неверное среднее значение: получено %.2f, ожидалось %.2f", 
+		t.Errorf("Неверное среднее значение: получено %.2f, ожидалось %.2f",
 			actualMean, expectedMean)
 	}
 
@@ -257,84 +257,8 @@ func TestHistogram(t *testing.T) {
 		t.Error("P95 должен быть больше P50")
 	}
 
-	t.Logf("✅ Гистограмма работает корректно (mean=%.2f, p50=%.2f, p95=%.2f)", 
+	t.Logf("✅ Гистограмма работает корректно (mean=%.2f, p50=%.2f, p95=%.2f)",
 		actualMean, p50, p95)
-}
-
-// TestHealthMonitor тестирует систему мониторинга здоровья
-func TestHealthMonitor(t *testing.T) {
-	collector := NewMetricsCollector(MetricsConfig{
-		SamplingRate:        1.0,
-		MaxCardinality:     10,
-		HealthCheckInterval: 100 * time.Millisecond,
-		QualityThresholds: QualityThresholds{
-			MaxJitter:       20.0, // Низкий порог для тестирования
-			MaxPacketLoss:   0.01,
-			MaxRTT:          100.0,
-			MinQualityScore: 70,
-		},
-	})
-
-	transport := NewMockTransport()
-	session, _ := NewSession(SessionConfig{
-		PayloadType: PayloadTypePCMU,
-		MediaType:   MediaTypeAudio,
-		ClockRate:   8000,
-		Transport:   transport,
-	})
-	defer func() { _ = session.Stop() }()
-
-	sessionID := "health-test-session"
-	_ = collector.RegisterSession(sessionID, session)
-
-	// Добавляем хорошие метрики
-	goodUpdate := SessionMetricsUpdate{
-		PacketsSent:     1000,
-		PacketsReceived: 995,
-		PacketsLost:     5,
-		Jitter:          5.0,  // Хороший jitter
-		RTT:             50.0, // Хороший RTT
-		State:           "active",
-	}
-	collector.UpdateSessionMetrics(sessionID, goodUpdate)
-
-	// Проверяем здоровый статус
-	health := collector.healthMonitor.GetHealthStatus()
-	if health.Status != "healthy" {
-		t.Errorf("Ожидался здоровый статус, получен %s", health.Status)
-	}
-
-	if health.QualityScore < 80 {
-		t.Errorf("Низкий quality score для здоровой сессии: %d", health.QualityScore)
-	}
-
-	// Добавляем плохие метрики
-	badUpdate := SessionMetricsUpdate{
-		Jitter: 50.0, // Плохой jitter (превышает порог 20.0)
-		RTT:    200.0, // Плохой RTT (превышает порог 100.0)
-	}
-	collector.UpdateSessionMetrics(sessionID, badUpdate)
-
-	// Принудительно обновляем health status
-	collector.healthMonitor.UpdateHealth()
-
-	// Проверяем что статус ухудшился
-	health = collector.healthMonitor.GetHealthStatus()
-	if health.Status == "healthy" {
-		t.Error("Статус должен ухудшиться при плохих метриках")
-	}
-
-	if health.QualityScore >= 80 {
-		t.Errorf("Quality score должен снизиться: %d", health.QualityScore)
-	}
-
-	// Проверяем наличие issues
-	if len(health.Issues) == 0 {
-		t.Error("Должны быть выявлены проблемы")
-	}
-
-	t.Logf("✅ Health monitor работает корректно (status=%s, score=%d, issues=%d)", 
-		health.Status, health.QualityScore, len(health.Issues))
 }
 
 // TestHTTPEndpoints тестирует HTTP endpoints для метрик
@@ -401,10 +325,6 @@ func TestHTTPEndpoints(t *testing.T) {
 			t.Error("Отсутствует секция 'sessions' в JSON ответе")
 		}
 
-		if _, exists := result["health"]; !exists {
-			t.Error("Отсутствует секция 'health' в JSON ответе")
-		}
-
 		t.Log("✅ JSON endpoint работает корректно")
 	})
 
@@ -434,7 +354,6 @@ func TestHTTPEndpoints(t *testing.T) {
 			"rtp_sessions_active",
 			"rtp_packets_sent_total",
 			"rtp_packets_received_total",
-			"rtp_quality_score",
 		}
 
 		for _, metric := range expectedMetrics {
@@ -444,36 +363,6 @@ func TestHTTPEndpoints(t *testing.T) {
 		}
 
 		t.Log("✅ Prometheus endpoint работает корректно")
-	})
-
-	// Тестируем Health endpoint
-	t.Run("Health Endpoint", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/health", nil)
-		w := httptest.NewRecorder()
-
-		collector.handleHealth(w, req)
-
-		resp := w.Result()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("Неверный статус код: получен %d, ожидался 200", resp.StatusCode)
-		}
-
-		var health HealthStatus
-		err := json.NewDecoder(resp.Body).Decode(&health)
-		if err != nil {
-			t.Fatalf("Ошибка декодирования health JSON: %v", err)
-		}
-
-		if health.Status == "" {
-			t.Error("Health status пустой")
-		}
-
-		if health.QualityScore < 0 || health.QualityScore > 100 {
-			t.Errorf("Неверный quality score: %d (должен быть 0-100)", health.QualityScore)
-		}
-
-		t.Logf("✅ Health endpoint работает корректно (status=%s, score=%d)", 
-			health.Status, health.QualityScore)
 	})
 }
 
@@ -524,11 +413,11 @@ func TestSampling(t *testing.T) {
 	maxProcessed := expectedProcessed * 13 / 10 // +30%
 
 	if processedUpdates < minProcessed || processedUpdates > maxProcessed {
-		t.Errorf("Sampling работает некорректно: обработано %d updates (ожидалось %d±30%%)", 
+		t.Errorf("Sampling работает некорректно: обработано %d updates (ожидалось %d±30%%)",
 			processedUpdates, expectedProcessed)
 	}
 
-	t.Logf("✅ Sampling работает корректно (обработано %d/%d updates, rate=%.2f)", 
+	t.Logf("✅ Sampling работает корректно (обработано %d/%d updates, rate=%.2f)",
 		processedUpdates, totalUpdates, float64(processedUpdates)/float64(totalUpdates))
 }
 

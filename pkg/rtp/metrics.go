@@ -32,9 +32,10 @@ import (
 //   - Thread-safe operations для concurrent использования
 //
 // Usage:
-//   collector := NewMetricsCollector(MetricsConfig{})
-//   collector.RegisterSession(session)
-//   collector.StartHTTPServer(":8080")
+//
+//	collector := NewMetricsCollector(MetricsConfig{})
+//	collector.RegisterSession(session)
+//	collector.StartHTTPServer(":8080")
 type MetricsCollector struct {
 	// Core metrics storage
 	sessions    map[string]*SessionMetrics // session_id -> metrics
@@ -44,205 +45,168 @@ type MetricsCollector struct {
 	// Configuration
 	config MetricsConfig
 
-	// Health monitoring
-	healthMonitor *HealthMonitor
-	
 	// Advanced statistics
-	jitterHistogram   *Histogram
-	rttHistogram     *Histogram
-	
+	jitterHistogram *Histogram
+	rttHistogram    *Histogram
+
 	// Resource tracking
-	startTime        time.Time
-	memStats         runtime.MemStats
-	lastMemCheck     time.Time
-	
+	startTime    time.Time
+	memStats     runtime.MemStats
+	lastMemCheck time.Time
+
 	// Export control
-	httpServer       *http.Server
-	exportEnabled    bool
-	samplingRate     float64  // 0.0-1.0
-	
+	httpServer    *http.Server
+	exportEnabled bool
+	samplingRate  float64 // 0.0-1.0
+
 	// Internal counters
-	totalSamples     uint64
-	droppedSamples   uint64
+	totalSamples   uint64
+	droppedSamples uint64
 }
 
 // SessionMetrics содержит метрики для одной RTP сессии
 type SessionMetrics struct {
-	SessionID    string                `json:"session_id"`
-	LocalAddr    string                `json:"local_addr"`
-	RemoteAddr   string                `json:"remote_addr"`
-	
+	SessionID  string `json:"session_id"`
+	LocalAddr  string `json:"local_addr"`
+	RemoteAddr string `json:"remote_addr"`
+
 	// Basic RTP metrics
-	PacketsSent      uint64            `json:"packets_sent"`
-	PacketsReceived  uint64            `json:"packets_received"`
-	BytesSent        uint64            `json:"bytes_sent"`
-	BytesReceived    uint64            `json:"bytes_received"`
-	
+	PacketsSent     uint64 `json:"packets_sent"`
+	PacketsReceived uint64 `json:"packets_received"`
+	BytesSent       uint64 `json:"bytes_sent"`
+	BytesReceived   uint64 `json:"bytes_received"`
+
 	// Quality metrics
-	PacketsLost      uint64            `json:"packets_lost"`
-	PacketLossRate   float64           `json:"packet_loss_rate"`
-	Jitter           float64           `json:"jitter_ms"`
-	RTT              float64           `json:"rtt_ms"`
-	
+	PacketsLost    uint64  `json:"packets_lost"`
+	PacketLossRate float64 `json:"packet_loss_rate"`
+	Jitter         float64 `json:"jitter_ms"`
+	RTT            float64 `json:"rtt_ms"`
+
 	// Advanced metrics
-	JitterP95        float64           `json:"jitter_p95_ms"`
-	JitterP99        float64           `json:"jitter_p99_ms"`
-	RTTPercentiles   map[string]float64 `json:"rtt_percentiles"`
-	
+	JitterP95      float64            `json:"jitter_p95_ms"`
+	JitterP99      float64            `json:"jitter_p99_ms"`
+	RTTPercentiles map[string]float64 `json:"rtt_percentiles"`
+
 	// Session state
-	State            string            `json:"state"`
-	Uptime           time.Duration     `json:"uptime_seconds"`
-	LastActivity     time.Time         `json:"last_activity"`
-	
+	State        string        `json:"state"`
+	Uptime       time.Duration `json:"uptime_seconds"`
+	LastActivity time.Time     `json:"last_activity"`
+
 	// DTLS metrics (if applicable)
-	DTLSHandshakes   uint64            `json:"dtls_handshakes"`
-	DTLSErrors       uint64            `json:"dtls_errors"`
-	
+	DTLSHandshakes uint64 `json:"dtls_handshakes"`
+	DTLSErrors     uint64 `json:"dtls_errors"`
+
 	// Source-specific metrics
-	RemoteSources    map[uint32]*SourceMetrics `json:"remote_sources"`
-	
+	RemoteSources map[uint32]*SourceMetrics `json:"remote_sources"`
+
 	// Performance metrics
-	CPUUsage         float64           `json:"cpu_usage_percent"`
-	MemoryUsage      uint64            `json:"memory_usage_bytes"`
-	
+	CPUUsage    float64 `json:"cpu_usage_percent"`
+	MemoryUsage uint64  `json:"memory_usage_bytes"`
+
 	// Rate limiting metrics
-	RateLimitedSources uint32          `json:"rate_limited_sources"`
-	RateLimitEvents    uint64          `json:"rate_limit_events"`
-	
+	RateLimitedSources uint32 `json:"rate_limited_sources"`
+	RateLimitEvents    uint64 `json:"rate_limit_events"`
+
 	// Error tracking
-	ValidationErrors   uint64          `json:"validation_errors"`
-	NetworkErrors      uint64          `json:"network_errors"`
-	
-	mutex            sync.RWMutex
-	lastUpdate       time.Time
+	ValidationErrors uint64 `json:"validation_errors"`
+	NetworkErrors    uint64 `json:"network_errors"`
+
+	mutex      sync.RWMutex
+	lastUpdate time.Time
 }
 
 // SourceMetrics содержит метрики для удаленного источника
 type SourceMetrics struct {
-	SSRC             uint32            `json:"ssrc"`
-	IPAddress        string            `json:"ip_address"`
-	
-	// Basic statistics  
-	PacketsReceived  uint64            `json:"packets_received"`
-	BytesReceived    uint64            `json:"bytes_received"`
-	PacketsLost      uint64            `json:"packets_lost"`
-	
+	SSRC      uint32 `json:"ssrc"`
+	IPAddress string `json:"ip_address"`
+
+	// Basic statistics
+	PacketsReceived uint64 `json:"packets_received"`
+	BytesReceived   uint64 `json:"bytes_received"`
+	PacketsLost     uint64 `json:"packets_lost"`
+
 	// Quality indicators
-	Jitter           float64           `json:"jitter_ms"`
-	PacketLossRate   float64           `json:"packet_loss_rate"`
-	
+	Jitter         float64 `json:"jitter_ms"`
+	PacketLossRate float64 `json:"packet_loss_rate"`
+
 	// Timing
-	FirstSeen        time.Time         `json:"first_seen"`
-	LastSeen         time.Time         `json:"last_seen"`
-	
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+
 	// State
-	Active           bool              `json:"active"`
-	Validated        bool              `json:"validated"`
-	RateLimited      bool              `json:"rate_limited"`
+	Active      bool `json:"active"`
+	Validated   bool `json:"validated"`
+	RateLimited bool `json:"rate_limited"`
 }
 
 // GlobalMetrics содержит агрегированные метрики всех сессий
 type GlobalMetrics struct {
 	// Session counts
-	TotalSessions    uint32            `json:"total_sessions"`
-	ActiveSessions   uint32            `json:"active_sessions"`
-	
+	TotalSessions  uint32 `json:"total_sessions"`
+	ActiveSessions uint32 `json:"active_sessions"`
+
 	// Aggregate traffic
-	TotalPacketsSent     uint64        `json:"total_packets_sent"`
-	TotalPacketsReceived uint64        `json:"total_packets_received"`
-	TotalBytesSent       uint64        `json:"total_bytes_sent"`
-	TotalBytesReceived   uint64        `json:"total_bytes_received"`
-	
+	TotalPacketsSent     uint64 `json:"total_packets_sent"`
+	TotalPacketsReceived uint64 `json:"total_packets_received"`
+	TotalBytesSent       uint64 `json:"total_bytes_sent"`
+	TotalBytesReceived   uint64 `json:"total_bytes_received"`
+
 	// Quality aggregates
-	AvgJitter            float64       `json:"avg_jitter_ms"`
-	AvgPacketLoss        float64       `json:"avg_packet_loss_rate"`
-	AvgRTT               float64       `json:"avg_rtt_ms"`
-	
+	AvgJitter     float64 `json:"avg_jitter_ms"`
+	AvgPacketLoss float64 `json:"avg_packet_loss_rate"`
+	AvgRTT        float64 `json:"avg_rtt_ms"`
+
 	// System resources
-	SystemCPU            float64       `json:"system_cpu_percent"`
-	SystemMemory         uint64        `json:"system_memory_bytes"`
-	GoRoutines           int           `json:"goroutines"`
-	
+	SystemCPU    float64 `json:"system_cpu_percent"`
+	SystemMemory uint64  `json:"system_memory_bytes"`
+	GoRoutines   int     `json:"goroutines"`
+
 	// Error counts
-	TotalValidationErrors uint64       `json:"total_validation_errors"`
-	TotalNetworkErrors    uint64       `json:"total_network_errors"`
-	TotalRateLimitEvents  uint64       `json:"total_rate_limit_events"`
-	
+	TotalValidationErrors uint64 `json:"total_validation_errors"`
+	TotalNetworkErrors    uint64 `json:"total_network_errors"`
+	TotalRateLimitEvents  uint64 `json:"total_rate_limit_events"`
+
 	// Export statistics
-	MetricsRequests      uint64        `json:"metrics_requests"`
-	LastExport           time.Time     `json:"last_export"`
-	
-	// Health indicators
-	OverallHealth        string        `json:"overall_health"`
-	QualityScore         int           `json:"quality_score"` // 0-100
-	
-	mutex                sync.RWMutex
+	MetricsRequests uint64    `json:"metrics_requests"`
+	LastExport      time.Time `json:"last_export"`
+
+	mutex sync.RWMutex
 }
 
 // MetricsConfig конфигурация системы метрик
 type MetricsConfig struct {
 	// HTTP server
-	HTTPEnabled         bool              `json:"http_enabled"`
-	HTTPAddr           string             `json:"http_addr"`
-	
+	HTTPEnabled bool   `json:"http_enabled"`
+	HTTPAddr    string `json:"http_addr"`
+
 	// Sampling
-	SamplingRate       float64            `json:"sampling_rate"`       // 0.0-1.0
-	MaxCardinality     int                `json:"max_cardinality"`     // Limit number of tracked entities
-	
+	SamplingRate   float64 `json:"sampling_rate"`   // 0.0-1.0
+	MaxCardinality int     `json:"max_cardinality"` // Limit number of tracked entities
+
 	// Histogram configuration
-	JitterBuckets      []float64          `json:"jitter_buckets"`      // Milliseconds
-	RTTBuckets         []float64          `json:"rtt_buckets"`         // Milliseconds
-	
+	JitterBuckets []float64 `json:"jitter_buckets"` // Milliseconds
+	RTTBuckets    []float64 `json:"rtt_buckets"`    // Milliseconds
+
 	// Export configuration
-	PrometheusEnabled  bool               `json:"prometheus_enabled"`
-	InfluxDBEnabled    bool               `json:"influxdb_enabled"`
-	InfluxDBURL        string             `json:"influxdb_url"`
-	
+	PrometheusEnabled bool   `json:"prometheus_enabled"`
+	InfluxDBEnabled   bool   `json:"influxdb_enabled"`
+	InfluxDBURL       string `json:"influxdb_url"`
+
 	// Health monitoring
 	HealthCheckInterval time.Duration     `json:"health_check_interval"`
 	QualityThresholds   QualityThresholds `json:"quality_thresholds"`
-	
+
 	// Resource monitoring
-	ResourceMonitoring bool               `json:"resource_monitoring"`
-	MemoryCheckInterval time.Duration     `json:"memory_check_interval"`
+	ResourceMonitoring  bool          `json:"resource_monitoring"`
+	MemoryCheckInterval time.Duration `json:"memory_check_interval"`
 }
 
 // QualityThresholds пороговые значения для оценки качества
 type QualityThresholds struct {
-	MaxJitter        float64  `json:"max_jitter_ms"`        // > 50ms = плохо
-	MaxPacketLoss    float64  `json:"max_packet_loss_rate"` // > 1% = плохо  
-	MaxRTT           float64  `json:"max_rtt_ms"`           // > 150ms = плохо
-	MinQualityScore  int      `json:"min_quality_score"`    // < 70 = плохо
-}
-
-// HealthMonitor отслеживает состояние и качество RTP соединений
-type HealthMonitor struct {
-	collector         *MetricsCollector
-	
-	// Health status
-	overallStatus     string             // "healthy", "degraded", "unhealthy"
-	qualityScore      int                // 0-100
-	
-	// Issue tracking
-	issues            []HealthIssue
-	lastCheck         time.Time
-	
-	// Alerting (будущее расширение)
-	alertsEnabled     bool
-	alertThresholds   map[string]float64
-	
-	mutex             sync.RWMutex
-}
-
-// HealthIssue описывает проблему в RTP стеке
-type HealthIssue struct {
-	Severity     string    `json:"severity"`      // "warning", "error", "critical"
-	Component    string    `json:"component"`     // "session", "source", "transport"
-	Message      string    `json:"message"`
-	FirstSeen    time.Time `json:"first_seen"`
-	LastSeen     time.Time `json:"last_seen"`
-	Count        int       `json:"count"`
-	Resolved     bool      `json:"resolved"`
+	MaxJitter       float64 `json:"max_jitter_ms"`        // > 50ms = плохо
+	MaxPacketLoss   float64 `json:"max_packet_loss_rate"` // > 1% = плохо
+	MaxRTT          float64 `json:"max_rtt_ms"`           // > 150ms = плохо
+	MinQualityScore int     `json:"min_quality_score"`    // < 70 = плохо
 }
 
 // MetricsExporter интерфейс для экспорта метрик в различные системы
@@ -263,13 +227,13 @@ type MetricPoint struct {
 
 // Histogram для продвинутой статистики (percentiles)
 type Histogram struct {
-	buckets    []float64    // Границы buckets
-	counts     []uint64     // Счетчики для каждого bucket
-	samples    []float64    // Сохраненные samples для точных percentiles (limited size)
+	buckets    []float64 // Границы buckets
+	counts     []uint64  // Счетчики для каждого bucket
+	samples    []float64 // Сохраненные samples для точных percentiles (limited size)
 	totalCount uint64
 	totalSum   float64
 	mutex      sync.RWMutex
-	maxSamples int          // Лимит сохраненных samples
+	maxSamples int // Лимит сохраненных samples
 }
 
 // NewMetricsCollector создает новый сборщик метрик
@@ -292,7 +256,7 @@ func NewMetricsCollector(config MetricsConfig) *MetricsCollector {
 		// Default RTT buckets: 1ms to 500ms
 		config.RTTBuckets = []float64{1, 5, 10, 20, 50, 100, 150, 200, 300, 500}
 	}
-	
+
 	// Значения по умолчанию для quality thresholds
 	if config.QualityThresholds.MaxJitter <= 0 {
 		config.QualityThresholds.MaxJitter = 50.0 // 50ms
@@ -308,24 +272,14 @@ func NewMetricsCollector(config MetricsConfig) *MetricsCollector {
 	}
 
 	collector := &MetricsCollector{
-		sessions:         make(map[string]*SessionMetrics),
-		globalStats:      &GlobalMetrics{},
-		config:           config,
-		jitterHistogram:  NewHistogram(config.JitterBuckets, 1000), // Keep 1000 samples
-		rttHistogram:     NewHistogram(config.RTTBuckets, 1000),
-		startTime:        time.Now(),
-		exportEnabled:    true,
-		samplingRate:     config.SamplingRate,
-	}
-
-	// Инициализируем health monitor
-	collector.healthMonitor = &HealthMonitor{
-		collector:       collector,
-		overallStatus:   "healthy",
-		qualityScore:    100,
-		issues:          make([]HealthIssue, 0),
-		alertsEnabled:   false,
-		alertThresholds: make(map[string]float64),
+		sessions:        make(map[string]*SessionMetrics),
+		globalStats:     &GlobalMetrics{},
+		config:          config,
+		jitterHistogram: NewHistogram(config.JitterBuckets, 1000), // Keep 1000 samples
+		rttHistogram:    NewHistogram(config.RTTBuckets, 1000),
+		startTime:       time.Now(),
+		exportEnabled:   true,
+		samplingRate:    config.SamplingRate,
 	}
 
 	// Запускаем периодические задачи

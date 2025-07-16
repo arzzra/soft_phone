@@ -34,13 +34,13 @@ func (mc *MetricsCollector) RegisterSession(sessionID string, session *Session) 
 	}
 
 	metrics := &SessionMetrics{
-		SessionID:        sessionID,
-		LocalAddr:        localAddr,
-		RemoteAddr:       remoteAddr,
-		State:            "initializing",
-		RemoteSources:    make(map[uint32]*SourceMetrics),
-		RTTPercentiles:   make(map[string]float64),
-		lastUpdate:       time.Now(),
+		SessionID:      sessionID,
+		LocalAddr:      localAddr,
+		RemoteAddr:     remoteAddr,
+		State:          "initializing",
+		RemoteSources:  make(map[uint32]*SourceMetrics),
+		RTTPercentiles: make(map[string]float64),
+		lastUpdate:     time.Now(),
 	}
 
 	mc.sessions[sessionID] = metrics
@@ -110,7 +110,7 @@ func (mc *MetricsCollector) UpdateSessionMetrics(sessionID string, update Sessio
 	if update.PacketsLost > 0 {
 		sessionMetrics.PacketsLost += update.PacketsLost
 		if sessionMetrics.PacketsReceived > 0 {
-			sessionMetrics.PacketLossRate = float64(sessionMetrics.PacketsLost) / 
+			sessionMetrics.PacketLossRate = float64(sessionMetrics.PacketsLost) /
 				float64(sessionMetrics.PacketsReceived+sessionMetrics.PacketsLost)
 		}
 	}
@@ -118,7 +118,7 @@ func (mc *MetricsCollector) UpdateSessionMetrics(sessionID string, update Sessio
 	if update.Jitter >= 0 {
 		sessionMetrics.Jitter = update.Jitter
 		mc.jitterHistogram.Observe(update.Jitter)
-		
+
 		// Обновляем percentiles
 		sessionMetrics.JitterP95 = mc.jitterHistogram.GetPercentile(95)
 		sessionMetrics.JitterP99 = mc.jitterHistogram.GetPercentile(99)
@@ -127,7 +127,7 @@ func (mc *MetricsCollector) UpdateSessionMetrics(sessionID string, update Sessio
 	if update.RTT >= 0 {
 		sessionMetrics.RTT = update.RTT
 		mc.rttHistogram.Observe(update.RTT)
-		
+
 		// Обновляем RTT percentiles
 		sessionMetrics.RTTPercentiles["p50"] = mc.rttHistogram.GetPercentile(50)
 		sessionMetrics.RTTPercentiles["p95"] = mc.rttHistogram.GetPercentile(95)
@@ -158,19 +158,19 @@ func (mc *MetricsCollector) UpdateSessionMetrics(sessionID string, update Sessio
 
 // SessionMetricsUpdate структура для обновления метрик сессии
 type SessionMetricsUpdate struct {
-	PacketsSent       uint64
-	PacketsReceived   uint64
-	BytesSent         uint64
-	BytesReceived     uint64
-	PacketsLost       uint64
-	Jitter            float64  // -1 = не обновлять
-	RTT               float64  // -1 = не обновлять
-	State             string
-	ValidationErrors  uint64
-	NetworkErrors     uint64
-	RateLimitEvents   uint64
-	CPUUsage          float64
-	MemoryUsage       uint64
+	PacketsSent      uint64
+	PacketsReceived  uint64
+	BytesSent        uint64
+	BytesReceived    uint64
+	PacketsLost      uint64
+	Jitter           float64 // -1 = не обновлять
+	RTT              float64 // -1 = не обновлять
+	State            string
+	ValidationErrors uint64
+	NetworkErrors    uint64
+	RateLimitEvents  uint64
+	CPUUsage         float64
+	MemoryUsage      uint64
 }
 
 // UpdateSourceMetrics обновляет метрики удаленного источника
@@ -226,10 +226,10 @@ func (mc *MetricsCollector) shouldSample() bool {
 	if mc.samplingRate >= 1.0 {
 		return true
 	}
-	
+
 	// Инкрементируем общий счетчик попыток
 	totalAttempts := atomic.AddUint64(&mc.totalSamples, 1)
-	
+
 	// Простой sampling на основе модуля
 	return (totalAttempts % uint64(1.0/mc.samplingRate)) == 0
 }
@@ -237,31 +237,29 @@ func (mc *MetricsCollector) shouldSample() bool {
 // GetGlobalMetrics возвращает агрегированные метрики
 func (mc *MetricsCollector) GetGlobalMetrics() *GlobalMetrics {
 	mc.updateGlobalMetrics()
-	
+
 	mc.globalStats.mutex.RLock()
 	defer mc.globalStats.mutex.RUnlock()
 
 	// Возвращаем копию без мьютекса
 	return &GlobalMetrics{
-		TotalSessions:        mc.globalStats.TotalSessions,
-		ActiveSessions:       mc.globalStats.ActiveSessions,
-		TotalPacketsSent:     mc.globalStats.TotalPacketsSent,
-		TotalPacketsReceived: mc.globalStats.TotalPacketsReceived,
-		TotalBytesSent:       mc.globalStats.TotalBytesSent,
-		TotalBytesReceived:   mc.globalStats.TotalBytesReceived,
-		AvgJitter:            mc.globalStats.AvgJitter,
-		AvgPacketLoss:        mc.globalStats.AvgPacketLoss,
-		AvgRTT:               mc.globalStats.AvgRTT,
-		SystemCPU:            mc.globalStats.SystemCPU,
-		SystemMemory:         mc.globalStats.SystemMemory,
-		GoRoutines:           mc.globalStats.GoRoutines,
+		TotalSessions:         mc.globalStats.TotalSessions,
+		ActiveSessions:        mc.globalStats.ActiveSessions,
+		TotalPacketsSent:      mc.globalStats.TotalPacketsSent,
+		TotalPacketsReceived:  mc.globalStats.TotalPacketsReceived,
+		TotalBytesSent:        mc.globalStats.TotalBytesSent,
+		TotalBytesReceived:    mc.globalStats.TotalBytesReceived,
+		AvgJitter:             mc.globalStats.AvgJitter,
+		AvgPacketLoss:         mc.globalStats.AvgPacketLoss,
+		AvgRTT:                mc.globalStats.AvgRTT,
+		SystemCPU:             mc.globalStats.SystemCPU,
+		SystemMemory:          mc.globalStats.SystemMemory,
+		GoRoutines:            mc.globalStats.GoRoutines,
 		TotalValidationErrors: mc.globalStats.TotalValidationErrors,
 		TotalNetworkErrors:    mc.globalStats.TotalNetworkErrors,
 		TotalRateLimitEvents:  mc.globalStats.TotalRateLimitEvents,
 		MetricsRequests:       mc.globalStats.MetricsRequests,
 		LastExport:            mc.globalStats.LastExport,
-		OverallHealth:         mc.globalStats.OverallHealth,
-		QualityScore:          mc.globalStats.QualityScore,
 	}
 }
 
@@ -288,7 +286,7 @@ func (mc *MetricsCollector) updateGlobalMetrics() {
 	// Агрегируем по всем сессиям
 	for _, session := range mc.sessions {
 		session.mutex.RLock()
-		
+
 		mc.globalStats.TotalPacketsSent += session.PacketsSent
 		mc.globalStats.TotalPacketsReceived += session.PacketsReceived
 		mc.globalStats.TotalBytesSent += session.BytesSent
@@ -328,9 +326,6 @@ func (mc *MetricsCollector) updateGlobalMetrics() {
 	mc.updateSystemMetrics()
 
 	// Health status обновляется отдельно для избежания циклической зависимости
-	// mc.healthMonitor.UpdateHealth() - вызывается из periodicTasks
-	mc.globalStats.OverallHealth = mc.healthMonitor.overallStatus
-	mc.globalStats.QualityScore = mc.healthMonitor.qualityScore
 
 	mc.globalStats.LastExport = time.Now()
 }
@@ -370,33 +365,33 @@ func (mc *MetricsCollector) GetSessionMetrics(sessionID string) (*SessionMetrics
 
 	// Создаем копию без мьютекса
 	result := &SessionMetrics{
-		SessionID:        session.SessionID,
-		LocalAddr:        session.LocalAddr,
-		RemoteAddr:       session.RemoteAddr,
-		PacketsSent:      session.PacketsSent,
-		PacketsReceived:  session.PacketsReceived,
-		BytesSent:        session.BytesSent,
-		BytesReceived:    session.BytesReceived,
-		PacketsLost:      session.PacketsLost,
-		PacketLossRate:   session.PacketLossRate,
-		Jitter:           session.Jitter,
-		RTT:              session.RTT,
-		JitterP95:        session.JitterP95,
-		JitterP99:        session.JitterP99,
-		RTTPercentiles:   session.RTTPercentiles,
-		State:            session.State,
-		Uptime:           session.Uptime,
-		LastActivity:     session.LastActivity,
-		DTLSHandshakes:   session.DTLSHandshakes,
-		DTLSErrors:       session.DTLSErrors,
-		RemoteSources:    make(map[uint32]*SourceMetrics),
-		CPUUsage:         session.CPUUsage,
-		MemoryUsage:      session.MemoryUsage,
+		SessionID:          session.SessionID,
+		LocalAddr:          session.LocalAddr,
+		RemoteAddr:         session.RemoteAddr,
+		PacketsSent:        session.PacketsSent,
+		PacketsReceived:    session.PacketsReceived,
+		BytesSent:          session.BytesSent,
+		BytesReceived:      session.BytesReceived,
+		PacketsLost:        session.PacketsLost,
+		PacketLossRate:     session.PacketLossRate,
+		Jitter:             session.Jitter,
+		RTT:                session.RTT,
+		JitterP95:          session.JitterP95,
+		JitterP99:          session.JitterP99,
+		RTTPercentiles:     session.RTTPercentiles,
+		State:              session.State,
+		Uptime:             session.Uptime,
+		LastActivity:       session.LastActivity,
+		DTLSHandshakes:     session.DTLSHandshakes,
+		DTLSErrors:         session.DTLSErrors,
+		RemoteSources:      make(map[uint32]*SourceMetrics),
+		CPUUsage:           session.CPUUsage,
+		MemoryUsage:        session.MemoryUsage,
 		RateLimitedSources: session.RateLimitedSources,
-		RateLimitEvents:  session.RateLimitEvents,
-		ValidationErrors: session.ValidationErrors,
-		NetworkErrors:    session.NetworkErrors,
-		lastUpdate:       session.lastUpdate,
+		RateLimitEvents:    session.RateLimitEvents,
+		ValidationErrors:   session.ValidationErrors,
+		NetworkErrors:      session.NetworkErrors,
+		lastUpdate:         session.lastUpdate,
 	}
 	for ssrc, source := range session.RemoteSources {
 		sourceCopy := *source
@@ -414,45 +409,45 @@ func (mc *MetricsCollector) GetAllSessionMetrics() map[string]*SessionMetrics {
 	result := make(map[string]*SessionMetrics)
 	for sessionID, session := range mc.sessions {
 		session.mutex.RLock()
-		
+
 		// Обновляем uptime
 		session.Uptime = time.Since(session.lastUpdate)
 
 		// Создаем копию без мьютекса
 		sessionCopy := &SessionMetrics{
-			SessionID:        session.SessionID,
-			LocalAddr:        session.LocalAddr,
-			RemoteAddr:       session.RemoteAddr,
-			PacketsSent:      session.PacketsSent,
-			PacketsReceived:  session.PacketsReceived,
-			BytesSent:        session.BytesSent,
-			BytesReceived:    session.BytesReceived,
-			PacketsLost:      session.PacketsLost,
-			PacketLossRate:   session.PacketLossRate,
-			Jitter:           session.Jitter,
-			RTT:              session.RTT,
-			JitterP95:        session.JitterP95,
-			JitterP99:        session.JitterP99,
-			RTTPercentiles:   session.RTTPercentiles,
-			State:            session.State,
-			Uptime:           session.Uptime,
-			LastActivity:     session.LastActivity,
-			DTLSHandshakes:   session.DTLSHandshakes,
-			DTLSErrors:       session.DTLSErrors,
-			RemoteSources:    make(map[uint32]*SourceMetrics),
-			CPUUsage:         session.CPUUsage,
-			MemoryUsage:      session.MemoryUsage,
+			SessionID:          session.SessionID,
+			LocalAddr:          session.LocalAddr,
+			RemoteAddr:         session.RemoteAddr,
+			PacketsSent:        session.PacketsSent,
+			PacketsReceived:    session.PacketsReceived,
+			BytesSent:          session.BytesSent,
+			BytesReceived:      session.BytesReceived,
+			PacketsLost:        session.PacketsLost,
+			PacketLossRate:     session.PacketLossRate,
+			Jitter:             session.Jitter,
+			RTT:                session.RTT,
+			JitterP95:          session.JitterP95,
+			JitterP99:          session.JitterP99,
+			RTTPercentiles:     session.RTTPercentiles,
+			State:              session.State,
+			Uptime:             session.Uptime,
+			LastActivity:       session.LastActivity,
+			DTLSHandshakes:     session.DTLSHandshakes,
+			DTLSErrors:         session.DTLSErrors,
+			RemoteSources:      make(map[uint32]*SourceMetrics),
+			CPUUsage:           session.CPUUsage,
+			MemoryUsage:        session.MemoryUsage,
 			RateLimitedSources: session.RateLimitedSources,
-			RateLimitEvents:  session.RateLimitEvents,
-			ValidationErrors: session.ValidationErrors,
-			NetworkErrors:    session.NetworkErrors,
-			lastUpdate:       session.lastUpdate,
+			RateLimitEvents:    session.RateLimitEvents,
+			ValidationErrors:   session.ValidationErrors,
+			NetworkErrors:      session.NetworkErrors,
+			lastUpdate:         session.lastUpdate,
 		}
 		for ssrc, source := range session.RemoteSources {
 			sourceCopy := *source
 			sessionCopy.RemoteSources[ssrc] = &sourceCopy
 		}
-		
+
 		session.mutex.RUnlock()
 		result[sessionID] = sessionCopy
 	}
@@ -472,7 +467,6 @@ func (mc *MetricsCollector) StartHTTPServer(addr string) error {
 	mux.HandleFunc("/metrics", mc.handleMetrics)
 	mux.HandleFunc("/metrics/prometheus", mc.handlePrometheusMetrics)
 	mux.HandleFunc("/metrics/json", mc.handleJSONMetrics)
-	mux.HandleFunc("/health", mc.handleHealth)
 	mux.HandleFunc("/debug/sessions", mc.handleDebugSessions)
 
 	mc.httpServer = &http.Server{
@@ -512,7 +506,6 @@ func (mc *MetricsCollector) handleJSONMetrics(w http.ResponseWriter, r *http.Req
 	response := map[string]interface{}{
 		"global":   mc.GetGlobalMetrics(),
 		"sessions": mc.GetAllSessionMetrics(),
-		"health":   mc.healthMonitor.GetHealthStatus(),
 		"export_info": map[string]interface{}{
 			"timestamp":       time.Now(),
 			"total_samples":   atomic.LoadUint64(&mc.totalSamples),
@@ -569,13 +562,9 @@ func (mc *MetricsCollector) handlePrometheusMetrics(w http.ResponseWriter, r *ht
 	output.WriteString("# TYPE rtp_packet_loss_rate_avg gauge\n")
 	output.WriteString(fmt.Sprintf("rtp_packet_loss_rate_avg %f\n", global.AvgPacketLoss))
 
-	output.WriteString("# HELP rtp_quality_score Overall quality score (0-100)\n")
-	output.WriteString("# TYPE rtp_quality_score gauge\n")
-	output.WriteString(fmt.Sprintf("rtp_quality_score %d\n", global.QualityScore))
-
 	// Per-session metrics
 	for sessionID, session := range sessions {
-		labels := fmt.Sprintf(`{session_id="%s",local_addr="%s",remote_addr="%s"}`, 
+		labels := fmt.Sprintf(`{session_id="%s",local_addr="%s",remote_addr="%s"}`,
 			sessionID, session.LocalAddr, session.RemoteAddr)
 
 		output.WriteString("# HELP rtp_session_packets_sent_total Packets sent per session\n")
@@ -607,29 +596,6 @@ func (mc *MetricsCollector) handlePrometheusMetrics(w http.ResponseWriter, r *ht
 	_, _ = w.Write([]byte(output.String()))
 }
 
-// handleHealth возвращает статус здоровья системы
-func (mc *MetricsCollector) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	health := mc.healthMonitor.GetHealthStatus()
-	
-	// Устанавливаем HTTP статус код на основе health status
-	var statusCode int
-	switch health.Status {
-	case "healthy":
-		statusCode = http.StatusOK
-	case "degraded":
-		statusCode = http.StatusPartialContent
-	case "unhealthy":
-		statusCode = http.StatusServiceUnavailable
-	default:
-		statusCode = http.StatusInternalServerError
-	}
-
-	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(health)
-}
-
 // handleDebugSessions возвращает детальную информацию о сессиях
 func (mc *MetricsCollector) handleDebugSessions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -648,13 +614,12 @@ func (mc *MetricsCollector) handleDebugSessions(w http.ResponseWriter, r *http.R
 	}
 }
 
-// periodicTasks выполняет периодические задачи (health checks, cleanup)
+// periodicTasks выполняет периодические задачи (cleanup)
 func (mc *MetricsCollector) periodicTasks() {
-	healthTicker := time.NewTicker(mc.config.HealthCheckInterval)
-	defer healthTicker.Stop()
+	cleanupTicker := time.NewTicker(mc.config.HealthCheckInterval)
+	defer cleanupTicker.Stop()
 
-	for range healthTicker.C {
-		mc.healthMonitor.PerformHealthCheck()
+	for range cleanupTicker.C {
 		mc.cleanupOldSessions()
 	}
 }
