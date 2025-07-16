@@ -321,17 +321,21 @@ func (s *ExtendedDialogTestSuite) TestReInviteScenario() {
 	// Настраиваем обработчик re-INVITE для UA2
 	reInviteReceived := make(chan bool, 1)
 
-	// UACUAS имеет метод OnReInvite
-	s.ua2.OnReInvite(func(d dialog.IDialog, tx dialog.IServerTX) {
-		s.events.Add("UA2", "REINVITE_RECEIVED", "Got re-INVITE")
+	// Устанавливаем обработчик для всех запросов внутри диалога
+	ua2Dialog.OnRequestHandler(func(tx dialog.IServerTX) {
+		req := tx.Request()
+		// Проверяем, является ли это re-INVITE (INVITE с To tag)
+		if req.Method == "INVITE" && req.To().Params.Has("tag") {
+			s.events.Add("UA2", "REINVITE_RECEIVED", "Got re-INVITE")
 
-		// Принимаем re-INVITE с новым SDP
-		newSdp := s.getTestSDP(26002)
-		err := tx.Accept(dialog.ResponseWithSDP(newSdp))
-		s.Require().NoError(err)
-		s.events.Add("UA2", "REINVITE_ACCEPTED", "Sent 200 OK")
+			// Принимаем re-INVITE с новым SDP
+			newSdp := s.getTestSDP(26002)
+			err := tx.Accept(dialog.ResponseWithSDP(newSdp))
+			s.Require().NoError(err)
+			s.events.Add("UA2", "REINVITE_ACCEPTED", "Sent 200 OK")
 
-		reInviteReceived <- true
+			reInviteReceived <- true
+		}
 	})
 
 	// UA1 отправляет re-INVITE

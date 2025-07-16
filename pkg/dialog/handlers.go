@@ -80,11 +80,15 @@ func (u *UACUAS) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 					}
 				}
 
-				// Вызываем колбэк для обработки re-INVITE если он установлен
-				if u.onReInvite != nil {
-					u.onReInvite(sessia, ltx)
+				// Вызываем requestHandler диалога для обработки re-INVITE
+				sessia.handlersMu.Lock()
+				handler := sessia.requestHandler
+				sessia.handlersMu.Unlock()
+
+				if handler != nil {
+					handler(ltx)
 				} else {
-					// Если колбэк не установлен, отвечаем 200 OK по умолчанию
+					// Если обработчик не установлен, отвечаем 200 OK по умолчанию
 					resp := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
 					err := tx.Respond(resp)
 					if err != nil {

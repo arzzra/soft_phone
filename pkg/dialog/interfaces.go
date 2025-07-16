@@ -24,10 +24,6 @@ type IUU interface {
 	// Обработчик будет вызван при получении INVITE запроса.
 	OnIncomingCall(handler OnIncomingCall)
 
-	// OnReInvite устанавливает обработчик для re-INVITE запросов.
-	// Используется для изменения параметров существующей сессии.
-	OnReInvite(handler OnIncomingCall)
-
 	// ListenTransports запускает прослушивание на всех настроенных транспортах.
 	// Транспорты определяются в конфигурации при создании менеджера.
 	// Поддерживаются: UDP, TCP, WS. TLS и WSS планируются к реализации.
@@ -138,7 +134,20 @@ type IDialog interface {
 	OnStateChange(handler func(DialogState))
 	// OnBody устанавливает обработчик получения тела SIP сообщения (например, SDP)
 	OnBody(handler func(body *Body))
-	// OnRequestHandler устанавливает обработчик входящих запросов
+	// OnRequestHandler устанавливает обработчик входящих запросов внутри диалога.
+	// Обработчик вызывается для всех запросов после установления диалога:
+	//   - re-INVITE - для изменения параметров сессии
+	//   - UPDATE - для обновления параметров диалога
+	//   - INFO - для передачи информации внутри диалога
+	//   - NOTIFY - для уведомлений о событиях
+	// Для определения типа запроса используйте tx.Request().Method.
+	// Пример обработки re-INVITE:
+	//   d.OnRequestHandler(func(tx IServerTX) {
+	//     if tx.Request().Method == "INVITE" && tx.Request().To().Params.Has("tag") {
+	//       // Это re-INVITE
+	//       tx.Accept()
+	//     }
+	//   })
 	OnRequestHandler(handler func(IServerTX))
 	// OnTerminate устанавливает обработчик для события завершения диалога
 	OnTerminate(handler func())

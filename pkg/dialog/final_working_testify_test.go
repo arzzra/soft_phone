@@ -41,7 +41,7 @@ func TestSimpleDialogOperations(t *testing.T) {
 	assert.NotEmpty(t, d.ID(), "Dialog should have ID")
 	assert.NotZero(t, d.CreatedAt(), "Dialog should have creation time")
 	assert.NotNil(t, d.Context(), "Dialog should have context")
-	
+
 	// Проверяем sequence numbers
 	assert.GreaterOrEqual(t, d.LocalSeq(), uint32(0))
 	assert.GreaterOrEqual(t, d.RemoteSeq(), uint32(0))
@@ -82,7 +82,7 @@ func TestDialogCallbacks(t *testing.T) {
 	assert.False(t, stateChanged, "State change not called yet")
 	assert.False(t, byeCalled, "BYE callback not called yet")
 	assert.False(t, terminateCalled, "Terminate callback not called yet")
-	
+
 	t.Log("All callbacks registered successfully")
 }
 
@@ -148,14 +148,14 @@ func TestSimpleCall(t *testing.T) {
 
 	// Настраиваем обработчик для UA2
 	callReceived := make(chan bool, 1)
-	
+
 	ua2.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
 		t.Log("UA2: Received INVITE")
-		
+
 		// Принимаем звонок
 		err := tx.Accept()
 		assert.NoError(t, err)
-		
+
 		// Ждем ACK
 		go func() {
 			_ = tx.WaitAck()
@@ -256,19 +256,23 @@ func TestReInviteOnEstablishedCall(t *testing.T) {
 
 	// Обработчик для UA2
 	ua2.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
+		// Устанавливаем обработчик для всех запросов внутри диалога (включая re-INVITE)
+		d.OnRequestHandler(func(tx dialog.IServerTX) {
+			req := tx.Request()
+			// Проверяем, является ли это re-INVITE (INVITE с To tag)
+			if req.Method == "INVITE" && req.To().Params.Has("tag") {
+				t.Log("UA2: re-INVITE received")
+				err := tx.Accept()
+				assert.NoError(t, err)
+				reInviteReceived <- true
+			}
+		})
+
 		_ = tx.Accept()
 		go func() {
 			_ = tx.WaitAck()
 			callReady <- true
 		}()
-	})
-
-	// Обработчик re-INVITE
-	ua2.OnReInvite(func(d dialog.IDialog, tx dialog.IServerTX) {
-		t.Log("UA2: re-INVITE received")
-		err := tx.Accept()
-		assert.NoError(t, err)
-		reInviteReceived <- true
 	})
 
 	// Устанавливаем звонок
@@ -308,4 +312,3 @@ func TestReInviteOnEstablishedCall(t *testing.T) {
 	// Завершаем
 	_ = d1.Terminate()
 }
-

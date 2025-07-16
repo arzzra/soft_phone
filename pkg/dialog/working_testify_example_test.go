@@ -215,6 +215,19 @@ func TestReInviteSupport(t *testing.T) {
 	// Обработчик для UA2
 	ua2.OnIncomingCall(func(d dialog.IDialog, tx dialog.IServerTX) {
 		time.Sleep(500 * time.Millisecond)
+
+		// Устанавливаем обработчик для всех запросов внутри диалога (включая re-INVITE)
+		d.OnRequestHandler(func(tx dialog.IServerTX) {
+			req := tx.Request()
+			// Проверяем, является ли это re-INVITE (INVITE с To tag)
+			if req.Method == "INVITE" && req.To().Params.Has("tag") {
+				t.Log("UA2: re-INVITE received")
+				err := tx.Accept(dialog.ResponseWithSDP(generateTestSDP(24002)))
+				assert.NoError(t, err)
+				reInviteReceived <- true
+			}
+		})
+
 		// Отправляем предварительный ответ
 		_ = tx.Provisional(180, "Ringing")
 		// Затем принимаем звонок
@@ -223,14 +236,6 @@ func TestReInviteSupport(t *testing.T) {
 			_ = tx.WaitAck()
 			callReady <- true
 		}()
-	})
-
-	// Обработчик re-INVITE
-	ua2.OnReInvite(func(d dialog.IDialog, tx dialog.IServerTX) {
-		t.Log("UA2: re-INVITE received")
-		err := tx.Accept(dialog.ResponseWithSDP(generateTestSDP(24002)))
-		assert.NoError(t, err)
-		reInviteReceived <- true
 	})
 
 	// Устанавливаем звонок

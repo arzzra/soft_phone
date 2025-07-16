@@ -52,8 +52,6 @@ type UACUAS struct {
 	// profile - дефолтный профиль для контакта при исходящих вызовах
 	profile Profile
 	cb      OnIncomingCall
-	// onReInvite - колбэк для обработки re-INVITE запросов
-	onReInvite OnIncomingCall
 	// registrations - хранилище регистраций SIP пользователей
 	registrations map[string]*Registration
 
@@ -304,11 +302,6 @@ func (u *UACUAS) createDefaultDialog() *Dialog {
 // OnIncomingCall устанавливает обработчик для входящих вызовов
 func (u *UACUAS) OnIncomingCall(handler OnIncomingCall) {
 	u.cb = handler
-}
-
-// OnReInvite устанавливает обработчик для re-INVITE запросов
-func (u *UACUAS) OnReInvite(handler OnIncomingCall) {
-	u.onReInvite = handler
 }
 
 // Stop корректно останавливает UACUAS и все связанные компоненты.
