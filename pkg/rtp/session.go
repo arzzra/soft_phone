@@ -700,7 +700,5 @@ func generateRandomUint32() uint32 {
 //
 // Примечание: Обработчик заменяет предыдущий, если был установлен
 func (s *Session) RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr)) {
-	if s.rtpSession != nil {
-		s.rtpSession.RegisterIncomingHandler(handler)
-	}
+	s.onPacketReceived = handler
 }

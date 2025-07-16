@@ -18,7 +18,7 @@ type SDPMediaBuilder interface {
 	ProcessAnswer(answer *sdp.SessionDescription) error
 
 	// GetMediaSession возвращает созданную медиа сессию
-	GetMediaSession() *media.MediaSession
+	GetMediaSession() media.Session
 
 	// GetRTPSession возвращает созданную RTP сессию
 	GetRTPSession() rtp.SessionRTP
@@ -39,7 +39,7 @@ type SDPMediaHandler interface {
 	CreateAnswer() (*sdp.SessionDescription, error)
 
 	// GetMediaSession возвращает созданную медиа сессию
-	GetMediaSession() *media.MediaSession
+	GetMediaSession() media.Session
 
 	// GetRTPSession возвращает созданную RTP сессию
 	GetRTPSession() rtp.SessionRTP
@@ -106,7 +106,7 @@ func WrapSDPError(code SDPErrorCode, sessionID string, err error, format string,
 func (e *SDPError) Error() string {
 	msg := fmt.Sprintf("SDP Error [%d]: %s", e.Code, e.Message)
 	if e.SessionID != "" {
-		msg += fmt.Sprintf(" (Session: %s)", e.SessionID)
+		msg += fmt.Sprintf(" (SessionRTP: %s)", e.SessionID)
 	}
 	if e.Wrapped != nil {
 		msg += fmt.Sprintf(" - Wrapped: %v", e.Wrapped)

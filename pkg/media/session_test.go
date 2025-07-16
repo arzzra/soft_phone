@@ -16,14 +16,14 @@ import (
 func TestMediaSessionCreation(t *testing.T) {
 	tests := []struct {
 		name          string
-		config        MediaSessionConfig
+		config        SessionConfig
 		expectError   bool
-		expectedState MediaSessionState
+		expectedState SessionState
 		description   string
 	}{
 		{
 			name: "Стандартная конфигурация PCMU",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:   "test-session-pcmu",
 				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
@@ -35,7 +35,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Конфигурация G.722 с jitter buffer",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:        "test-session-g722",
 				Direction:        DirectionSendRecv,
 				Ptime:            time.Millisecond * 20,
@@ -50,7 +50,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Конфигурация с DTMF поддержкой",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:       "test-session-dtmf",
 				Direction:       DirectionSendRecv,
 				Ptime:           time.Millisecond * 20,
@@ -64,7 +64,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Конфигурация только для отправки",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:   "test-session-sendonly",
 				Direction:   DirectionSendOnly,
 				Ptime:       time.Millisecond * 30,
@@ -76,7 +76,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Пустой SessionID",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
 				PayloadType: PayloadTypePCMU,
@@ -86,7 +86,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Неподдерживаемый payload type",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:   "test-session-invalid",
 				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
@@ -432,7 +432,7 @@ func TestRTPTiming(t *testing.T) {
 // Проверяет поведение согласно SDP атрибутам: sendrecv, sendonly, recvonly, inactive
 func TestMediaDirections(t *testing.T) {
 	directions := []struct {
-		direction   MediaDirection
+		direction   Direction
 		canSend     bool
 		canReceive  bool
 		description string

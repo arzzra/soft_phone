@@ -487,7 +487,7 @@ func verifyStatistics(t *testing.T, caller media_sdp.SDPMediaBuilder, callee med
 			calleeStats.DTMFEventsSent, calleeStats.DTMFEventsReceived)
 	}
 
-	// Получаем RTP статистику (с type assertion для конкретного типа Session)
+	// Получаем RTP статистику (с type assertion для конкретного типа SessionRTP)
 	if callerSession, ok := callerRTP.(*rtp.Session); ok {
 		callerRTPStats := callerSession.GetStatistics()
 		t.Logf("Caller RTP Stats: %+v", callerRTPStats)

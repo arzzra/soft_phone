@@ -14,7 +14,7 @@ import (
 // sdpMediaBuilder реализует интерфейс SDPMediaBuilder
 type sdpMediaBuilder struct {
 	config        BuilderConfig
-	mediaSession  *media.MediaSession
+	mediaSession  media.Session
 	rtpSession    rtp.SessionRTP
 	transportPair *rtp.TransportPair
 	started       bool
@@ -268,7 +268,7 @@ func (b *sdpMediaBuilder) buildDTMFAttributes() []sdp.Attribute {
 }
 
 // GetMediaSession возвращает созданную медиа сессию
-func (b *sdpMediaBuilder) GetMediaSession() *media.MediaSession {
+func (b *sdpMediaBuilder) GetMediaSession() media.Session {
 	return b.mediaSession
 }
 

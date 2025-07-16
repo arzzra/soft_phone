@@ -489,7 +489,7 @@ func TestComplexScenarios(t *testing.T) {
 		mediaStats := session.GetStatistics()
 		rtpStats := mockRTP.GetStatistics()
 
-		t.Logf("MediaSession статистика: аудио пакетов отправлено=%d, байт=%d",
+		t.Logf("session статистика: аудио пакетов отправлено=%d, байт=%d",
 			mediaStats.AudioPacketsSent, mediaStats.AudioBytesSent)
 
 		if statsMap, ok := rtpStats.(map[string]interface{}); ok {

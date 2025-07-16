@@ -45,7 +45,7 @@ func TestSessionRTPIntegration(t *testing.T) {
 			t.Fatalf("Ошибка запуска сессии: %v", err)
 		}
 
-		// После запуска MediaSession mock должен стать активным
+		// После запуска session mock должен стать активным
 		if mockRTP.GetState() != 1 {
 			t.Error("После запуска состояние должно быть 1 (активно)")
 		}
@@ -179,7 +179,7 @@ func TestSessionRTPErrorHandling(t *testing.T) {
 		mockRTP.SetFailureMode(true, false, false)
 
 		err = session.Start()
-		// MediaSession может успешно запуститься даже если RTP сессия не запустилась
+		// session может успешно запуститься даже если RTP сессия не запустилась
 		// но в логах должна быть ошибка
 
 		// Сбрасываем режим ошибки
@@ -193,7 +193,7 @@ func TestSessionRTPErrorHandling(t *testing.T) {
 		audioData := generateTestAudioData(StandardPCMSamples20ms)
 		err = session.SendAudio(audioData)
 
-		// MediaSession должна обрабатывать ошибки отправки
+		// session должна обрабатывать ошибки отправки
 		if err != nil {
 			t.Logf("Ожидаемая ошибка отправки: %v", err)
 		}

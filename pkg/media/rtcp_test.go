@@ -319,14 +319,14 @@ func (m *MockRTCPReport) Marshal() ([]byte, error) {
 func TestMediaSessionCreationAdvanced(t *testing.T) {
 	tests := []struct {
 		name          string
-		config        MediaSessionConfig
+		config        SessionConfig
 		expectError   bool
-		expectedState MediaSessionState
+		expectedState SessionState
 		description   string
 	}{
 		{
 			name: "Стандартная конфигурация PCMU с RTCP",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:    "test-session-pcmu-rtcp",
 				Direction:    DirectionSendRecv,
 				Ptime:        time.Millisecond * 20,
@@ -340,7 +340,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "G.722 с jitter buffer и DTMF",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:        "test-session-g722-full",
 				Direction:        DirectionSendRecv,
 				Ptime:            time.Millisecond * 20,
@@ -357,7 +357,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "Только прием с большим jitter buffer",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:        "test-session-recvonly",
 				Direction:        DirectionRecvOnly,
 				Ptime:            time.Millisecond * 30,
@@ -372,7 +372,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "Низкая задержка G.729",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:        "test-session-g729-lowdelay",
 				Direction:        DirectionSendRecv,
 				Ptime:            time.Millisecond * 10,
@@ -387,7 +387,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "Пустой SessionID должен вызывать ошибку",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
 				PayloadType: PayloadTypePCMU,
@@ -397,7 +397,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "Отрицательный ptime должен вызывать ошибку",
-			config: MediaSessionConfig{
+			config: SessionConfig{
 				SessionID:   "test-session-negative-ptime",
 				Direction:   DirectionSendRecv,
 				Ptime:       -time.Millisecond * 20,

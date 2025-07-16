@@ -96,7 +96,7 @@ func ExampleErrorHandling() error {
 }
 
 // testRecoverableErrors демонстрирует работу с восстанавливаемыми ошибками
-func testRecoverableErrors(session *MediaSession) {
+func testRecoverableErrors(session *session) {
 	// Симулируем различные типы ошибок
 	testErrors := []error{
 		NewRTPError(ErrorCodeRTPSendFailed, session.sessionID, "test-rtp", "временная ошибка сети", 12345, 100, 8000),

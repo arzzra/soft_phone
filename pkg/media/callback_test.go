@@ -392,7 +392,7 @@ func TestErrorCallbacks(t *testing.T) {
 
 		// Отправляем аудио, что должно вызвать ошибку
 		err = session.SendAudio(audioData)
-		// MediaSession может обрабатывать ошибки внутренне
+		// session может обрабатывать ошибки внутренне
 
 		// Даем время для обработки
 		time.Sleep(time.Millisecond * 100)

@@ -27,12 +27,12 @@ type RTCPReport interface {
 	Marshal() ([]byte, error)
 }
 
-// MediaSessionInterface определяет интерфейс для медиа сессии софтфона
-// Этот интерфейс включает все публичные методы MediaSession для обеспечения
+// Session определяет интерфейс для медиа сессии софтфона
+// Этот интерфейс включает все публичные методы session для обеспечения
 // модульности и возможности тестирования
-type MediaSessionInterface interface {
+type Session interface {
 	// Управление RTP сессиями
-	AddRTPSession(rtpSessionID string, rtpSession Session) error
+	AddRTPSession(rtpSessionID string, rtpSession SessionRTP) error
 	RemoveRTPSession(rtpSessionID string) error
 
 	// Управление жизненным циклом сессии
@@ -43,7 +43,6 @@ type MediaSessionInterface interface {
 	SendAudio(audioData []byte) error
 	SendAudioRaw(encodedData []byte) error
 	SendAudioWithFormat(audioData []byte, payloadType PayloadType, skipProcessing bool) error
-	WriteAudioDirect(rtpPayload []byte) error
 
 	// DTMF функции
 	SendDTMF(digit DTMFDigit, duration time.Duration) error
@@ -51,13 +50,13 @@ type MediaSessionInterface interface {
 	// Конфигурация и настройки
 	SetPtime(ptime time.Duration) error
 	EnableJitterBuffer(enabled bool) error
-	SetDirection(direction MediaDirection) error
+	SetDirection(direction Direction) error
 	SetPayloadType(payloadType PayloadType) error
 	EnableSilenceSuppression(enabled bool)
 
 	// Получение состояния и параметров
-	GetState() MediaSessionState
-	GetDirection() MediaDirection
+	GetState() SessionState
+	GetDirection() Direction
 	GetPtime() time.Duration
 	GetStatistics() MediaStatistics
 	GetPayloadType() PayloadType
@@ -74,6 +73,9 @@ type MediaSessionInterface interface {
 	ClearRawPacketHandler()
 	HasRawPacketHandler() bool
 
+	// Обработка входящих RTP пакетов
+	HandleIncomingRTPPacket(packet *rtp.Packet)
+
 	// RTCP поддержка (опциональная)
 	EnableRTCP(enabled bool) error
 	IsRTCPEnabled() bool
@@ -83,4 +85,21 @@ type MediaSessionInterface interface {
 	SetRTCPHandler(handler func(RTCPReport))
 	ClearRTCPHandler()
 	HasRTCPHandler() bool
+
+	// Обработчики событий
+	SetAudioReceivedHandler(handler func([]byte, PayloadType, time.Duration, string))
+	ClearAudioReceivedHandler()
+	HasAudioReceivedHandler() bool
+
+	SetRawAudioReceivedHandler(handler func([]byte, PayloadType, time.Duration, string))
+	ClearRawAudioReceivedHandler()
+	HasRawAudioReceivedHandler() bool
+
+	SetDTMFReceivedHandler(handler func(DTMFEvent, string))
+	ClearDTMFReceivedHandler()
+	HasDTMFReceivedHandler() bool
+
+	SetMediaErrorHandler(handler func(error, string))
+	ClearMediaErrorHandler()
+	HasMediaErrorHandler() bool
 }

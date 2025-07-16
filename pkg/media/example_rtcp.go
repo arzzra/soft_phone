@@ -68,7 +68,7 @@ func handleRTCPReport(report RTCPReport) {
 }
 
 // demonstrateRTCPFeatures демонстрирует различные возможности RTCP
-func demonstrateRTCPFeatures(ms *MediaSession) {
+func demonstrateRTCPFeatures(ms *session) {
 	fmt.Println("\n=== Демонстрация RTCP возможностей ===")
 
 	// 1. Проверяем текущую статистику

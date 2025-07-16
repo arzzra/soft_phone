@@ -43,13 +43,13 @@ type BuilderConfig struct {
 	PayloadType rtp.PayloadType
 	ClockRate   uint32
 	Ptime       time.Duration
-	Direction   media.MediaDirection
+	Direction   media.Direction
 
 	// Транспорт
 	Transport TransportConfig
 
 	// Медиа сессия настройки
-	MediaConfig media.MediaSessionConfig
+	MediaConfig media.SessionConfig
 
 	// Дополнительные SDP атрибуты
 	CustomAttributes map[string]string
@@ -73,7 +73,7 @@ type HandlerConfig struct {
 	Transport TransportConfig
 
 	// Медиа сессия настройки
-	MediaConfig media.MediaSessionConfig
+	MediaConfig media.SessionConfig
 
 	// DTMF поддержка
 	DTMFEnabled     bool

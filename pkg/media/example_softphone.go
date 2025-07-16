@@ -384,7 +384,7 @@ func ExampleMediaDirections() error {
 	fmt.Println("\n=== Пример: Режимы работы медиа ===")
 
 	// Тестируем все режимы
-	directions := []MediaDirection{
+	directions := []Direction{
 		DirectionSendRecv,
 		DirectionSendOnly,
 		DirectionRecvOnly,

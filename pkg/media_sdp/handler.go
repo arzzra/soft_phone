@@ -19,12 +19,12 @@ type sdpMediaHandler struct {
 	processedOffer  *sdp.SessionDescription
 	selectedCodec   CodecInfo
 	remoteAddr      string
-	direction       media.MediaDirection
+	direction       media.Direction
 	ptime           time.Duration
 	dtmfEnabled     bool
 	dtmfPayloadType uint8
 
-	mediaSession  *media.MediaSession
+	mediaSession  media.Session
 	rtpSession    rtp.SessionRTP
 	transportPair *rtp.TransportPair
 	started       bool
@@ -468,7 +468,7 @@ func (h *sdpMediaHandler) buildAnswerDTMFAttributes() []sdp.Attribute {
 }
 
 // GetMediaSession возвращает созданную медиа сессию
-func (h *sdpMediaHandler) GetMediaSession() *media.MediaSession {
+func (h *sdpMediaHandler) GetMediaSession() media.Session {
 	return h.mediaSession
 }
 
