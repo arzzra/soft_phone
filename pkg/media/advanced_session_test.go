@@ -17,7 +17,7 @@ func TestSessionRTPIntegration(t *testing.T) {
 	config.SessionID = "test-sessionrtp-integration"
 	config.PayloadType = PayloadTypePCMU
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSessionRTPRTCPFeatures(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-sessionrtp-rtcp"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestSessionRTPErrorHandling(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-sessionrtp-errors"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestSessionRTPConcurrency(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-sessionrtp-concurrency"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestSessionRTPMultipleInstances(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-multiple-sessionrtp"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestSessionRTPCallbacks(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-sessionrtp-callbacks"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestSessionRTPNetworkSimulation(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-sessionrtp-network"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}

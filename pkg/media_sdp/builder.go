@@ -108,7 +108,7 @@ func (b *sdpMediaBuilder) createMediaSession() error {
 	mediaConfig.DTMFPayloadType = b.config.DTMFPayloadType
 
 	// Создаем медиа сессию
-	mediaSession, err := media.NewMediaSession(mediaConfig)
+	mediaSession, err := media.NewSession(mediaConfig)
 	if err != nil {
 		return WrapSDPError(ErrorCodeMediaSessionCreation, b.config.SessionID, err,
 			"Не удалось создать медиа сессию")

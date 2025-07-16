@@ -13,24 +13,24 @@ import (
 )
 
 // Проверка на соответствие интерфейсу во время компиляции
-var _ MediaSessionInterface = (*MediaSession)(nil)
+var _ Session = (*MediaSession)(nil)
 
 // rtpPkg заменяет импорт ../rtp для использования локальных типов
 type PayloadType = uint8
 
-// Session является алиасом для SessionRTP интерфейса из пакета rtp.
+// SessionRTP является алиасом для SessionRTP интерфейса из пакета rtp.
 // Представляет абстракцию RTP транспорта для отправки и приема медиа данных.
-// Каждая Session управляет одним RTP потоком с определенным SSRC.
+// Каждая SessionRTP управляет одним RTP потоком с определенным SSRC.
 //
-// Интерфейс Session предоставляет:
+// Интерфейс SessionRTP предоставляет:
 //   - Управление жизненным циклом RTP сессии (Start/Stop)
 //   - Отправку аудио данных и RTP пакетов
 //   - Получение статистики и состояния сессии
 //   - RTCP функциональность для мониторинга качества связи
 //
-// MediaSession может управлять несколькими Session одновременно для
+// MediaSession может управлять несколькими SessionRTP одновременно для
 // поддержки различных сценариев (основной/резервный каналы, разные кодеки).
-type Session = rtpPkg.SessionRTP
+type SessionRTP = rtpPkg.SessionRTP
 
 // Константы для размеров аудио пакетов
 const (
@@ -56,18 +56,18 @@ const (
 	PayloadTypeG729 = PayloadType(18) // G.729
 )
 
-// MediaDirection определяет направление медиа потока согласно атрибутам SDP (RFC 4566).
+// Direction определяет направление медиа потока согласно атрибутам SDP (RFC 4566).
 // Используется для управления отправкой и приемом медиа данных в сессии.
-type MediaDirection int
+type Direction int
 
 const (
-	DirectionSendRecv MediaDirection = iota // Отправка и прием
-	DirectionSendOnly                       // Только отправка
-	DirectionRecvOnly                       // Только прием
-	DirectionInactive                       // Неактивно
+	DirectionSendRecv Direction = iota // Отправка и прием
+	DirectionSendOnly                  // Только отправка
+	DirectionRecvOnly                  // Только прием
+	DirectionInactive                  // Неактивно
 )
 
-func (d MediaDirection) String() string {
+func (d Direction) String() string {
 	switch d {
 	case DirectionSendRecv:
 		return "sendrecv"
@@ -82,18 +82,18 @@ func (d MediaDirection) String() string {
 	}
 }
 
-// MediaSessionState представляет текущее состояние медиа сессии.
+// SessionState представляет текущее состояние медиа сессии.
 // Сессия проходит через различные состояния в течение своего жизненного цикла.
-type MediaSessionState int
+type SessionState int
 
 const (
-	MediaStateIdle MediaSessionState = iota
+	MediaStateIdle SessionState = iota
 	MediaStateActive
 	MediaStatePaused
 	MediaStateClosed
 )
 
-func (s MediaSessionState) String() string {
+func (s SessionState) String() string {
 	switch s {
 	case MediaStateIdle:
 		return "idle"
@@ -124,7 +124,7 @@ func (s MediaSessionState) String() string {
 //	config.SessionID = "call-123"
 //	config.PayloadType = PayloadTypePCMU
 //
-//	session, err := NewMediaSession(config)
+//	session, err := NewSession(config)
 //	if err != nil {
 //	    return err
 //	}
@@ -145,12 +145,12 @@ func (s MediaSessionState) String() string {
 type MediaSession struct {
 	// Основные параметры
 	sessionID   string
-	direction   MediaDirection
+	direction   Direction
 	ptime       time.Duration // Packet time (длительность одного пакета)
 	payloadType PayloadType
 
 	// RTP сессии (может быть несколько для разных кодеков)
-	rtpSessions   map[string]Session
+	rtpSessions   map[string]SessionRTP
 	sessionsMutex sync.RWMutex
 
 	// Управление RTP потоком и timing
@@ -163,7 +163,7 @@ type MediaSession struct {
 	stopChan         chan struct{} // Канал для остановки
 
 	// Состояние
-	state      MediaSessionState
+	state      SessionState
 	stateMutex sync.RWMutex
 
 	// Jitter buffer
@@ -192,7 +192,7 @@ type MediaSession struct {
 	wg     sync.WaitGroup
 
 	// Статистика
-	stats      MediaStatistics
+	stats      Statistics
 	statsMutex sync.RWMutex
 
 	// RTCP поддержка (опциональная)
@@ -204,12 +204,12 @@ type MediaSession struct {
 	lastRTCPSent   time.Time
 }
 
-// MediaSessionConfig содержит параметры конфигурации для создания MediaSession.
+// Config содержит параметры конфигурации для создания MediaSession.
 // Все поля являются опциональными, кроме SessionID.
 //
 // Пример конфигурации:
 //
-//	config := MediaSessionConfig{
+//	config := Config{
 //	    SessionID:   "call-456",
 //	    Direction:   DirectionSendRecv,
 //	    PayloadType: PayloadTypePCMU,
@@ -232,9 +232,9 @@ type MediaSession struct {
 //	        fmt.Printf("DTMF: %s\n", event.Digit)
 //	    },
 //	}
-type MediaSessionConfig struct {
+type Config struct {
 	SessionID   string
-	Direction   MediaDirection
+	Direction   Direction
 	Ptime       time.Duration // Packet time (по умолчанию 20ms)
 	PayloadType PayloadType   // Основной payload type
 
@@ -260,7 +260,7 @@ type MediaSessionConfig struct {
 	OnRTCPReport func(RTCPReport) // Callback для обработки RTCP отчетов
 }
 
-// MediaStatistics содержит статистику работы медиа сессии.
+// Statistics содержит статистику работы медиа сессии.
 // Обновляется в реальном времени во время работы сессии.
 //
 // Статистика включает:
@@ -269,7 +269,7 @@ type MediaSessionConfig struct {
 //   - Параметры jitter buffer
 //   - Метрики качества связи (packet loss rate)
 //   - Время последней активности
-type MediaStatistics struct {
+type Statistics struct {
 	AudioPacketsSent     uint64
 	AudioPacketsReceived uint64
 	AudioBytesSent       uint64
@@ -283,8 +283,8 @@ type MediaStatistics struct {
 }
 
 // DefaultMediaSessionConfig возвращает конфигурацию по умолчанию
-func DefaultMediaSessionConfig() MediaSessionConfig {
-	return MediaSessionConfig{
+func DefaultMediaSessionConfig() Config {
+	return Config{
 		Direction:        DirectionSendRecv,
 		Ptime:            time.Millisecond * 20, // Стандарт для телефонии
 		PayloadType:      PayloadTypePCMU,
@@ -298,8 +298,8 @@ func DefaultMediaSessionConfig() MediaSessionConfig {
 	}
 }
 
-// NewMediaSession создает новую медиа сессию
-func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
+// NewSession создает новую медиа сессию
+func NewSession(config Config) (*MediaSession, error) {
 	if config.SessionID == "" {
 		return nil, &MediaError{
 			Code:    ErrorCodeSessionInvalidConfig,
@@ -350,7 +350,7 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 		direction:        config.Direction,
 		ptime:            config.Ptime,
 		payloadType:      config.PayloadType,
-		rtpSessions:      make(map[string]Session),
+		rtpSessions:      make(map[string]SessionRTP),
 		state:            MediaStateIdle,
 		jitterEnabled:    config.JitterEnabled,
 		dtmfEnabled:      config.DTMFEnabled,
@@ -420,7 +420,7 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 //
 // Параметры:
 //   - rtpSessionID: уникальный идентификатор RTP сессии в рамках медиа сессии
-//   - rtpSession: объект, реализующий интерфейс Session (SessionRTP)
+//   - rtpSession: объект, реализующий интерфейс SessionRTP (SessionRTP)
 //
 // Возвращает ошибку если:
 //   - RTP сессия с таким ID уже существует
@@ -438,7 +438,7 @@ func NewMediaSession(config MediaSessionConfig) (*MediaSession, error) {
 //	// Добавление резервной сессии
 //	backupRTP := createRTPSession("192.168.1.100", 5006)
 //	err = mediaSession.AddRTPSession("backup", backupRTP)
-func (ms *MediaSession) AddRTPSession(rtpSessionID string, rtpSession Session) error {
+func (ms *MediaSession) AddRTPSession(rtpSessionID string, rtpSession SessionRTP) error {
 	ms.sessionsMutex.Lock()
 	defer ms.sessionsMutex.Unlock()
 
@@ -970,7 +970,7 @@ func (ms *MediaSession) SetPtime(ptime time.Duration) error {
 func (ms *MediaSession) EnableJitterBuffer(enabled bool) error {
 	ms.stateMutex.Lock()
 	defer ms.stateMutex.Unlock()
-	
+
 	ms.jitterEnabled = enabled
 
 	if enabled && ms.jitterBuffer == nil {
@@ -992,14 +992,14 @@ func (ms *MediaSession) EnableJitterBuffer(enabled bool) error {
 }
 
 // GetState возвращает текущее состояние
-func (ms *MediaSession) GetState() MediaSessionState {
+func (ms *MediaSession) GetState() SessionState {
 	ms.stateMutex.RLock()
 	defer ms.stateMutex.RUnlock()
 	return ms.state
 }
 
 // SetDirection изменяет направление медиа потока
-func (ms *MediaSession) SetDirection(direction MediaDirection) error {
+func (ms *MediaSession) SetDirection(direction Direction) error {
 	ms.stateMutex.Lock()
 	defer ms.stateMutex.Unlock()
 	ms.direction = direction
@@ -1007,7 +1007,7 @@ func (ms *MediaSession) SetDirection(direction MediaDirection) error {
 }
 
 // GetDirection возвращает направление медиа потока
-func (ms *MediaSession) GetDirection() MediaDirection {
+func (ms *MediaSession) GetDirection() Direction {
 	return ms.direction
 }
 
@@ -1017,7 +1017,7 @@ func (ms *MediaSession) GetPtime() time.Duration {
 }
 
 // GetStatistics возвращает статистику медиа сессии
-func (ms *MediaSession) GetStatistics() MediaStatistics {
+func (ms *MediaSession) GetStatistics() Statistics {
 	ms.statsMutex.RLock()
 	defer ms.statsMutex.RUnlock()
 	return ms.stats
@@ -1199,7 +1199,7 @@ func (ms *MediaSession) audioSendLoop() {
 	ms.stateMutex.RLock()
 	ticker := ms.sendTicker
 	ms.stateMutex.RUnlock()
-	
+
 	if ticker == nil {
 		return
 	}
@@ -1498,7 +1498,6 @@ func (ms *MediaSession) processIncomingPacketWithID(packet *rtp.Packet, rtpSessi
 	ms.processDecodedPacketWithID(packet, rtpSessionID)
 }
 
-
 // processDecodedPacketWithID обрабатывает аудио пакет с декодированием и ID сессии
 func (ms *MediaSession) processDecodedPacketWithID(packet *rtp.Packet, rtpSessionID string) {
 	// Проверяем payload type - должен соответствовать нашему аудио кодеку
@@ -1555,7 +1554,7 @@ func (ms *MediaSession) updateAudioProcessorStats() {
 	ms.statsMutex.Unlock()
 }
 
-// RTCP методы для реализации MediaSessionInterface
+// RTCP методы для реализации Session
 
 // EnableRTCP включает/отключает поддержку RTCP
 func (ms *MediaSession) EnableRTCP(enabled bool) error {

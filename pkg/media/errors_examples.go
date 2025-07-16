@@ -99,7 +99,7 @@ func ExampleErrorHandlingAdvanced() {
 		var mediaErr *MediaError
 		if AsMediaError(err, &mediaErr) {
 			fmt.Printf("  Код ошибки: %d\n", mediaErr.Code)
-			fmt.Printf("  Session ID: %s\n", mediaErr.SessionID)
+			fmt.Printf("  SessionRTP ID: %s\n", mediaErr.SessionID)
 		}
 
 		// Проверяем специализированные типы
@@ -320,7 +320,7 @@ func ExampleErrorRecovery() {
 		var mediaErr *MediaError
 		if AsMediaError(err, &mediaErr) {
 			fmt.Printf("🔧 Код ошибки: %d\n", mediaErr.Code)
-			fmt.Printf("📝 Session ID: %s\n", mediaErr.SessionID)
+			fmt.Printf("📝 SessionRTP ID: %s\n", mediaErr.SessionID)
 			fmt.Printf("💬 Сообщение: %s\n", mediaErr.Message)
 		}
 	}

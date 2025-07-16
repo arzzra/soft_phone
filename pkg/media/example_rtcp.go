@@ -17,7 +17,7 @@ func ExampleRTCPUsage() error {
 	config.OnRTCPReport = handleRTCPReport // Обработчик RTCP отчетов
 
 	// Создаем медиа сессию
-	mediaSession, err := NewMediaSession(config)
+	mediaSession, err := NewSession(config)
 	if err != nil {
 		return fmt.Errorf("ошибка создания медиа сессии: %w", err)
 	}
@@ -206,7 +206,7 @@ func RTCPIntegrationExample() {
 		fmt.Printf("Интеграция: RTCP отчет от SSRC %d\n", report.GetSSRC())
 	}
 
-	mediaSession, err := NewMediaSession(config)
+	mediaSession, err := NewSession(config)
 	if err != nil {
 		log.Printf("Ошибка создания сессии: %v", err)
 		return

@@ -1,4 +1,4 @@
-package functional_test
+package media_builder
 
 import (
 	"fmt"

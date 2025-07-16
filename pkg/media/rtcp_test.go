@@ -13,7 +13,7 @@ func TestRTCPBasicFunctionality(t *testing.T) {
 	config.RTCPEnabled = true
 	config.RTCPInterval = time.Millisecond * 100 // Быстрый интервал для тестов
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestRTCPHandlers(t *testing.T) {
 	config.SessionID = "test-rtcp-handlers"
 	config.RTCPEnabled = true
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestRTCPWithMockSession(t *testing.T) {
 	config.SessionID = "test-rtcp-mock"
 	config.RTCPEnabled = true
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestRTCPConfiguration(t *testing.T) {
 			config.RTCPEnabled = tt.rtcpEnabled
 			config.RTCPInterval = tt.rtcpInterval
 
-			session, err := NewMediaSession(config)
+			session, err := NewSession(config)
 			if tt.expectError && err == nil {
 				t.Error("Ожидалась ошибка, но её не было")
 			} else if !tt.expectError && err != nil {
@@ -197,7 +197,7 @@ func TestRTCPStatisticsUpdate(t *testing.T) {
 	config.SessionID = "test-rtcp-stats"
 	config.RTCPEnabled = true
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestRTCPReportProcessing(t *testing.T) {
 		receivedReports = append(receivedReports, report)
 	}
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
@@ -319,14 +319,14 @@ func (m *MockRTCPReport) Marshal() ([]byte, error) {
 func TestMediaSessionCreationAdvanced(t *testing.T) {
 	tests := []struct {
 		name          string
-		config        MediaSessionConfig
+		config        Config
 		expectError   bool
-		expectedState MediaSessionState
+		expectedState SessionState
 		description   string
 	}{
 		{
 			name: "Стандартная конфигурация PCMU с RTCP",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:    "test-session-pcmu-rtcp",
 				Direction:    DirectionSendRecv,
 				Ptime:        time.Millisecond * 20,
@@ -340,7 +340,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "G.722 с jitter buffer и DTMF",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:        "test-session-g722-full",
 				Direction:        DirectionSendRecv,
 				Ptime:            time.Millisecond * 20,
@@ -357,7 +357,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "Только прием с большим jitter buffer",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:        "test-session-recvonly",
 				Direction:        DirectionRecvOnly,
 				Ptime:            time.Millisecond * 30,
@@ -372,7 +372,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "Низкая задержка G.729",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:        "test-session-g729-lowdelay",
 				Direction:        DirectionSendRecv,
 				Ptime:            time.Millisecond * 10,
@@ -387,7 +387,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "Пустой SessionID должен вызывать ошибку",
-			config: MediaSessionConfig{
+			config: Config{
 				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
 				PayloadType: PayloadTypePCMU,
@@ -397,7 +397,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		},
 		{
 			name: "Отрицательный ptime должен вызывать ошибку",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:   "test-session-negative-ptime",
 				Direction:   DirectionSendRecv,
 				Ptime:       -time.Millisecond * 20,
@@ -412,7 +412,7 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Logf("Тест создания медиа сессии: %s", tt.description)
 
-			session, err := NewMediaSession(tt.config)
+			session, err := NewSession(tt.config)
 
 			if tt.expectError {
 				if err == nil {
@@ -488,7 +488,7 @@ func TestJitterBufferIntegration(t *testing.T) {
 	config.JitterBufferSize = 20
 	config.JitterDelay = time.Millisecond * 40
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestAudioProcessorIntegration(t *testing.T) {
 			config.SessionID = "test-audio-" + pt.name
 			config.PayloadType = pt.pt
 
-			session, err := NewMediaSession(config)
+			session, err := NewSession(config)
 			if err != nil {
 				t.Fatalf("Ошибка создания сессии для %s: %v", pt.name, err)
 			}
@@ -632,7 +632,7 @@ func TestDTMFHandling(t *testing.T) {
 	config.DTMFEnabled = true
 	config.DTMFPayloadType = 101
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -698,7 +698,7 @@ func TestMultipleRTPSessions(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-multiple-rtp"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -777,7 +777,7 @@ func BenchmarkRTCPOperations(b *testing.B) {
 	config.SessionID = "benchmark-rtcp"
 	config.RTCPEnabled = true
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		b.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
@@ -814,7 +814,7 @@ func BenchmarkAudioProcessing(b *testing.B) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "benchmark-audio"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		b.Fatalf("Ошибка создания сессии: %v", err)
 	}

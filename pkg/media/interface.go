@@ -27,12 +27,12 @@ type RTCPReport interface {
 	Marshal() ([]byte, error)
 }
 
-// MediaSessionInterface определяет интерфейс для медиа сессии софтфона
+// Session определяет интерфейс для медиа сессии софтфона
 // Этот интерфейс включает все публичные методы MediaSession для обеспечения
 // модульности и возможности тестирования
-type MediaSessionInterface interface {
+type Session interface {
 	// Управление RTP сессиями
-	AddRTPSession(rtpSessionID string, rtpSession Session) error
+	AddRTPSession(rtpSessionID string, rtpSession SessionRTP) error
 	RemoveRTPSession(rtpSessionID string) error
 
 	// Управление жизненным циклом сессии
@@ -51,15 +51,15 @@ type MediaSessionInterface interface {
 	// Конфигурация и настройки
 	SetPtime(ptime time.Duration) error
 	EnableJitterBuffer(enabled bool) error
-	SetDirection(direction MediaDirection) error
+	SetDirection(direction Direction) error
 	SetPayloadType(payloadType PayloadType) error
 	EnableSilenceSuppression(enabled bool)
 
 	// Получение состояния и параметров
-	GetState() MediaSessionState
-	GetDirection() MediaDirection
+	GetState() SessionState
+	GetDirection() Direction
 	GetPtime() time.Duration
-	GetStatistics() MediaStatistics
+	GetStatistics() Statistics
 	GetPayloadType() PayloadType
 	GetPayloadTypeName() string
 	GetExpectedPayloadSize() int

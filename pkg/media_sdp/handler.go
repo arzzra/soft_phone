@@ -19,7 +19,7 @@ type sdpMediaHandler struct {
 	processedOffer  *sdp.SessionDescription
 	selectedCodec   CodecInfo
 	remoteAddr      string
-	direction       media.MediaDirection
+	direction       media.Direction
 	ptime           time.Duration
 	dtmfEnabled     bool
 	dtmfPayloadType uint8
@@ -323,7 +323,7 @@ func (h *sdpMediaHandler) createMediaSession() error {
 	mediaConfig.DTMFPayloadType = h.dtmfPayloadType
 
 	// Создаем медиа сессию
-	mediaSession, err := media.NewMediaSession(mediaConfig)
+	mediaSession, err := media.NewSession(mediaConfig)
 	if err != nil {
 		return WrapSDPError(ErrorCodeMediaSessionCreation, h.config.SessionID, err,
 			"Не удалось создать медиа сессию для answer")

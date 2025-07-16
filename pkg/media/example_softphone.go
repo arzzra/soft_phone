@@ -38,7 +38,7 @@ func ExampleBasicMediaSession() error {
 	}
 
 	// Создаем медиа сессию
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		return fmt.Errorf("ошибка создания медиа сессии: %w", err)
 	}
@@ -94,7 +94,7 @@ func ExampleRawAudioSending() error {
 	config.SessionID = "call-raw-audio"
 	config.PayloadType = PayloadTypePCMU
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func ExampleRawPacketHandling() error {
 			len(audioData), payloadType, ptime, rtpSessionID)
 	}
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		return err
 	}
@@ -310,7 +310,7 @@ func ExampleRawPacketHandling() error {
 			packet.SequenceNumber, len(packet.Payload), rtpSessionID)
 	}
 
-	rawSession, err := NewMediaSession(rawConfig)
+	rawSession, err := NewSession(rawConfig)
 	if err != nil {
 		return err
 	}
@@ -355,7 +355,7 @@ func ExampleJitterBufferControl() error {
 	config.JitterBufferSize = 15               // Увеличенный буфер
 	config.JitterDelay = time.Millisecond * 80 // Увеличенная задержка
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		return err
 	}
@@ -384,7 +384,7 @@ func ExampleMediaDirections() error {
 	fmt.Println("\n=== Пример: Режимы работы медиа ===")
 
 	// Тестируем все режимы
-	directions := []MediaDirection{
+	directions := []Direction{
 		DirectionSendRecv,
 		DirectionSendOnly,
 		DirectionRecvOnly,
@@ -398,7 +398,7 @@ func ExampleMediaDirections() error {
 		config.SessionID = fmt.Sprintf("call-%s", direction)
 		config.Direction = direction
 
-		session, err := NewMediaSession(config)
+		session, err := NewSession(config)
 		if err != nil {
 			return err
 		}
@@ -467,7 +467,7 @@ func ExamplePtimeConfiguration() error {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "call-ptime-test"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		return err
 	}
@@ -518,7 +518,7 @@ func ExampleDTMFHandling() error {
 			dtmfReceived, event.Digit.String(), rtpSessionID)
 	}
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		return err
 	}
@@ -588,7 +588,7 @@ func ExampleCodecSupport() error {
 		config.SessionID = fmt.Sprintf("call-%s", codec.name)
 		config.PayloadType = codec.payloadType
 
-		session, err := NewMediaSession(config)
+		session, err := NewSession(config)
 		if err != nil {
 			fmt.Printf("  Ошибка создания сессии: %v\n", err)
 			continue
@@ -628,7 +628,7 @@ func ExampleMultipleRTPSessions() error {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "call-multi-rtp"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		return err
 	}

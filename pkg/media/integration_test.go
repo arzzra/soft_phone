@@ -17,7 +17,7 @@ func TestJitterBufferAdvancedIntegration(t *testing.T) {
 	config.JitterBufferSize = 10
 	config.JitterDelay = time.Millisecond * 40
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestAudioProcessorAdvancedIntegration(t *testing.T) {
 	config.SessionID = "test-audio-processor-integration"
 	config.PayloadType = PayloadTypePCMU
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestDTMFIntegration(t *testing.T) {
 	config.DTMFEnabled = true
 	config.DTMFPayloadType = DTMFPayloadTypeRFC
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestComplexScenarios(t *testing.T) {
 		config.DTMFEnabled = true
 		config.DTMFPayloadType = DTMFPayloadTypeRFC
 
-		session, err := NewMediaSession(config)
+		session, err := NewSession(config)
 		if err != nil {
 			t.Fatalf("Ошибка создания сессии: %v", err)
 		}

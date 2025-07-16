@@ -16,14 +16,14 @@ import (
 func TestMediaSessionCreation(t *testing.T) {
 	tests := []struct {
 		name          string
-		config        MediaSessionConfig
+		config        Config
 		expectError   bool
-		expectedState MediaSessionState
+		expectedState SessionState
 		description   string
 	}{
 		{
 			name: "Стандартная конфигурация PCMU",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:   "test-session-pcmu",
 				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
@@ -35,7 +35,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Конфигурация G.722 с jitter buffer",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:        "test-session-g722",
 				Direction:        DirectionSendRecv,
 				Ptime:            time.Millisecond * 20,
@@ -50,7 +50,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Конфигурация с DTMF поддержкой",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:       "test-session-dtmf",
 				Direction:       DirectionSendRecv,
 				Ptime:           time.Millisecond * 20,
@@ -64,7 +64,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Конфигурация только для отправки",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:   "test-session-sendonly",
 				Direction:   DirectionSendOnly,
 				Ptime:       time.Millisecond * 30,
@@ -76,7 +76,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Пустой SessionID",
-			config: MediaSessionConfig{
+			config: Config{
 				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
 				PayloadType: PayloadTypePCMU,
@@ -86,7 +86,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		},
 		{
 			name: "Неподдерживаемый payload type",
-			config: MediaSessionConfig{
+			config: Config{
 				SessionID:   "test-session-invalid",
 				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
@@ -101,7 +101,7 @@ func TestMediaSessionCreation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Logf("Тест: %s", tt.description)
 
-			session, err := NewMediaSession(tt.config)
+			session, err := NewSession(tt.config)
 
 			if tt.expectError {
 				if err == nil {
@@ -163,7 +163,7 @@ func TestMediaSessionLifecycle(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-lifecycle"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestAudioSending(t *testing.T) {
 	config.Ptime = time.Millisecond * 20 // 20ms пакеты
 	config.PayloadType = PayloadTypePCMU
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestRTPTiming(t *testing.T) {
 			config.Ptime = tt.ptime
 			config.PayloadType = tt.payloadType
 
-			session, err := NewMediaSession(config)
+			session, err := NewSession(config)
 			if err != nil {
 				t.Fatalf("Ошибка создания сессии: %v", err)
 			}
@@ -432,7 +432,7 @@ func TestRTPTiming(t *testing.T) {
 // Проверяет поведение согласно SDP атрибутам: sendrecv, sendonly, recvonly, inactive
 func TestMediaDirections(t *testing.T) {
 	directions := []struct {
-		direction   MediaDirection
+		direction   Direction
 		canSend     bool
 		canReceive  bool
 		description string
@@ -471,7 +471,7 @@ func TestMediaDirections(t *testing.T) {
 			config.SessionID = "test-direction-" + d.direction.String()
 			config.Direction = d.direction
 
-			session, err := NewMediaSession(config)
+			session, err := NewSession(config)
 			if err != nil {
 				t.Fatalf("Ошибка создания сессии: %v", err)
 			}
@@ -552,7 +552,7 @@ func TestPayloadTypes(t *testing.T) {
 			config.SessionID = "test-payload-" + pt.name
 			config.PayloadType = pt.payloadType
 
-			session, err := NewMediaSession(config)
+			session, err := NewSession(config)
 			if err != nil {
 				t.Fatalf("Ошибка создания сессии для %s: %v", pt.name, err)
 			}
@@ -598,7 +598,7 @@ func TestMediaStatistics(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-statistics"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -678,7 +678,7 @@ func BenchmarkAudioSending(b *testing.B) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "benchmark-session"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		b.Fatalf("Ошибка создания сессии: %v", err)
 	}

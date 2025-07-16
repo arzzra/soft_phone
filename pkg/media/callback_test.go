@@ -17,7 +17,7 @@ func TestCallbackSafety(t *testing.T) {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "test-callback-safety"
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRawPacketHandling(t *testing.T) {
 	config.SessionID = "test-raw-packet"
 	config.PayloadType = PayloadTypePCMU
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestDTMFCallbacks(t *testing.T) {
 	config.DTMFEnabled = true
 	config.DTMFPayloadType = DTMFPayloadTypeRFC
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestDTMFCallbacks(t *testing.T) {
 
 		// Пересоздаем сессию с callback
 		session.Stop()
-		session, err = NewMediaSession(config)
+		session, err = NewSession(config)
 		if err != nil {
 			t.Fatalf("Ошибка создания сессии с DTMF callback: %v", err)
 		}
@@ -373,7 +373,7 @@ func TestErrorCallbacks(t *testing.T) {
 		errorMutex.Unlock()
 	}
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}

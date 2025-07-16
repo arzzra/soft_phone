@@ -15,7 +15,7 @@ func ExampleErrorHandling() error {
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "" // Намеренно оставляем пустым для демонстрации ошибки
 
-	session, err := NewMediaSession(config)
+	session, err := NewSession(config)
 	if err != nil {
 		// Демонстрируем новую систему ошибок
 		if HasErrorCode(err, ErrorCodeSessionInvalidConfig) {
@@ -25,7 +25,7 @@ func ExampleErrorHandling() error {
 
 		// Исправляем конфигурацию
 		config.SessionID = "demo-session"
-		session, err = NewMediaSession(config)
+		session, err = NewSession(config)
 		if err != nil {
 			return err
 		}

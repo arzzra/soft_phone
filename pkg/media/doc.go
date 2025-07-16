@@ -23,7 +23,7 @@
 //   - AudioProcessor - обработка и кодирование/декодирование аудио
 //   - JitterBuffer - адаптивная буферизация для компенсации джиттера
 //   - DTMFSender/Receiver - генерация и прием DTMF сигналов
-//   - Session (SessionRTP) - интерфейс для интеграции с RTP транспортом
+//   - SessionRTP (SessionRTP) - интерфейс для интеграции с RTP транспортом
 //
 // # Быстрый старт
 //
@@ -33,7 +33,7 @@
 //	config.PayloadType = media.PayloadTypePCMU // G.711 μ-law
 //	config.JitterEnabled = true
 //
-//	session, err := media.NewMediaSession(config)
+//	session, err := media.NewSession(config)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
