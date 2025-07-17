@@ -118,7 +118,8 @@ type Session struct {
 	stateMutex sync.RWMutex
 
 	// Конфигурация
-	mediaType MediaType // Тип медиа
+	mediaType MediaType  // Тип медиа
+	direction Direction  // Направление медиа потока
 
 	// Жизненный цикл
 	ctx    context.Context
@@ -140,6 +141,7 @@ type SessionConfig struct {
 	Transport     Transport         // RTP транспортный интерфейс
 	RTCPTransport RTCPTransport     // RTCP транспортный интерфейс (опциональный)
 	LocalSDesc    SourceDescription // Описание локального источника
+	Direction     Direction         // Направление медиа потока (по умолчанию sendrecv)
 
 	// Обработчики событий
 	OnPacketReceived func(*rtp.Packet, net.Addr)
@@ -185,6 +187,7 @@ func NewSession(config SessionConfig) (*Session, error) {
 	session := &Session{
 		state:     SessionStateIdle,
 		mediaType: config.MediaType,
+		direction: config.Direction,
 		ctx:       ctx,
 		cancel:    cancel,
 
@@ -701,4 +704,64 @@ func generateRandomUint32() uint32 {
 // Примечание: Обработчик заменяет предыдущий, если был установлен
 func (s *Session) RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr)) {
 	s.onPacketReceived = handler
+}
+
+// SetDirection устанавливает направление медиа потока
+// Проверяет, может ли сессия отправлять и/или принимать данные
+//
+// Параметры:
+//   direction - направление потока (sendrecv, sendonly, recvonly, inactive)
+//
+// Возвращает ошибку если:
+//   - Сессия уже запущена и смена направления невозможна
+//
+// Примечание: Безопасно вызывать в любом состоянии сессии
+func (s *Session) SetDirection(direction Direction) error {
+	s.stateMutex.Lock()
+	defer s.stateMutex.Unlock()
+	
+	if s.state == SessionStateActive {
+		return fmt.Errorf("невозможно изменить направление для активной сессии")
+	}
+	
+	s.direction = direction
+	return nil
+}
+
+// GetDirection возвращает текущее направление медиа потока
+//
+// Возвращаемые значения:
+//   - DirectionSendRecv: двунаправленный поток
+//   - DirectionSendOnly: только отправка
+//   - DirectionRecvOnly: только прием
+//   - DirectionInactive: поток неактивен
+//
+// Thread-safe операция
+func (s *Session) GetDirection() Direction {
+	s.stateMutex.RLock()
+	defer s.stateMutex.RUnlock()
+	
+	return s.direction
+}
+
+// CanSend проверяет, может ли сессия отправлять данные
+// Возвращает true для направлений sendrecv и sendonly
+//
+// Thread-safe операция
+func (s *Session) CanSend() bool {
+	s.stateMutex.RLock()
+	defer s.stateMutex.RUnlock()
+	
+	return s.direction.CanSend()
+}
+
+// CanReceive проверяет, может ли сессия принимать данные
+// Возвращает true для направлений sendrecv и recvonly
+//
+// Thread-safe операция
+func (s *Session) CanReceive() bool {
+	s.stateMutex.RLock()
+	defer s.stateMutex.RUnlock()
+	
+	return s.direction.CanReceive()
 }

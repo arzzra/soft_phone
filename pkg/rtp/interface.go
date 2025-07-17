@@ -165,4 +165,43 @@ type SessionRTP interface {
 	//           addr, packet.SSRC, packet.SequenceNumber)
 	//   })
 	RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr))
+
+	// SetDirection устанавливает направление медиа потока
+	// Определяет, может ли сессия отправлять и/или принимать данные
+	//
+	// Параметры:
+	//   direction - направление потока (sendrecv, sendonly, recvonly, inactive)
+	//
+	// Возвращает ошибку если:
+	//   - Сессия уже запущена и смена направления невозможна
+	//   - Указано некорректное направление
+	//
+	// Пример:
+	//   err := session.SetDirection(rtp.DirectionSendOnly)
+	SetDirection(direction Direction) error
+
+	// GetDirection возвращает текущее направление медиа потока
+	//
+	// Возвращаемые значения:
+	//   - DirectionSendRecv: двунаправленный поток
+	//   - DirectionSendOnly: только отправка
+	//   - DirectionRecvOnly: только прием
+	//   - DirectionInactive: поток неактивен
+	GetDirection() Direction
+
+	// CanSend проверяет, может ли сессия отправлять данные
+	// Возвращает true для направлений sendrecv и sendonly
+	//
+	// Используется для:
+	//   - Проверки перед отправкой данных
+	//   - Фильтрации сессий при множественных потоках
+	CanSend() bool
+
+	// CanReceive проверяет, может ли сессия принимать данные
+	// Возвращает true для направлений sendrecv и recvonly
+	//
+	// Используется для:
+	//   - Проверки перед обработкой входящих пакетов
+	//   - Настройки обработчиков входящих данных
+	CanReceive() bool
 }
