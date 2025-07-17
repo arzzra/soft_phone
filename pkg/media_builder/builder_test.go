@@ -104,10 +104,14 @@ func TestMediaBuilder_ProcessAnswer(t *testing.T) {
 	err = builder.ProcessAnswer(answer)
 	require.NoError(t, err)
 
-	// Проверяем, что удаленный адрес установлен
+	// Проверяем, что поток создан с правильными параметрами
 	impl := builder.(*mediaBuilder)
-	assert.Equal(t, "192.168.1.200:5006", impl.remoteAddr)
-	assert.Equal(t, uint8(0), impl.selectedPayloadType)
+	assert.Len(t, impl.mediaStreams, 1)
+	stream := impl.mediaStreams[0]
+	assert.Equal(t, "192.168.1.200:5006", stream.RemoteAddr)
+	assert.Equal(t, uint8(0), stream.PayloadType)
+	assert.Equal(t, uint16(5006), stream.RemotePort)
+	assert.Equal(t, uint16(5014), stream.LocalPort)
 }
 
 func TestMediaBuilder_ProcessOffer(t *testing.T) {
@@ -164,7 +168,11 @@ func TestMediaBuilder_ProcessOffer(t *testing.T) {
 	require.NoError(t, err)
 
 	impl := builder.(*mediaBuilder)
-	assert.Equal(t, "192.168.1.50:5008", impl.remoteAddr)
+	assert.Len(t, impl.mediaStreams, 1)
+	stream := impl.mediaStreams[0]
+	assert.Equal(t, "192.168.1.50:5008", stream.RemoteAddr)
+	assert.Equal(t, uint8(0), stream.PayloadType) // PCMU выбран как первый поддерживаемый
+	assert.Equal(t, uint16(5008), stream.RemotePort)
 	assert.NotNil(t, impl.remoteOffer)
 }
 

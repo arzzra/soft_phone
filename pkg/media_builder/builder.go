@@ -22,17 +22,14 @@ const (
 
 // mediaBuilder реализует интерфейс Builder
 type mediaBuilder struct {
-	config              BuilderConfig
-	mode                BuilderMode
-	localOffer          *sdp.SessionDescription
-	remoteOffer         *sdp.SessionDescription
-	remoteAddr          string
-	selectedPayloadType uint8
-	mediaSession        media.Session
-	rtpTransport        rtp.Transport
-	rtpSession          rtp.SessionRTP
-	closed              bool
-	mutex               sync.RWMutex
+	config       BuilderConfig
+	mode         BuilderMode
+	localOffer   *sdp.SessionDescription
+	remoteOffer  *sdp.SessionDescription
+	mediaStreams []MediaStreamInfo
+	mediaSession media.Session
+	closed       bool
+	mutex        sync.RWMutex
 }
 
 // NewMediaBuilder создает новый экземпляр mediaBuilder
@@ -127,14 +124,26 @@ func (b *mediaBuilder) ProcessAnswer(answer *sdp.SessionDescription) error {
 		return fmt.Errorf("не удалось распарсить SDP answer: %w", err)
 	}
 
-	// Сохраняем удаленный адрес
-	b.remoteAddr = fmt.Sprintf("%s:%d", result.RemoteIP, result.RemotePort)
-	b.selectedPayloadType = result.SelectedPayloadType
+	// Создаем информацию о потоке
+	streamInfo := MediaStreamInfo{
+		StreamID:    b.config.SessionID + "_audio_0",
+		MediaType:   "audio",
+		MediaIndex:  0,
+		LocalPort:   b.config.LocalPort,
+		RemotePort:  uint16(result.RemotePort),
+		RemoteAddr:  fmt.Sprintf("%s:%d", result.RemoteIP, result.RemotePort),
+		PayloadType: result.SelectedPayloadType,
+		Direction:   b.config.MediaDirection,
+		Label:       "", // Может быть заполнено из SDP атрибутов
+	}
 
-	// Теперь, когда у нас есть remoteAddr, создаем медиа ресурсы
-	if err := b.createMediaResources(); err != nil {
+	// Теперь, когда у нас есть информация о потоке, создаем медиа ресурсы
+	if err := b.createMediaResources(&streamInfo); err != nil {
 		return fmt.Errorf("не удалось создать медиа ресурсы: %w", err)
 	}
+
+	// Добавляем поток в список
+	b.mediaStreams = append(b.mediaStreams, streamInfo)
 
 	// Обновляем параметры медиа сессии если нужно
 	if b.mediaSession != nil {
@@ -190,17 +199,15 @@ func (b *mediaBuilder) ProcessOffer(offer *sdp.SessionDescription) error {
 		return fmt.Errorf("не найден удаленный IP адрес в offer")
 	}
 
-	// Сохраняем удаленный адрес
-	b.remoteAddr = fmt.Sprintf("%s:%d", remoteIP, media.MediaName.Port.Value)
-
 	// Выбираем поддерживаемый кодек
+	selectedPayloadType := uint8(0)
 	for _, format := range media.MediaName.Formats {
 		if pt, err := strconv.Atoi(format); err == nil {
 			payloadType := uint8(pt)
 			// Проверяем, поддерживаем ли мы этот payload type
 			for _, supportedPT := range b.config.PayloadTypes {
 				if supportedPT == payloadType {
-					b.selectedPayloadType = payloadType
+					selectedPayloadType = payloadType
 					goto codecFound
 				}
 			}
@@ -208,9 +215,25 @@ func (b *mediaBuilder) ProcessOffer(offer *sdp.SessionDescription) error {
 	}
 codecFound:
 
-	if b.selectedPayloadType == 0 && !contains(b.config.PayloadTypes, 0) {
+	if selectedPayloadType == 0 && !contains(b.config.PayloadTypes, 0) {
 		return fmt.Errorf("не найден поддерживаемый кодек в offer")
 	}
+
+	// Создаем информацию о потоке для будущего использования
+	streamInfo := MediaStreamInfo{
+		StreamID:    b.config.SessionID + "_audio_0",
+		MediaType:   "audio",
+		MediaIndex:  0,
+		LocalPort:   b.config.LocalPort,
+		RemotePort:  uint16(media.MediaName.Port.Value),
+		RemoteAddr:  fmt.Sprintf("%s:%d", remoteIP, media.MediaName.Port.Value),
+		PayloadType: selectedPayloadType,
+		Direction:   b.config.MediaDirection,
+		Label:       "", // Может быть заполнено из SDP атрибутов
+	}
+
+	// Сохраняем информацию о потоке для CreateAnswer
+	b.mediaStreams = []MediaStreamInfo{streamInfo}
 
 	return nil
 }
@@ -232,8 +255,16 @@ func (b *mediaBuilder) CreateAnswer() (*sdp.SessionDescription, error) {
 		return nil, fmt.Errorf("нет обработанного offer")
 	}
 
+	// Проверяем, что у нас есть информация о потоке
+	if len(b.mediaStreams) == 0 {
+		return nil, fmt.Errorf("нет информации о медиа потоке")
+	}
+
+	// Берем первый поток (аудио)
+	streamInfo := &b.mediaStreams[0]
+
 	// Создаем транспорт и медиа сессию
-	if err := b.createMediaResources(); err != nil {
+	if err := b.createMediaResources(streamInfo); err != nil {
 		return nil, fmt.Errorf("не удалось создать медиа ресурсы: %w", err)
 	}
 
@@ -267,7 +298,7 @@ func (b *mediaBuilder) CreateAnswer() (*sdp.SessionDescription, error) {
 	}
 
 	// Создаем медиа описание с выбранными кодеками
-	formats := []string{strconv.Itoa(int(b.selectedPayloadType))}
+	formats := []string{strconv.Itoa(int(streamInfo.PayloadType))}
 
 	// Добавляем DTMF если поддерживается обеими сторонами
 	dtmfSupported := false
@@ -306,10 +337,10 @@ func (b *mediaBuilder) CreateAnswer() (*sdp.SessionDescription, error) {
 		18: "G729/8000",
 	}
 
-	if name, ok := codecNames[b.selectedPayloadType]; ok {
+	if name, ok := codecNames[streamInfo.PayloadType]; ok {
 		media.Attributes = append(media.Attributes, sdp.Attribute{
 			Key:   "rtpmap",
-			Value: fmt.Sprintf("%d %s", b.selectedPayloadType, name),
+			Value: fmt.Sprintf("%d %s", streamInfo.PayloadType, name),
 		})
 	}
 
@@ -344,6 +375,16 @@ func (b *mediaBuilder) GetMediaSession() media.Session {
 	return b.mediaSession
 }
 
+// GetMediaStreams возвращает информацию о всех медиа потоках
+func (b *mediaBuilder) GetMediaStreams() []MediaStreamInfo {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	// Возвращаем копию среза
+	streams := make([]MediaStreamInfo, len(b.mediaStreams))
+	copy(streams, b.mediaStreams)
+	return streams
+}
+
 // Close закрывает builder и освобождает ресурсы
 func (b *mediaBuilder) Close() error {
 	b.mutex.Lock()
@@ -362,29 +403,34 @@ func (b *mediaBuilder) Close() error {
 		}
 	}
 
-	// Закрываем RTP сессию
-	if b.rtpSession != nil {
-		if err := b.rtpSession.Stop(); err != nil {
-			return fmt.Errorf("не удалось остановить RTP сессию: %w", err)
+	// Закрываем все потоки
+	for i := range b.mediaStreams {
+		stream := &b.mediaStreams[i]
+		
+		// Закрываем RTP сессию
+		if stream.RTPSession != nil {
+			if err := stream.RTPSession.Stop(); err != nil {
+				return fmt.Errorf("не удалось остановить RTP сессию для потока %s: %w", stream.StreamID, err)
+			}
 		}
-	}
 
-	// Закрываем транспорт
-	if b.rtpTransport != nil {
-		if err := b.rtpTransport.Close(); err != nil {
-			return fmt.Errorf("не удалось закрыть транспорт: %w", err)
+		// Закрываем транспорт
+		if stream.RTPTransport != nil {
+			if err := stream.RTPTransport.Close(); err != nil {
+				return fmt.Errorf("не удалось закрыть транспорт для потока %s: %w", stream.StreamID, err)
+			}
 		}
 	}
 
 	return nil
 }
 
-// createMediaResources создает транспорт, RTP сессию и медиа сессию
-func (b *mediaBuilder) createMediaResources() error {
+// createMediaResources создает транспорт, RTP сессию и медиа сессию для потока
+func (b *mediaBuilder) createMediaResources(streamInfo *MediaStreamInfo) error {
 	// Создаем RTP транспорт
 	transportParams := TransportParams{
-		LocalAddr:  fmt.Sprintf("%s:%d", b.config.LocalIP, b.config.LocalPort),
-		RemoteAddr: b.remoteAddr,
+		LocalAddr:  fmt.Sprintf("%s:%d", b.config.LocalIP, streamInfo.LocalPort),
+		RemoteAddr: streamInfo.RemoteAddr,
 		BufferSize: b.config.TransportBuffer,
 	}
 
@@ -392,11 +438,11 @@ func (b *mediaBuilder) createMediaResources() error {
 	if err != nil {
 		return fmt.Errorf("не удалось создать RTP транспорт: %w", err)
 	}
-	b.rtpTransport = transport
+	streamInfo.RTPTransport = transport
 
 	// Создаем RTP сессию
 	rtpConfig := rtp.SessionConfig{
-		PayloadType: rtp.PayloadType(b.selectedPayloadType),
+		PayloadType: rtp.PayloadType(streamInfo.PayloadType),
 		MediaType:   rtp.MediaTypeAudio,
 		ClockRate:   8000, // Для всех наших кодеков
 		Transport:   transport,
@@ -414,10 +460,10 @@ func (b *mediaBuilder) createMediaResources() error {
 		transport.Close()
 		return fmt.Errorf("не удалось создать RTP сессию: %w", err)
 	}
-	b.rtpSession = rtpSession
+	streamInfo.RTPSession = rtpSession
 	
 	// Устанавливаем направление медиа потока
-	if err := b.rtpSession.SetDirection(b.config.MediaDirection); err != nil {
+	if err := streamInfo.RTPSession.SetDirection(streamInfo.Direction); err != nil {
 		_ = rtpSession.Stop()
 		transport.Close()
 		return fmt.Errorf("не удалось установить направление медиа потока: %w", err)
@@ -425,25 +471,27 @@ func (b *mediaBuilder) createMediaResources() error {
 
 	// RTP сессия запускается автоматически при создании
 
-	// Создаем медиа сессию
-	mediaConfig := b.config.MediaConfig
-	mediaConfig.SessionID = b.config.SessionID
-	// Direction устанавливается на уровне RTP сессии
-	mediaConfig.PayloadType = b.selectedPayloadType
-	mediaConfig.Ptime = b.config.Ptime
-	mediaConfig.DTMFEnabled = b.config.DTMFEnabled
-	mediaConfig.DTMFPayloadType = b.config.DTMFPayloadType
+	// Создаем медиа сессию только если ее еще нет
+	if b.mediaSession == nil {
+		mediaConfig := b.config.MediaConfig
+		mediaConfig.SessionID = b.config.SessionID
+		// Direction устанавливается на уровне RTP сессии
+		mediaConfig.PayloadType = streamInfo.PayloadType
+		mediaConfig.Ptime = b.config.Ptime
+		mediaConfig.DTMFEnabled = b.config.DTMFEnabled
+		mediaConfig.DTMFPayloadType = b.config.DTMFPayloadType
 
-	mediaSession, err := media.NewMediaSession(mediaConfig)
-	if err != nil {
-		_ = rtpSession.Stop()
-		_ = transport.Close()
-		return fmt.Errorf("не удалось создать медиа сессию: %w", err)
+		mediaSession, err := media.NewMediaSession(mediaConfig)
+		if err != nil {
+			_ = rtpSession.Stop()
+			_ = transport.Close()
+			return fmt.Errorf("не удалось создать медиа сессию: %w", err)
+		}
+		b.mediaSession = mediaSession
 	}
-	b.mediaSession = mediaSession
 
 	// Добавляем RTP сессию в медиа сессию
-	if err := mediaSession.AddRTPSession(b.config.SessionID, rtpSession); err != nil {
+	if err := b.mediaSession.AddRTPSession(streamInfo.StreamID, rtpSession); err != nil {
 		_ = rtpSession.Stop()
 		_ = transport.Close()
 		return fmt.Errorf("не удалось добавить RTP сессию: %w", err)
