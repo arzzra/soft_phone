@@ -22,14 +22,15 @@ const (
 
 // mediaBuilder реализует интерфейс Builder
 type mediaBuilder struct {
-	config       BuilderConfig
-	mode         BuilderMode
-	localOffer   *sdp.SessionDescription
-	remoteOffer  *sdp.SessionDescription
-	mediaStreams []MediaStreamInfo
-	mediaSession media.Session
-	closed       bool
-	mutex        sync.RWMutex
+	config          BuilderConfig
+	mode            BuilderMode
+	localOffer      *sdp.SessionDescription
+	remoteOffer     *sdp.SessionDescription
+	mediaStreams    []MediaStreamInfo
+	mediaSession    media.Session
+	closed          bool
+	mutex           sync.RWMutex
+	allocatedPorts  []uint16 // Список выделенных портов для освобождения при закрытии
 }
 
 // NewMediaBuilder создает новый экземпляр mediaBuilder
@@ -60,8 +61,9 @@ func NewMediaBuilder(config BuilderConfig) (Builder, error) {
 	}
 
 	return &mediaBuilder{
-		config: config,
-		mode:   BuilderModeNone,
+		config:         config,
+		mode:           BuilderModeNone,
+		allocatedPorts: make([]uint16, 0),
 	}, nil
 }
 
@@ -481,7 +483,8 @@ func (b *mediaBuilder) Close() error {
 	// Останавливаем медиа сессию
 	if b.mediaSession != nil {
 		if err := b.mediaSession.Stop(); err != nil {
-			return fmt.Errorf("не удалось остановить медиа сессию: %w", err)
+			// Логируем ошибку, но продолжаем освобождение ресурсов
+			fmt.Printf("Ошибка при остановке медиа сессии: %v\n", err)
 		}
 	}
 
@@ -492,14 +495,26 @@ func (b *mediaBuilder) Close() error {
 		// Закрываем RTP сессию
 		if stream.RTPSession != nil {
 			if err := stream.RTPSession.Stop(); err != nil {
-				return fmt.Errorf("не удалось остановить RTP сессию для потока %s: %w", stream.StreamID, err)
+				// Логируем ошибку, но продолжаем
+				fmt.Printf("Ошибка при остановке RTP сессии для потока %s: %v\n", stream.StreamID, err)
 			}
 		}
 
 		// Закрываем транспорт
 		if stream.RTPTransport != nil {
 			if err := stream.RTPTransport.Close(); err != nil {
-				return fmt.Errorf("не удалось закрыть транспорт для потока %s: %w", stream.StreamID, err)
+				// Логируем ошибку, но продолжаем
+				fmt.Printf("Ошибка при закрытии транспорта для потока %s: %v\n", stream.StreamID, err)
+			}
+		}
+	}
+
+	// Освобождаем все выделенные порты обратно в пул
+	if b.config.PortPool != nil {
+		for _, port := range b.allocatedPorts {
+			if err := b.config.PortPool.Release(port); err != nil {
+				// Логируем ошибку освобождения порта
+				fmt.Printf("Ошибка при освобождении порта %d: %v\n", port, err)
 			}
 		}
 	}
@@ -598,20 +613,36 @@ func contains(slice []uint8, item uint8) bool {
 
 // allocatePort выделяет свободный порт для медиа потока.
 // Возвращает выделенный порт или ошибку если порты недоступны.
-// TODO: Реализовать пул портов для правильного выделения.
 func (b *mediaBuilder) allocatePort() (uint16, error) {
-	// На данный момент используем простую логику с базовым портом
-	// В будущем это должно использовать пул портов из BuilderManager
-	basePort := b.config.LocalPort
-	
-	// Для дополнительных потоков добавляем смещение
-	offset := uint16(len(b.mediaStreams) * 2) // *2 для RTP/RTCP пары
-	allocatedPort := basePort + offset
-	
-	// Проверяем, что порт четный (требование RTP)
-	if allocatedPort%2 != 0 {
-		allocatedPort++
+	// Если это первый поток, используем порт из конфигурации
+	if len(b.mediaStreams) == 0 {
+		// LocalPort уже выделен менеджером, просто используем его
+		return b.config.LocalPort, nil
 	}
 	
-	return allocatedPort, nil
+	// Для дополнительных потоков выделяем порт из пула
+	if b.config.PortPool == nil {
+		// Если пул не предоставлен, используем простое смещение
+		basePort := b.config.LocalPort
+		offset := uint16(len(b.mediaStreams) * 2) // *2 для RTP/RTCP пары
+		allocatedPort := basePort + offset
+		
+		// Проверяем, что порт четный (требование RTP)
+		if allocatedPort%2 != 0 {
+			allocatedPort++
+		}
+		
+		return allocatedPort, nil
+	}
+	
+	// Выделяем порт из пула
+	port, err := b.config.PortPool.Allocate()
+	if err != nil {
+		return 0, fmt.Errorf("не удалось выделить порт из пула: %w", err)
+	}
+	
+	// Сохраняем выделенный порт для последующего освобождения
+	b.allocatedPorts = append(b.allocatedPorts, port)
+	
+	return port, nil
 }

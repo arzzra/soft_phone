@@ -219,7 +219,8 @@ type BuilderConfig struct {
 	Ptime           time.Duration       // Время пакетизации
 	DTMFEnabled     bool                // Включить поддержку DTMF
 	DTMFPayloadType uint8               // Payload type для DTMF (обычно 101)
-	MediaDirection  rtp.Direction     // Направление медиа потока
+	MediaDirection  rtp.Direction       // Направление медиа потока
 	MediaConfig     media.SessionConfig // Конфигурация медиа сессии
 	TransportBuffer int                 // Размер буфера транспорта
+	PortPool        *PortPool           // Пул портов для выделения дополнительных портов
 }
