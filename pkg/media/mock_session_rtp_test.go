@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	rtpPkg "github.com/arzzra/soft_phone/pkg/rtp"
 	"github.com/pion/rtp"
 )
 
@@ -16,6 +17,8 @@ type MockSessionRTP struct {
 	codec       string
 	active      bool
 	rtcpEnabled bool
+	canSend     bool
+	canReceive  bool
 
 	// Синхронизация
 	mutex sync.RWMutex
@@ -50,6 +53,8 @@ func NewMockSessionRTP(id, codec string) *MockSessionRTP {
 		codec:          codec,
 		active:         false,
 		rtcpEnabled:    false,
+		canSend:        true,  // По умолчанию sendrecv
+		canReceive:     true,  // По умолчанию sendrecv
 		rtcpStats:      make(map[uint32]*RTCPStatistics),
 		networkLatency: 0,
 	}
@@ -346,4 +351,43 @@ func (m *MockSessionRTP) GetLastIncomingPacket() (*rtp.Packet, net.Addr) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	return m.lastIncomingPacket, m.lastIncomingAddress
+}
+
+// SetDirection устанавливает направление медиа потока
+func (m *MockSessionRTP) SetDirection(direction rtpPkg.Direction) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	
+	m.canSend = direction == rtpPkg.DirectionSendRecv || direction == rtpPkg.DirectionSendOnly
+	m.canReceive = direction == rtpPkg.DirectionSendRecv || direction == rtpPkg.DirectionRecvOnly
+	return nil
+}
+
+// GetDirection возвращает текущее направление медиа потока
+func (m *MockSessionRTP) GetDirection() rtpPkg.Direction {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	
+	if m.canSend && m.canReceive {
+		return rtpPkg.DirectionSendRecv
+	} else if m.canSend {
+		return rtpPkg.DirectionSendOnly
+	} else if m.canReceive {
+		return rtpPkg.DirectionRecvOnly
+	}
+	return rtpPkg.DirectionInactive
+}
+
+// CanSend проверяет, может ли сессия отправлять данные
+func (m *MockSessionRTP) CanSend() bool {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return m.canSend
+}
+
+// CanReceive проверяет, может ли сессия принимать данные  
+func (m *MockSessionRTP) CanReceive() bool {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return m.canReceive
 }

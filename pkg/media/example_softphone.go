@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	rtpPkg "github.com/arzzra/soft_phone/pkg/rtp"
 	"github.com/pion/rtp"
 )
 
@@ -19,7 +20,6 @@ func ExampleBasicMediaSession() error {
 	// Создаем конфигурацию по умолчанию
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "call-001"
-	config.Direction = DirectionSendRecv
 	config.Ptime = time.Millisecond * 20 // 20ms пакеты
 
 	// Устанавливаем обработчики событий
@@ -49,8 +49,7 @@ func ExampleBasicMediaSession() error {
 		return fmt.Errorf("ошибка запуска медиа сессии: %w", err)
 	}
 
-	fmt.Printf("Медиа сессия запущена. Состояние: %s, Направление: %s\n",
-		session.GetState(), session.GetDirection())
+	fmt.Printf("Медиа сессия запущена. Состояние: %s\n", session.GetState())
 
 	// Симулируем отправку аудио данных
 	audioData := generateTestAudioSoftphone(StandardPCMSamples20ms) // 20ms аудио для 8kHz
@@ -224,7 +223,6 @@ func ExampleRawPacketHandling() error {
 
 	config := DefaultMediaSessionConfig()
 	config.SessionID = "call-raw-packets"
-	config.Direction = DirectionRecvOnly
 
 	// Счетчики для демонстрации
 	var rawPacketsReceived int
@@ -379,74 +377,65 @@ func ExampleJitterBufferControl() error {
 	return nil
 }
 
-// ExampleMediaDirections демонстрирует различные режимы работы
+// ExampleMediaDirections демонстрирует работу с RTP сессиями различных направлений
 func ExampleMediaDirections() error {
-	fmt.Println("\n=== Пример: Режимы работы медиа ===")
-
-	// Тестируем все режимы
-	directions := []Direction{
-		DirectionSendRecv,
-		DirectionSendOnly,
-		DirectionRecvOnly,
-		DirectionInactive,
+	fmt.Println("\n🎭 Тестирование различных направлений медиа 🎭")
+	
+	directionTests := []struct {
+		name       string
+		canSend    bool
+		canReceive bool
+	}{
+		{"sendrecv", true, true},
+		{"sendonly", true, false},
+		{"recvonly", false, true},
+		{"inactive", false, false},
 	}
-
-	for _, direction := range directions {
-		fmt.Printf("\nТестируем режим: %s\n", direction)
-
+	
+	for _, test := range directionTests {
+		fmt.Printf("\n📌 Тестируем %s режим\n", test.name)
+		
 		config := DefaultMediaSessionConfig()
-		config.SessionID = fmt.Sprintf("call-%s", direction)
-		config.Direction = direction
-
+		config.SessionID = fmt.Sprintf("example-direction-%s", test.name)
+		
 		session, err := NewMediaSession(config)
 		if err != nil {
-			return err
+			return fmt.Errorf("ошибка создания сессии: %w", err)
 		}
-
-		if err := session.Start(); err != nil {
-			session.Stop()
-			return err
+		defer session.Stop()
+		
+		// Добавляем mock RTP сессию с нужными возможностями
+		mockRTP := &MockRTPSession{
+			id:         "example",
+			codec:      "PCMU",
+			canSend:    test.canSend,
+			canReceive: test.canReceive,
 		}
-
-		// Тестируем отправку аудио
-		audioData := generateTestAudioSoftphone(StandardPCMSamples20ms)
-		err = session.SendAudio(audioData)
-
-		switch direction {
-		case DirectionSendRecv, DirectionSendOnly:
-			if err != nil {
-				fmt.Printf("  Неожиданная ошибка отправки: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ Отправка аудио разрешена\n")
+		session.AddRTPSession("example", mockRTP)
+		
+		// Проверяем возможность отправки
+		if test.canSend {
+			audioData := generateTestAudioSoftphone(160)
+			err := session.SendAudio(audioData)
+			if err == nil {
+				fmt.Println("✅ Отправка аудио разрешена")
 			}
-		case DirectionRecvOnly, DirectionInactive:
+		} else {
+			audioData := generateTestAudioSoftphone(160)
+			err := session.SendAudio(audioData)
 			if err != nil {
-				fmt.Printf("  ✓ Отправка аудио запрещена: %v\n", err)
-			} else {
-				fmt.Printf("  Неожиданно: отправка разрешена\n")
-			}
-		}
-
-		// Тестируем DTMF
-		err = session.SendDTMF(DTMF1, DefaultDTMFDuration)
-		switch direction {
-		case DirectionSendRecv, DirectionSendOnly:
-			if err != nil {
-				fmt.Printf("  Неожиданная ошибка DTMF: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ Отправка DTMF разрешена\n")
-			}
-		case DirectionRecvOnly, DirectionInactive:
-			if err != nil {
-				fmt.Printf("  ✓ Отправка DTMF запрещена: %v\n", err)
-			} else {
-				fmt.Printf("  Неожиданно: отправка DTMF разрешена\n")
+				fmt.Println("❌ Отправка аудио запрещена")
 			}
 		}
-
-		session.Stop()
+		
+		// Проверяем возможность приема
+		if test.canReceive {
+			fmt.Println("✅ Прием аудио разрешен")
+		} else {
+			fmt.Println("❌ Прием аудио запрещен")
+		}
 	}
-
+	
 	return nil
 }
 
@@ -668,9 +657,11 @@ func ExampleMultipleRTPSessions() error {
 
 // MockRTPSession для демонстрации
 type MockRTPSession struct {
-	id     string
-	codec  string
-	active bool
+	id         string
+	codec      string
+	active     bool
+	canSend    bool
+	canReceive bool
 }
 
 func (m *MockRTPSession) Start() error {
@@ -751,6 +742,35 @@ func (m *MockRTPSession) SendRTCPReport() error {
 // RegisterIncomingHandler регистрирует обработчик входящих RTP пакетов
 func (m *MockRTPSession) RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr)) {
 	// Mock реализация - ничего не делаем
+}
+
+// SetDirection устанавливает направление медиа потока
+func (m *MockRTPSession) SetDirection(direction rtpPkg.Direction) error {
+	m.canSend = direction == rtpPkg.DirectionSendRecv || direction == rtpPkg.DirectionSendOnly
+	m.canReceive = direction == rtpPkg.DirectionSendRecv || direction == rtpPkg.DirectionRecvOnly
+	return nil
+}
+
+// GetDirection возвращает текущее направление медиа потока
+func (m *MockRTPSession) GetDirection() rtpPkg.Direction {
+	if m.canSend && m.canReceive {
+		return rtpPkg.DirectionSendRecv
+	} else if m.canSend {
+		return rtpPkg.DirectionSendOnly
+	} else if m.canReceive {
+		return rtpPkg.DirectionRecvOnly
+	}
+	return rtpPkg.DirectionInactive
+}
+
+// CanSend проверяет, может ли сессия отправлять данные
+func (m *MockRTPSession) CanSend() bool {
+	return m.canSend
+}
+
+// CanReceive проверяет, может ли сессия принимать данные
+func (m *MockRTPSession) CanReceive() bool {
+	return m.canReceive
 }
 
 // generateTestAudioSoftphone генерирует тестовые аудио данные

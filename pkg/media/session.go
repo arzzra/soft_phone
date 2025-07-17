@@ -56,31 +56,6 @@ const (
 	PayloadTypeG729 = PayloadType(18) // G.729
 )
 
-// Direction определяет направление медиа потока согласно атрибутам SDP (RFC 4566).
-// Используется для управления отправкой и приемом медиа данных в сессии.
-type Direction int
-
-const (
-	DirectionSendRecv Direction = iota // Отправка и прием
-	DirectionSendOnly                  // Только отправка
-	DirectionRecvOnly                  // Только прием
-	DirectionInactive                  // Неактивно
-)
-
-func (d Direction) String() string {
-	switch d {
-	case DirectionSendRecv:
-		return "sendrecv"
-	case DirectionSendOnly:
-		return "sendonly"
-	case DirectionRecvOnly:
-		return "recvonly"
-	case DirectionInactive:
-		return "inactive"
-	default:
-		return "unknown"
-	}
-}
 
 // SessionState представляет текущее состояние медиа сессии.
 // Сессия проходит через различные состояния в течение своего жизненного цикла.
@@ -145,7 +120,6 @@ func (s SessionState) String() string {
 type session struct {
 	// Основные параметры
 	sessionID   string
-	direction   Direction
 	ptime       time.Duration // Packet time (длительность одного пакета)
 	payloadType PayloadType
 
@@ -211,7 +185,6 @@ type session struct {
 //
 //	config := SessionConfig{
 //	    SessionID:   "call-456",
-//	    Direction:   DirectionSendRecv,
 //	    PayloadType: PayloadTypePCMU,
 //	    Ptime:       20 * time.Millisecond,
 //
@@ -234,7 +207,6 @@ type session struct {
 //	}
 type SessionConfig struct {
 	SessionID   string
-	Direction   Direction
 	Ptime       time.Duration // Packet time (по умолчанию 20ms)
 	PayloadType PayloadType   // Основной payload type
 
@@ -285,7 +257,6 @@ type MediaStatistics struct {
 // DefaultMediaSessionConfig возвращает конфигурацию по умолчанию
 func DefaultMediaSessionConfig() SessionConfig {
 	return SessionConfig{
-		Direction:        DirectionSendRecv,
 		Ptime:            time.Millisecond * 20, // Стандарт для телефонии
 		PayloadType:      PayloadTypePCMU,
 		JitterEnabled:    false,
@@ -347,7 +318,6 @@ func NewMediaSession(config SessionConfig) (*session, error) {
 
 	session := &session{
 		sessionID:        config.SessionID,
-		direction:        config.Direction,
 		ptime:            config.Ptime,
 		payloadType:      config.PayloadType,
 		rtpSessions:      make(map[string]SessionRTP),
@@ -604,11 +574,8 @@ func (ms *session) SendAudio(audioData []byte) error {
 	if !ms.canSend() {
 		return &MediaError{
 			Code:      ErrorCodeSessionInvalidDirection,
-			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			Message:   "отправка запрещена для данной сессии",
 			SessionID: ms.sessionID,
-			Context: map[string]interface{}{
-				"direction": ms.direction,
-			},
 		}
 	}
 
@@ -661,11 +628,8 @@ func (ms *session) SendAudioRaw(encodedData []byte) error {
 	if !ms.canSend() {
 		return &MediaError{
 			Code:      ErrorCodeSessionInvalidDirection,
-			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			Message:   "отправка запрещена для данной сессии",
 			SessionID: ms.sessionID,
-			Context: map[string]interface{}{
-				"direction": ms.direction,
-			},
 		}
 	}
 
@@ -713,11 +677,8 @@ func (ms *session) SendAudioWithFormat(audioData []byte, payloadType PayloadType
 	if !ms.canSend() {
 		return &MediaError{
 			Code:      ErrorCodeSessionInvalidDirection,
-			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			Message:   "отправка запрещена для данной сессии",
 			SessionID: ms.sessionID,
-			Context: map[string]interface{}{
-				"direction": ms.direction,
-			},
 		}
 	}
 
@@ -782,11 +743,8 @@ func (ms *session) WriteAudioDirect(rtpPayload []byte) error {
 	if !ms.canSend() {
 		return &MediaError{
 			Code:      ErrorCodeSessionInvalidDirection,
-			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			Message:   "отправка запрещена для данной сессии",
 			SessionID: ms.sessionID,
-			Context: map[string]interface{}{
-				"direction": ms.direction,
-			},
 		}
 	}
 
@@ -826,11 +784,8 @@ func (ms *session) SendDTMF(digit DTMFDigit, duration time.Duration) error {
 	if !ms.canSend() {
 		return &MediaError{
 			Code:      ErrorCodeSessionInvalidDirection,
-			Message:   fmt.Sprintf("отправка запрещена в режиме %s", ms.direction),
+			Message:   "отправка запрещена для данной сессии",
 			SessionID: ms.sessionID,
-			Context: map[string]interface{}{
-				"direction": ms.direction,
-			},
 		}
 	}
 
@@ -998,18 +953,6 @@ func (ms *session) GetState() SessionState {
 	return ms.state
 }
 
-// SetDirection изменяет направление медиа потока
-func (ms *session) SetDirection(direction Direction) error {
-	ms.stateMutex.Lock()
-	defer ms.stateMutex.Unlock()
-	ms.direction = direction
-	return nil
-}
-
-// GetDirection возвращает направление медиа потока
-func (ms *session) GetDirection() Direction {
-	return ms.direction
-}
 
 // GetPtime возвращает текущий packet time
 func (ms *session) GetPtime() time.Duration {
@@ -1023,14 +966,30 @@ func (ms *session) GetStatistics() MediaStatistics {
 	return ms.stats
 }
 
-// canSend проверяет можно ли отправлять данные в текущем режиме
+// canSend проверяет можно ли отправлять данные через любую RTP сессию
 func (ms *session) canSend() bool {
-	return ms.direction == DirectionSendRecv || ms.direction == DirectionSendOnly
+	ms.sessionsMutex.RLock()
+	defer ms.sessionsMutex.RUnlock()
+	
+	for _, rtpSession := range ms.rtpSessions {
+		if rtpSession.CanSend() {
+			return true
+		}
+	}
+	return false
 }
 
-// canReceive проверяет можно ли получать данные в текущем режиме
+// canReceive проверяет можно ли получать данные через любую RTP сессию
 func (ms *session) canReceive() bool {
-	return ms.direction == DirectionSendRecv || ms.direction == DirectionRecvOnly
+	ms.sessionsMutex.RLock()
+	defer ms.sessionsMutex.RUnlock()
+	
+	for _, rtpSession := range ms.rtpSessions {
+		if rtpSession.CanReceive() {
+			return true
+		}
+	}
+	return false
 }
 
 // handleError обрабатывает ошибки медиа сессии

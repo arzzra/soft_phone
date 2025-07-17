@@ -50,13 +50,11 @@ type Session interface {
 	// Конфигурация и настройки
 	SetPtime(ptime time.Duration) error
 	EnableJitterBuffer(enabled bool) error
-	SetDirection(direction Direction) error
 	SetPayloadType(payloadType PayloadType) error
 	EnableSilenceSuppression(enabled bool)
 
 	// Получение состояния и параметров
 	GetState() SessionState
-	GetDirection() Direction
 	GetPtime() time.Duration
 	GetStatistics() MediaStatistics
 	GetPayloadType() PayloadType

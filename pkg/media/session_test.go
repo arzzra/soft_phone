@@ -25,7 +25,6 @@ func TestMediaSessionCreation(t *testing.T) {
 			name: "Стандартная конфигурация PCMU",
 			config: SessionConfig{
 				SessionID:   "test-session-pcmu",
-				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
 				PayloadType: PayloadTypePCMU,
 			},
@@ -66,7 +65,6 @@ func TestMediaSessionCreation(t *testing.T) {
 			name: "Конфигурация только для отправки",
 			config: SessionConfig{
 				SessionID:   "test-session-sendonly",
-				Direction:   DirectionSendOnly,
 				Ptime:       time.Millisecond * 30,
 				PayloadType: PayloadTypeG729,
 			},
@@ -77,7 +75,6 @@ func TestMediaSessionCreation(t *testing.T) {
 		{
 			name: "Пустой SessionID",
 			config: SessionConfig{
-				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
 				PayloadType: PayloadTypePCMU,
 			},
@@ -88,7 +85,6 @@ func TestMediaSessionCreation(t *testing.T) {
 			name: "Неподдерживаемый payload type",
 			config: SessionConfig{
 				SessionID:   "test-session-invalid",
-				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
 				PayloadType: PayloadType(99), // Неподдерживаемый тип
 			},
@@ -254,9 +250,11 @@ func TestAudioSending(t *testing.T) {
 
 	// Добавляем mock RTP сессию
 	mockRTP := &MockRTPSession{
-		id:     "test-rtp",
-		codec:  "PCMU",
-		active: false,
+		id:         "test-rtp",
+		codec:      "PCMU",
+		active:     false,
+		canSend:    true,
+		canReceive: true,
 	}
 	err = session.AddRTPSession("test", mockRTP)
 	if err != nil {
@@ -389,9 +387,11 @@ func TestRTPTiming(t *testing.T) {
 
 			// Добавляем mock RTP сессию
 			mockRTP := &MockRTPSession{
-				id:     "test-timing",
-				codec:  session.GetPayloadTypeName(),
-				active: false,
+				id:         "test-timing",
+				codec:      session.GetPayloadTypeName(),
+				active:     false,
+				canSend:    true,
+				canReceive: true,
 			}
 			if err := session.AddRTPSession("test", mockRTP); err != nil {
 				t.Fatalf("Ошибка добавления RTP сессии: %v", err)
@@ -428,48 +428,72 @@ func TestRTPTiming(t *testing.T) {
 
 // === ТЕСТЫ РАЗЛИЧНЫХ НАПРАВЛЕНИЙ ===
 
-// TestMediaDirections тестирует различные направления медиа потока
-// Проверяет поведение согласно SDP атрибутам: sendrecv, sendonly, recvonly, inactive
+// TestMediaDirections тестирует работу с RTP сессиями различных направлений
+// Проверяет корректность определения возможности отправки/приема через RTP сессии
 func TestMediaDirections(t *testing.T) {
-	directions := []struct {
-		direction   Direction
+	tests := []struct {
+		name        string
+		setupRTP    func() *MockRTPSession
 		canSend     bool
 		canReceive  bool
 		description string
 	}{
 		{
-			direction:   DirectionSendRecv,
+			name: "sendrecv",
+			setupRTP: func() *MockRTPSession {
+				return &MockRTPSession{
+					canSend:    true,
+					canReceive: true,
+				}
+			},
 			canSend:     true,
 			canReceive:  true,
 			description: "Полнодуплексный режим (sendrecv)",
 		},
 		{
-			direction:   DirectionSendOnly,
+			name: "sendonly",
+			setupRTP: func() *MockRTPSession {
+				return &MockRTPSession{
+					canSend:    true,
+					canReceive: false,
+				}
+			},
 			canSend:     true,
 			canReceive:  false,
 			description: "Только отправка (sendonly)",
 		},
 		{
-			direction:   DirectionRecvOnly,
+			name: "recvonly",
+			setupRTP: func() *MockRTPSession {
+				return &MockRTPSession{
+					canSend:    false,
+					canReceive: true,
+				}
+			},
 			canSend:     false,
 			canReceive:  true,
 			description: "Только прием (recvonly)",
 		},
 		{
-			direction:   DirectionInactive,
+			name: "inactive",
+			setupRTP: func() *MockRTPSession {
+				return &MockRTPSession{
+					canSend:    false,
+					canReceive: false,
+				}
+			},
 			canSend:     false,
 			canReceive:  false,
 			description: "Неактивный режим (inactive)",
 		},
 	}
 
-	for _, d := range directions {
-		t.Run(d.direction.String(), func(t *testing.T) {
-			t.Logf("Тестируем направление: %s", d.description)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Logf("Тестируем направление: %s", tt.description)
 
 			config := DefaultMediaSessionConfig()
-			config.SessionID = "test-direction-" + d.direction.String()
-			config.Direction = d.direction
+			config.SessionID = "test-direction-" + tt.name
 
 			session, err := NewMediaSession(config)
 			if err != nil {
@@ -477,14 +501,21 @@ func TestMediaDirections(t *testing.T) {
 			}
 			defer session.Stop()
 
+			// Добавляем mock RTP сессию
+			mockRTP := tt.setupRTP()
+			err = session.AddRTPSession("test", mockRTP)
+			if err != nil {
+				t.Fatalf("Ошибка добавления RTP сессии: %v", err)
+			}
+
 			// Проверяем возможность отправки
-			if session.canSend() != d.canSend {
-				t.Errorf("canSend() = %t, ожидалось %t", session.canSend(), d.canSend)
+			if session.canSend() != tt.canSend {
+				t.Errorf("canSend() = %t, ожидалось %t", session.canSend(), tt.canSend)
 			}
 
 			// Проверяем возможность приема
-			if session.canReceive() != d.canReceive {
-				t.Errorf("canReceive() = %t, ожидалось %t", session.canReceive(), d.canReceive)
+			if session.canReceive() != tt.canReceive {
+				t.Errorf("canReceive() = %t, ожидалось %t", session.canReceive(), tt.canReceive)
 			}
 
 			// Тестируем отправку аудио
@@ -492,9 +523,9 @@ func TestMediaDirections(t *testing.T) {
 			audioData := generateTestAudioData(160)
 			err = session.SendAudio(audioData)
 
-			if d.canSend && err != nil {
+			if tt.canSend && err != nil {
 				t.Errorf("Отправка должна быть разрешена, но получена ошибка: %v", err)
-			} else if !d.canSend && err == nil {
+			} else if !tt.canSend && err == nil {
 				t.Error("Отправка должна быть запрещена, но ошибки не было")
 			}
 		})
@@ -686,9 +717,11 @@ func BenchmarkAudioSending(b *testing.B) {
 
 	// Добавляем mock RTP сессию
 	mockRTP := &MockRTPSession{
-		id:     "benchmark",
-		codec:  "PCMU",
-		active: false,
+		id:         "benchmark",
+		codec:      "PCMU",
+		active:     false,
+		canSend:    true,
+		canReceive: true,
 	}
 	session.AddRTPSession("benchmark", mockRTP)
 	session.Start()

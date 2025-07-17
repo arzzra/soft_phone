@@ -342,7 +342,6 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 			name: "G.722 с jitter buffer и DTMF",
 			config: SessionConfig{
 				SessionID:        "test-session-g722-full",
-				Direction:        DirectionSendRecv,
 				Ptime:            time.Millisecond * 20,
 				PayloadType:      PayloadTypeG722,
 				JitterEnabled:    true,
@@ -374,7 +373,6 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 			name: "Низкая задержка G.729",
 			config: SessionConfig{
 				SessionID:        "test-session-g729-lowdelay",
-				Direction:        DirectionSendRecv,
 				Ptime:            time.Millisecond * 10,
 				PayloadType:      PayloadTypeG729,
 				JitterEnabled:    true,
@@ -388,7 +386,6 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 		{
 			name: "Пустой SessionID должен вызывать ошибку",
 			config: SessionConfig{
-				Direction:   DirectionSendRecv,
 				Ptime:       time.Millisecond * 20,
 				PayloadType: PayloadTypePCMU,
 			},
@@ -399,7 +396,6 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 			name: "Отрицательный ptime должен вызывать ошибку",
 			config: SessionConfig{
 				SessionID:   "test-session-negative-ptime",
-				Direction:   DirectionSendRecv,
 				Ptime:       -time.Millisecond * 20,
 				PayloadType: PayloadTypePCMU,
 			},
@@ -439,10 +435,6 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 					session.sessionID, tt.config.SessionID)
 			}
 
-			if session.GetDirection() != tt.config.Direction {
-				t.Errorf("Direction не совпадает: получено %v, ожидалось %v",
-					session.GetDirection(), tt.config.Direction)
-			}
 
 			if session.GetPayloadType() != tt.config.PayloadType {
 				t.Errorf("PayloadType не совпадает: получен %d, ожидался %d",
