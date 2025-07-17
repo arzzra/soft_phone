@@ -91,6 +91,13 @@ func (b *sdpMediaBuilder) createRTPSession() error {
 	}
 
 	b.rtpSession = rtpSession
+	
+	// Устанавливаем направление медиа потока
+	if err := b.rtpSession.SetDirection(b.config.Direction); err != nil {
+		return WrapSDPError(ErrorCodeRTPSessionCreation, b.config.SessionID, err,
+			"Не удалось установить направление медиа потока")
+	}
+	
 	return nil
 }
 
@@ -99,7 +106,7 @@ func (b *sdpMediaBuilder) createMediaSession() error {
 	// Подготавливаем конфигурацию медиа сессии
 	mediaConfig := b.config.MediaConfig
 	mediaConfig.SessionID = b.config.SessionID
-	mediaConfig.Direction = b.config.Direction
+	// Direction устанавливается на уровне RTP сессии
 	mediaConfig.Ptime = b.config.Ptime
 	mediaConfig.PayloadType = media.PayloadType(b.config.PayloadType)
 
@@ -223,11 +230,11 @@ func (b *sdpMediaBuilder) buildMediaAttributes() []sdp.Attribute {
 
 	// Направление медиа потока
 	switch b.config.Direction {
-	case media.DirectionSendOnly:
+	case rtp.DirectionSendOnly:
 		attributes = append(attributes, sdp.NewPropertyAttribute("sendonly"))
-	case media.DirectionRecvOnly:
+	case rtp.DirectionRecvOnly:
 		attributes = append(attributes, sdp.NewPropertyAttribute("recvonly"))
-	case media.DirectionInactive:
+	case rtp.DirectionInactive:
 		attributes = append(attributes, sdp.NewPropertyAttribute("inactive"))
 	default: // DirectionSendRecv
 		attributes = append(attributes, sdp.NewPropertyAttribute("sendrecv"))
@@ -466,6 +473,11 @@ func (b *sdpMediaBuilder) recreateRTPSession() error {
 
 	// Заменяем RTP сессию
 	b.rtpSession = rtpSession
+	
+	// Устанавливаем направление медиа потока
+	if err := b.rtpSession.SetDirection(b.config.Direction); err != nil {
+		return err
+	}
 
 	// Добавляем новую сессию в медиа сессию
 	if b.mediaSession != nil {

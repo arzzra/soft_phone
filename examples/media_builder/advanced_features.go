@@ -37,10 +37,9 @@ func AdvancedFeaturesExample() error {
 	config.DefaultMediaConfig.DTMFPayloadType = 101
 
 	// Настраиваем jitter buffer
-	config.DefaultMediaConfig.JitterBufferConfig.Enabled = true
-	config.DefaultMediaConfig.JitterBufferConfig.MinDelay = 20 * time.Millisecond
-	config.DefaultMediaConfig.JitterBufferConfig.MaxDelay = 200 * time.Millisecond
-	config.DefaultMediaConfig.JitterBufferConfig.Adaptive = true
+	config.DefaultMediaConfig.JitterEnabled = true
+	config.DefaultMediaConfig.JitterBufferSize = 10
+	config.DefaultMediaConfig.JitterDelay = 40 * time.Millisecond
 
 	// Настраиваем RTCP
 	config.DefaultMediaConfig.RTCPEnabled = true

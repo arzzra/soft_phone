@@ -36,7 +36,6 @@ func TestMediaSessionCreation(t *testing.T) {
 			name: "Конфигурация G.722 с jitter buffer",
 			config: SessionConfig{
 				SessionID:        "test-session-g722",
-				Direction:        DirectionSendRecv,
 				Ptime:            time.Millisecond * 20,
 				PayloadType:      PayloadTypeG722,
 				JitterEnabled:    true,
@@ -51,7 +50,6 @@ func TestMediaSessionCreation(t *testing.T) {
 			name: "Конфигурация с DTMF поддержкой",
 			config: SessionConfig{
 				SessionID:       "test-session-dtmf",
-				Direction:       DirectionSendRecv,
 				Ptime:           time.Millisecond * 20,
 				PayloadType:     PayloadTypePCMA,
 				DTMFEnabled:     true,
@@ -124,10 +122,7 @@ func TestMediaSessionCreation(t *testing.T) {
 					session.sessionID, tt.config.SessionID)
 			}
 
-			if session.GetDirection() != tt.config.Direction {
-				t.Errorf("Direction не совпадает: получено %v, ожидалось %v",
-					session.GetDirection(), tt.config.Direction)
-			}
+			// Direction теперь управляется на уровне RTP сессии
 
 			if session.GetPayloadType() != tt.config.PayloadType {
 				t.Errorf("PayloadType не совпадает: получен %d, ожидался %d",

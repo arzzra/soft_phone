@@ -415,13 +415,20 @@ func (b *mediaBuilder) createMediaResources() error {
 		return fmt.Errorf("не удалось создать RTP сессию: %w", err)
 	}
 	b.rtpSession = rtpSession
+	
+	// Устанавливаем направление медиа потока
+	if err := b.rtpSession.SetDirection(b.config.MediaDirection); err != nil {
+		_ = rtpSession.Stop()
+		transport.Close()
+		return fmt.Errorf("не удалось установить направление медиа потока: %w", err)
+	}
 
 	// RTP сессия запускается автоматически при создании
 
 	// Создаем медиа сессию
 	mediaConfig := b.config.MediaConfig
 	mediaConfig.SessionID = b.config.SessionID
-	mediaConfig.Direction = b.config.MediaDirection
+	// Direction устанавливается на уровне RTP сессии
 	mediaConfig.PayloadType = b.selectedPayloadType
 	mediaConfig.Ptime = b.config.Ptime
 	mediaConfig.DTMFEnabled = b.config.DTMFEnabled

@@ -328,7 +328,6 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 			name: "Стандартная конфигурация PCMU с RTCP",
 			config: SessionConfig{
 				SessionID:    "test-session-pcmu-rtcp",
-				Direction:    DirectionSendRecv,
 				Ptime:        time.Millisecond * 20,
 				PayloadType:  PayloadTypePCMU,
 				RTCPEnabled:  true,
@@ -358,7 +357,6 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 			name: "Только прием с большим jitter buffer",
 			config: SessionConfig{
 				SessionID:        "test-session-recvonly",
-				Direction:        DirectionRecvOnly,
 				Ptime:            time.Millisecond * 30,
 				PayloadType:      PayloadTypePCMA,
 				JitterEnabled:    true,

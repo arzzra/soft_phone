@@ -53,7 +53,7 @@
 ```go
 config := media.DefaultMediaSessionConfig()
 config.SessionID = "call-001"
-config.Direction = media.DirectionSendRecv
+// Direction теперь управляется на уровне RTP сессии
 config.Ptime = time.Millisecond * 20
 
 session, err := media.NewMediaSession(config)
@@ -348,7 +348,7 @@ func main() {
 
 ```go
 config := media.DefaultMediaSessionConfig()
-// Direction: DirectionSendRecv
+// Direction устанавливается на уровне RTP сессии
 // Ptime: 20ms
 // PayloadType: PayloadTypePCMU (G.711 μ-law)
 // JitterEnabled: true

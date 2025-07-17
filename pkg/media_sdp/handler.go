@@ -19,7 +19,7 @@ type sdpMediaHandler struct {
 	processedOffer  *sdp.SessionDescription
 	selectedCodec   CodecInfo
 	remoteAddr      string
-	direction       media.Direction
+	direction       rtp.Direction
 	ptime           time.Duration
 	dtmfEnabled     bool
 	dtmfPayloadType uint8
@@ -202,18 +202,18 @@ func (h *sdpMediaHandler) extractConnectionInfo(offer *sdp.SessionDescription, m
 
 // parseMediaDirection парсит направление медиа потока
 func (h *sdpMediaHandler) parseMediaDirection(mediaDesc *sdp.MediaDescription) {
-	h.direction = media.DirectionSendRecv // по умолчанию
+	h.direction = rtp.DirectionSendRecv // по умолчанию
 
 	for _, attr := range mediaDesc.Attributes {
 		switch attr.Key {
 		case "sendonly":
-			h.direction = media.DirectionRecvOnly // если отправитель sendonly, мы recvonly
+			h.direction = rtp.DirectionRecvOnly // если отправитель sendonly, мы recvonly
 		case "recvonly":
-			h.direction = media.DirectionSendOnly // если отправитель recvonly, мы sendonly
+			h.direction = rtp.DirectionSendOnly // если отправитель recvonly, мы sendonly
 		case "sendrecv":
-			h.direction = media.DirectionSendRecv
+			h.direction = rtp.DirectionSendRecv
 		case "inactive":
-			h.direction = media.DirectionInactive
+			h.direction = rtp.DirectionInactive
 		}
 	}
 }
@@ -307,6 +307,13 @@ func (h *sdpMediaHandler) createRTPSession() error {
 	}
 
 	h.rtpSession = rtpSession
+	
+	// Устанавливаем направление медиа потока
+	if err := h.rtpSession.SetDirection(h.direction); err != nil {
+		return WrapSDPError(ErrorCodeRTPSessionCreation, h.config.SessionID, err,
+			"Не удалось установить направление медиа потока")
+	}
+	
 	return nil
 }
 
@@ -314,7 +321,7 @@ func (h *sdpMediaHandler) createRTPSession() error {
 func (h *sdpMediaHandler) createMediaSession() error {
 	mediaConfig := h.config.MediaConfig
 	mediaConfig.SessionID = h.config.SessionID
-	mediaConfig.Direction = h.direction
+	// Direction устанавливается на уровне RTP сессии
 	mediaConfig.Ptime = h.ptime
 	mediaConfig.PayloadType = media.PayloadType(h.selectedCodec.PayloadType)
 
@@ -430,11 +437,11 @@ func (h *sdpMediaHandler) buildAnswerMediaAttributes() []sdp.Attribute {
 
 	// Направление медиа потока
 	switch h.direction {
-	case media.DirectionSendOnly:
+	case rtp.DirectionSendOnly:
 		attributes = append(attributes, sdp.NewPropertyAttribute("sendonly"))
-	case media.DirectionRecvOnly:
+	case rtp.DirectionRecvOnly:
 		attributes = append(attributes, sdp.NewPropertyAttribute("recvonly"))
-	case media.DirectionInactive:
+	case rtp.DirectionInactive:
 		attributes = append(attributes, sdp.NewPropertyAttribute("inactive"))
 	default: // DirectionSendRecv
 		attributes = append(attributes, sdp.NewPropertyAttribute("sendrecv"))

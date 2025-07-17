@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/arzzra/soft_phone/pkg/media"
 	"github.com/arzzra/soft_phone/pkg/media_sdp"
 	"github.com/arzzra/soft_phone/pkg/rtp"
 )
@@ -207,7 +206,7 @@ func TestSDPAttributes(t *testing.T) {
 	builderConfig.Transport.LocalAddr = ":0"
 	builderConfig.DTMFEnabled = true
 	builderConfig.DTMFPayloadType = 101
-	builderConfig.Direction = media.DirectionSendOnly
+	builderConfig.Direction = rtp.DirectionSendOnly
 
 	builder, err := media_sdp.NewSDPMediaBuilder(builderConfig)
 	if err != nil {

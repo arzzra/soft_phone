@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/arzzra/soft_phone/pkg/media"
+	"github.com/arzzra/soft_phone/pkg/rtp"
 )
 
 // PortAllocationStrategy определяет стратегию выделения портов из пула.
@@ -59,7 +60,7 @@ type ManagerConfig struct {
 	DefaultPtime        time.Duration   // Время пакетизации по умолчанию (20ms)
 	DefaultJitterBuffer bool            // Включить jitter buffer по умолчанию
 	DefaultRTCPEnabled  bool            // Включить RTCP по умолчанию
-	DefaultDirection    media.Direction // Направление медиа по умолчанию
+	DefaultDirection    rtp.Direction // Направление медиа по умолчанию
 
 	// RTP транспорт настройки
 	DefaultTransportBufferSize int // Размер буфера транспорта
@@ -104,7 +105,7 @@ func DefaultConfig() *ManagerConfig {
 		DefaultPtime:        20 * time.Millisecond,
 		DefaultJitterBuffer: true,
 		DefaultRTCPEnabled:  true,
-		DefaultDirection:    media.DirectionSendRecv,
+		DefaultDirection:    rtp.DirectionSendRecv,
 
 		// Транспорт
 		DefaultTransportBufferSize: 1500,
@@ -218,7 +219,7 @@ type BuilderConfig struct {
 	Ptime           time.Duration       // Время пакетизации
 	DTMFEnabled     bool                // Включить поддержку DTMF
 	DTMFPayloadType uint8               // Payload type для DTMF (обычно 101)
-	MediaDirection  media.Direction     // Направление медиа потока
+	MediaDirection  rtp.Direction     // Направление медиа потока
 	MediaConfig     media.SessionConfig // Конфигурация медиа сессии
 	TransportBuffer int                 // Размер буфера транспорта
 }

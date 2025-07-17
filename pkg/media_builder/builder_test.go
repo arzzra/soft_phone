@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/arzzra/soft_phone/pkg/media"
+	"github.com/arzzra/soft_phone/pkg/rtp"
 	"github.com/pion/sdp/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +19,7 @@ func TestMediaBuilder_CreateOffer(t *testing.T) {
 		PayloadTypes:   []uint8{0, 8},
 		Ptime:          20 * time.Millisecond,
 		DTMFEnabled:    true,
-		MediaDirection: media.DirectionSendRecv,
+		MediaDirection: rtp.DirectionSendRecv,
 		MediaConfig:    media.DefaultMediaSessionConfig(),
 	}
 

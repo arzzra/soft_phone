@@ -43,7 +43,7 @@ type BuilderConfig struct {
 	PayloadType rtp.PayloadType
 	ClockRate   uint32
 	Ptime       time.Duration
-	Direction   media.Direction
+	Direction   rtp.Direction
 
 	// Транспорт
 	Transport TransportConfig
@@ -105,7 +105,7 @@ func DefaultBuilderConfig() BuilderConfig {
 		PayloadType: rtp.PayloadTypePCMU,
 		ClockRate:   8000,
 		Ptime:       20 * time.Millisecond,
-		Direction:   media.DirectionSendRecv,
+		Direction:   rtp.DirectionSendRecv,
 
 		Transport: TransportConfig{
 			Type:        TransportTypeUDP,
