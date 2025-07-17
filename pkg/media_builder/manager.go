@@ -109,6 +109,7 @@ func (m *builderManager) CreateBuilder(sessionID string) (Builder, error) {
 		MediaDirection:  m.config.DefaultDirection,
 		MediaConfig:     m.config.DefaultMediaConfig,
 		TransportBuffer: m.config.DefaultTransportBufferSize,
+		PortPool:        m.portPool, // Передаем пул портов для выделения дополнительных портов
 	}
 
 	// Создаем builder

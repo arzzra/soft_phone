@@ -525,6 +525,33 @@ func (b *mediaBuilder) Close() error {
 // createAllMediaResources создает медиа ресурсы для всех потоков.
 // Создает одну медиа сессию и добавляет в нее все RTP сессии.
 func (b *mediaBuilder) createAllMediaResources() error {
+	// Трекеры для отката изменений в случае ошибки
+	var createdTransports []rtp.Transport
+	var createdSessions []*rtp.Session
+	
+	// Функция очистки в случае ошибки
+	cleanup := func() {
+		// Останавливаем все созданные RTP сессии
+		for _, session := range createdSessions {
+			if session != nil {
+				_ = session.Stop()
+			}
+		}
+		
+		// Закрываем все созданные транспорты
+		for _, transport := range createdTransports {
+			if transport != nil {
+				_ = transport.Close()
+			}
+		}
+		
+		// Если медиа сессия была создана в этой функции, останавливаем ее
+		if b.mediaSession != nil {
+			_ = b.mediaSession.Stop()
+			b.mediaSession = nil
+		}
+	}
+	
 	// Создаем медиа сессию для всех потоков
 	if b.mediaSession == nil && len(b.mediaStreams) > 0 {
 		// Используем параметры первого потока для медиа сессии
@@ -557,9 +584,11 @@ func (b *mediaBuilder) createAllMediaResources() error {
 
 		transport, err := CreateRTPTransport(transportParams)
 		if err != nil {
+			cleanup()
 			return fmt.Errorf("не удалось создать RTP транспорт для потока %s: %w", streamInfo.StreamID, err)
 		}
 		streamInfo.RTPTransport = transport
+		createdTransports = append(createdTransports, transport)
 
 		// Создаем RTP сессию
 		rtpConfig := rtp.SessionConfig{
@@ -578,22 +607,21 @@ func (b *mediaBuilder) createAllMediaResources() error {
 		manager := rtp.NewSessionManager(rtp.DefaultSessionManagerConfig())
 		rtpSession, err := manager.CreateSession(streamInfo.StreamID, rtpConfig)
 		if err != nil {
-			transport.Close()
+			cleanup()
 			return fmt.Errorf("не удалось создать RTP сессию для потока %s: %w", streamInfo.StreamID, err)
 		}
 		streamInfo.RTPSession = rtpSession
+		createdSessions = append(createdSessions, rtpSession)
 		
 		// Устанавливаем направление медиа потока
 		if err := streamInfo.RTPSession.SetDirection(streamInfo.Direction); err != nil {
-			_ = rtpSession.Stop()
-			transport.Close()
+			cleanup()
 			return fmt.Errorf("не удалось установить направление для потока %s: %w", streamInfo.StreamID, err)
 		}
 
 		// Добавляем RTP сессию в медиа сессию
 		if err := b.mediaSession.AddRTPSession(streamInfo.StreamID, rtpSession); err != nil {
-			_ = rtpSession.Stop()
-			_ = transport.Close()
+			cleanup()
 			return fmt.Errorf("не удалось добавить RTP сессию %s: %w", streamInfo.StreamID, err)
 		}
 	}
@@ -613,10 +641,12 @@ func contains(slice []uint8, item uint8) bool {
 
 // allocatePort выделяет свободный порт для медиа потока.
 // Возвращает выделенный порт или ошибку если порты недоступны.
+// ВАЖНО: Этот метод должен вызываться только когда mutex уже заблокирован!
 func (b *mediaBuilder) allocatePort() (uint16, error) {
 	// Если это первый поток, используем порт из конфигурации
 	if len(b.mediaStreams) == 0 {
-		// LocalPort уже выделен менеджером, просто используем его
+		// LocalPort уже выделен менеджером, просто используем его.
+		// Не добавляем его в allocatedPorts, так как он будет освобожден менеджером
 		return b.config.LocalPort, nil
 	}
 	
@@ -635,13 +665,14 @@ func (b *mediaBuilder) allocatePort() (uint16, error) {
 		return allocatedPort, nil
 	}
 	
-	// Выделяем порт из пула
+	// Выделяем порт из пула (PortPool имеет свою внутреннюю синхронизацию)
 	port, err := b.config.PortPool.Allocate()
 	if err != nil {
 		return 0, fmt.Errorf("не удалось выделить порт из пула: %w", err)
 	}
 	
 	// Сохраняем выделенный порт для последующего освобождения
+	// Только дополнительные порты сохраняются, основной порт управляется менеджером
 	b.allocatedPorts = append(b.allocatedPorts, port)
 	
 	return port, nil

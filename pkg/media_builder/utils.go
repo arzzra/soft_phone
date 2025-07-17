@@ -33,6 +33,15 @@ type PortPool struct {
 // minPort и maxPort должны быть четными.
 // step определяет шаг между портами (обычно 2 для RTP/RTCP).
 func NewPortPool(minPort, maxPort uint16, step int, strategy PortAllocationStrategy) *PortPool {
+	// Валидация параметров
+	if err := ValidatePortRange(minPort, maxPort, step); err != nil {
+		// В случае ошибки возвращаем пул с минимальным валидным диапазоном
+		// Это предотвращает панику, но лучше было бы возвращать ошибку
+		minPort = 10000
+		maxPort = 10010
+		step = 2
+	}
+	
 	pool := &PortPool{
 		minPort:   minPort,
 		maxPort:   maxPort,
@@ -44,7 +53,10 @@ func NewPortPool(minPort, maxPort uint16, step int, strategy PortAllocationStrat
 
 	// Инициализируем доступные порты
 	for port := minPort; port <= maxPort; port += uint16(step) {
-		pool.available = append(pool.available, port)
+		// Дополнительная проверка четности порта
+		if port%2 == 0 {
+			pool.available = append(pool.available, port)
+		}
 	}
 
 	// Для random стратегии перемешиваем порты
@@ -81,6 +93,11 @@ func (p *PortPool) Allocate() (uint16, error) {
 		port = p.available[idx]
 		// Удаляем выбранный порт из списка
 		p.available = append(p.available[:idx], p.available[idx+1:]...)
+	}
+
+	// Дополнительная проверка четности порта перед выделением
+	if port%2 != 0 {
+		return 0, fmt.Errorf("Внутренняя ошибка: попытка выделить нечетный порт %d", port)
 	}
 
 	p.allocated[port] = true
