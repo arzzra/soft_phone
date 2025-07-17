@@ -413,3 +413,66 @@ func ValidatePortRange(minPort, maxPort uint16, step int) error {
 
 	return nil
 }
+
+// extractDirection извлекает направление медиа потока из атрибутов SDP.
+// Возвращает направление на основе атрибутов sendrecv, sendonly, recvonly, inactive.
+// По умолчанию возвращает DirectionSendRecv.
+func extractDirection(attributes []sdp.Attribute) rtp.Direction {
+	for _, attr := range attributes {
+		switch attr.Key {
+		case "sendrecv":
+			return rtp.DirectionSendRecv
+		case "sendonly":
+			return rtp.DirectionSendOnly
+		case "recvonly":
+			return rtp.DirectionRecvOnly
+		case "inactive":
+			return rtp.DirectionInactive
+		}
+	}
+	// По умолчанию sendrecv
+	return rtp.DirectionSendRecv
+}
+
+// selectSupportedCodec выбирает первый поддерживаемый кодек из медиа описания.
+// Проверяет форматы из медиа описания против списка поддерживаемых payload types.
+// Возвращает первый найденный поддерживаемый payload type или 0 если не найден.
+func selectSupportedCodec(media *sdp.MediaDescription, supportedTypes []uint8) uint8 {
+	for _, format := range media.MediaName.Formats {
+		if pt, err := strconv.Atoi(format); err == nil {
+			payloadType := uint8(pt)
+			// Проверяем, поддерживаем ли мы этот payload type
+			for _, supportedPT := range supportedTypes {
+				if supportedPT == payloadType {
+					return payloadType
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// extractRemoteAddress извлекает удаленный адрес из медиа описания или SDP сессии.
+// Проверяет в следующем порядке:
+//   1. Connection информация на уровне медиа
+//   2. Connection информация на уровне сессии
+//   3. Origin адрес
+// Возвращает пустую строку если адрес не найден.
+func extractRemoteAddress(media *sdp.MediaDescription, sdp *sdp.SessionDescription) string {
+	// Сначала проверяем connection на уровне медиа
+	if media.ConnectionInformation != nil && media.ConnectionInformation.Address != nil {
+		return media.ConnectionInformation.Address.Address
+	}
+	
+	// Затем проверяем connection на уровне сессии
+	if sdp.ConnectionInformation != nil && sdp.ConnectionInformation.Address != nil {
+		return sdp.ConnectionInformation.Address.Address
+	}
+	
+	// В крайнем случае используем origin
+	if sdp.Origin.UnicastAddress != "" {
+		return sdp.Origin.UnicastAddress
+	}
+	
+	return ""
+}
