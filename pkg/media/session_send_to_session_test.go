@@ -36,8 +36,8 @@ func TestSendAudioToSession(t *testing.T) {
 	}
 	
 	// Запускаем mock RTP сессии
-	mockRTP1.Start()
-	mockRTP2.Start()
+	_ = mockRTP1.Start()
+	_ = mockRTP2.Start()
 	
 	// Запускаем сессию
 	err = session.Start()
@@ -58,6 +58,9 @@ func TestSendAudioToSession(t *testing.T) {
 			t.Errorf("Ошибка отправки аудио на primary: %v", err)
 		}
 		
+		// Ждем отправки через буферизацию (ptime = 20ms)
+		time.Sleep(time.Millisecond * 30)
+		
 		// Проверяем, что данные отправлены только на primary
 		if mockRTP1.GetPacketsSent() == 0 {
 			t.Error("Данные не были отправлены на primary сессию")
@@ -69,8 +72,8 @@ func TestSendAudioToSession(t *testing.T) {
 		// Сбрасываем счетчики и перезапускаем mocks
 		mockRTP1.Reset()
 		mockRTP2.Reset()
-		mockRTP1.Start()
-		mockRTP2.Start()
+		_ = mockRTP1.Start()
+		_ = mockRTP2.Start()
 	})
 	
 	t.Run("Отправка на существующую secondary сессию", func(t *testing.T) {
@@ -79,6 +82,9 @@ func TestSendAudioToSession(t *testing.T) {
 		if err != nil {
 			t.Errorf("Ошибка отправки аудио на secondary: %v", err)
 		}
+		
+		// Ждем отправки через буферизацию (ptime = 20ms)
+		time.Sleep(time.Millisecond * 30)
 		
 		// Проверяем, что данные отправлены только на secondary
 		if mockRTP1.GetPacketsSent() != 0 {
@@ -91,8 +97,8 @@ func TestSendAudioToSession(t *testing.T) {
 		// Сбрасываем счетчики и перезапускаем mocks
 		mockRTP1.Reset()
 		mockRTP2.Reset()
-		mockRTP1.Start()
-		mockRTP2.Start()
+		_ = mockRTP1.Start()
+		_ = mockRTP2.Start()
 	})
 	
 	t.Run("Отправка на несуществующую сессию", func(t *testing.T) {
@@ -141,7 +147,7 @@ func TestSendAudioRawToSession(t *testing.T) {
 	}
 	
 	// Запускаем mock RTP сессию
-	mockRTP.Start()
+	_ = mockRTP.Start()
 	
 	// Запускаем сессию
 	err = session.Start()
@@ -161,12 +167,15 @@ func TestSendAudioRawToSession(t *testing.T) {
 			t.Errorf("Ошибка отправки закодированных данных: %v", err)
 		}
 		
+		// Ждем отправки через буферизацию (ptime = 20ms)
+		time.Sleep(time.Millisecond * 30)
+		
 		if mockRTP.GetPacketsSent() == 0 {
 			t.Error("Данные не были отправлены")
 		}
 		
 		mockRTP.Reset()
-		mockRTP.Start()
+		_ = mockRTP.Start()
 	})
 	
 	t.Run("Отправка данных неправильного размера", func(t *testing.T) {
@@ -224,7 +233,7 @@ func TestSendAudioWithFormatToSession(t *testing.T) {
 	}
 	
 	// Запускаем mock RTP сессию
-	mockRTP.Start()
+	_ = mockRTP.Start()
 	
 	// Запускаем сессию
 	err = session.Start()
@@ -241,12 +250,15 @@ func TestSendAudioWithFormatToSession(t *testing.T) {
 			t.Errorf("Ошибка отправки аудио с форматом: %v", err)
 		}
 		
+		// Ждем отправки через буферизацию (ptime = 20ms)
+		time.Sleep(time.Millisecond * 30)
+		
 		if mockRTP.GetPacketsSent() == 0 {
 			t.Error("Данные не были отправлены")
 		}
 		
 		mockRTP.Reset()
-		mockRTP.Start()
+		_ = mockRTP.Start()
 	})
 	
 	t.Run("Отправка без обработки", func(t *testing.T) {
@@ -258,12 +270,15 @@ func TestSendAudioWithFormatToSession(t *testing.T) {
 			t.Errorf("Ошибка отправки аудио без обработки: %v", err)
 		}
 		
+		// Ждем отправки через буферизацию (ptime = 20ms)
+		time.Sleep(time.Millisecond * 30)
+		
 		if mockRTP.GetPacketsSent() == 0 {
 			t.Error("Данные не были отправлены")
 		}
 		
 		mockRTP.Reset()
-		mockRTP.Start()
+		_ = mockRTP.Start()
 	})
 	
 	t.Run("Отправка на несуществующую сессию", func(t *testing.T) {

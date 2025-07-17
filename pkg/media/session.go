@@ -56,7 +56,6 @@ const (
 	PayloadTypeG729 = PayloadType(18) // G.729
 )
 
-
 // SessionState представляет текущее состояние медиа сессии.
 // Сессия проходит через различные состояния в течение своего жизненного цикла.
 type SessionState int
@@ -128,13 +127,17 @@ type session struct {
 	sessionsMutex sync.RWMutex
 
 	// Управление RTP потоком и timing
-	audioBuffer      []byte        // Буфер накопления аудио данных
+	audioBuffer      []byte        // Буфер накопления аудио данных (для обратной совместимости)
 	bufferMutex      sync.Mutex    // Защита буфера
 	lastSendTime     time.Time     // Время последней отправки
 	sendTicker       *time.Ticker  // Тикер для регулярной отправки
 	packetDuration   time.Duration // Длительность одного пакета (равна ptime)
 	samplesPerPacket int           // Количество samples на пакет
 	stopChan         chan struct{} // Канал для остановки
+
+	// Буферизация по сессиям
+	sessionBuffers      map[string][]byte // Буферы для каждой RTP сессии
+	sessionBuffersMutex sync.RWMutex      // Защита для sessionBuffers
 
 	// Состояние
 	state      SessionState
@@ -321,6 +324,7 @@ func NewMediaSession(config SessionConfig) (*session, error) {
 		ptime:            config.Ptime,
 		payloadType:      config.PayloadType,
 		rtpSessions:      make(map[string]SessionRTP),
+		sessionBuffers:   make(map[string][]byte),
 		state:            MediaStateIdle,
 		jitterEnabled:    config.JitterEnabled,
 		dtmfEnabled:      config.DTMFEnabled,
@@ -419,6 +423,11 @@ func (ms *session) AddRTPSession(rtpSessionID string, rtpSession SessionRTP) err
 
 	ms.rtpSessions[rtpSessionID] = rtpSession
 
+	// Создаем буфер для новой сессии
+	ms.sessionBuffersMutex.Lock()
+	ms.sessionBuffers[rtpSessionID] = make([]byte, 0, ms.samplesPerPacket*4)
+	ms.sessionBuffersMutex.Unlock()
+
 	// Регистрируем handler для входящих пакетов с замыканием rtpSessionID
 	rtpSession.RegisterIncomingHandler(func(packet *rtp.Packet, addr net.Addr) {
 		ms.handleIncomingRTPPacketWithID(packet, rtpSessionID)
@@ -460,6 +469,12 @@ func (ms *session) RemoveRTPSession(rtpSessionID string) error {
 	}
 
 	delete(ms.rtpSessions, rtpSessionID)
+
+	// Удаляем буфер сессии
+	ms.sessionBuffersMutex.Lock()
+	delete(ms.sessionBuffers, rtpSessionID)
+	ms.sessionBuffersMutex.Unlock()
+
 	return nil
 }
 
@@ -766,6 +781,11 @@ func (ms *session) WriteAudioDirect(rtpPayload []byte) error {
 	defer ms.sessionsMutex.RUnlock()
 
 	for _, rtpSession := range ms.rtpSessions {
+		// Проверяем, может ли сессия отправлять данные
+		if !rtpSession.CanSend() {
+			continue
+		}
+		
 		err := rtpSession.SendAudio(rtpPayload, ms.ptime)
 		if err != nil {
 			ms.handleError(fmt.Errorf("ошибка прямой записи аудио: %w", err))
@@ -825,6 +845,11 @@ func (ms *session) SendDTMF(digit DTMFDigit, duration time.Duration) error {
 	defer ms.sessionsMutex.RUnlock()
 
 	for _, rtpSession := range ms.rtpSessions {
+		// Проверяем, может ли сессия отправлять данные
+		if !rtpSession.CanSend() {
+			continue
+		}
+		
 		for _, packet := range packets {
 			err := rtpSession.SendPacket(packet)
 			if err != nil {
@@ -863,14 +888,6 @@ func (ms *session) SendDTMF(digit DTMFDigit, duration time.Duration) error {
 //	    log.Printf("Ошибка отправки: %v", err)
 //	}
 func (ms *session) SendAudioToSession(audioData []byte, rtpSessionID string) error {
-	if !ms.canSend() {
-		return &MediaError{
-			Code:      ErrorCodeSessionInvalidDirection,
-			Message:   "отправка запрещена для данной сессии",
-			SessionID: ms.sessionID,
-		}
-	}
-
 	state := ms.GetState()
 	if state != MediaStateActive {
 		return &MediaError{
@@ -899,14 +916,26 @@ func (ms *session) SendAudioToSession(audioData []byte, rtpSessionID string) err
 		}
 	}
 
+	// Проверяем возможность отправки для конкретной RTP сессии
+	if !rtpSession.CanSend() {
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   fmt.Sprintf("отправка запрещена для RTP сессии '%s'", rtpSessionID),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"rtp_session_id": rtpSessionID,
+			},
+		}
+	}
+
 	// Обрабатываем аудио через процессор
 	processedData, err := ms.audioProcessor.ProcessOutgoing(audioData)
 	if err != nil {
 		return WrapMediaError(ErrorCodeAudioProcessingFailed, ms.sessionID, "ошибка обработки аудио", err)
 	}
 
-	// Отправляем обработанные данные на конкретную сессию
-	return ms.sendProcessedAudioToSession(processedData, rtpSession, rtpSessionID)
+	// Добавляем обработанные данные в буфер конкретной сессии
+	return ms.addToSessionBuffer(processedData, rtpSessionID)
 }
 
 // SendAudioRawToSession отправляет уже закодированные аудио данные на конкретную RTP сессию.
@@ -928,14 +957,6 @@ func (ms *session) SendAudioToSession(audioData []byte, rtpSessionID string) err
 //	g711Data := encodeToG711(rawPCM)
 //	err := session.SendAudioRawToSession(g711Data, "backup")
 func (ms *session) SendAudioRawToSession(encodedData []byte, rtpSessionID string) error {
-	if !ms.canSend() {
-		return &MediaError{
-			Code:      ErrorCodeSessionInvalidDirection,
-			Message:   "отправка запрещена для данной сессии",
-			SessionID: ms.sessionID,
-		}
-	}
-
 	state := ms.GetState()
 	if state != MediaStateActive {
 		return &MediaError{
@@ -964,6 +985,18 @@ func (ms *session) SendAudioRawToSession(encodedData []byte, rtpSessionID string
 		}
 	}
 
+	// Проверяем возможность отправки для конкретной RTP сессии
+	if !rtpSession.CanSend() {
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   fmt.Sprintf("отправка запрещена для RTP сессии '%s'", rtpSessionID),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"rtp_session_id": rtpSessionID,
+			},
+		}
+	}
+
 	// Проверяем размер данных для заданного payload типа и ptime
 	expectedSize := ms.GetExpectedPayloadSize()
 	if len(encodedData) != expectedSize {
@@ -973,8 +1006,8 @@ func (ms *session) SendAudioRawToSession(encodedData []byte, rtpSessionID string
 			ms.payloadType, expectedSize, len(encodedData), getSampleRateForPayloadType(ms.payloadType), ms.ptime)
 	}
 
-	// Отправляем данные на конкретную сессию
-	return ms.sendProcessedAudioToSession(encodedData, rtpSession, rtpSessionID)
+	// Добавляем данные в буфер конкретной сессии для отправки с правильным timing
+	return ms.addToSessionBuffer(encodedData, rtpSessionID)
 }
 
 // SendAudioWithFormatToSession отправляет аудио данные в указанном формате на конкретную RTP сессию.
@@ -993,14 +1026,6 @@ func (ms *session) SendAudioRawToSession(encodedData []byte, rtpSessionID string
 //	g722Data := convertToG722(pcmData)
 //	err := session.SendAudioWithFormatToSession(g722Data, PayloadTypeG722, true, "primary")
 func (ms *session) SendAudioWithFormatToSession(audioData []byte, payloadType PayloadType, skipProcessing bool, rtpSessionID string) error {
-	if !ms.canSend() {
-		return &MediaError{
-			Code:      ErrorCodeSessionInvalidDirection,
-			Message:   "отправка запрещена для данной сессии",
-			SessionID: ms.sessionID,
-		}
-	}
-
 	state := ms.GetState()
 	if state != MediaStateActive {
 		return &MediaError{
@@ -1022,6 +1047,18 @@ func (ms *session) SendAudioWithFormatToSession(audioData []byte, payloadType Pa
 		return &MediaError{
 			Code:      ErrorCodeRTPSessionNotFound,
 			Message:   fmt.Sprintf("RTP сессия '%s' не найдена", rtpSessionID),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"rtp_session_id": rtpSessionID,
+			},
+		}
+	}
+
+	// Проверяем возможность отправки для конкретной RTP сессии
+	if !rtpSession.CanSend() {
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   fmt.Sprintf("отправка запрещена для RTP сессии '%s'", rtpSessionID),
 			SessionID: ms.sessionID,
 			Context: map[string]interface{}{
 				"rtp_session_id": rtpSessionID,
@@ -1051,32 +1088,8 @@ func (ms *session) SendAudioWithFormatToSession(audioData []byte, payloadType Pa
 		}
 	}
 
-	// Отправляем данные на конкретную сессию
-	return ms.sendProcessedAudioToSession(finalData, rtpSession, rtpSessionID)
-}
-
-// sendProcessedAudioToSession отправляет обработанные аудио данные на конкретную RTP сессию
-func (ms *session) sendProcessedAudioToSession(audioData []byte, rtpSession SessionRTP, rtpSessionID string) error {
-	// Отправляем данные на конкретную RTP сессию
-	err := rtpSession.SendAudio(audioData, ms.ptime)
-	if err != nil {
-		ms.handleError(fmt.Errorf("ошибка отправки аудио на сессию %s: %w", rtpSessionID, err), rtpSessionID)
-		return WrapMediaError(ErrorCodeRTPSendFailed, ms.sessionID,
-			fmt.Sprintf("ошибка отправки на RTP сессию %s", rtpSessionID), err)
-	}
-
-	// Обновляем статистику
-	ms.updateSendStats(len(audioData))
-
-	// Обновляем RTCP статистику если включен
-	if ms.IsRTCPEnabled() {
-		ms.updateRTCPStats(1, uint32(len(audioData)))
-	}
-
-	// Обновляем время последней отправки
-	ms.lastSendTime = time.Now()
-
-	return nil
+	// Добавляем данные в буфер конкретной сессии для отправки с правильным timing
+	return ms.addToSessionBuffer(finalData, rtpSessionID)
 }
 
 // SetPtime изменяет длительность аудио пакета (packet time).
@@ -1192,7 +1205,6 @@ func (ms *session) GetState() SessionState {
 	return ms.state
 }
 
-
 // GetPtime возвращает текущий packet time
 func (ms *session) GetPtime() time.Duration {
 	return ms.ptime
@@ -1209,7 +1221,7 @@ func (ms *session) GetStatistics() MediaStatistics {
 func (ms *session) canSend() bool {
 	ms.sessionsMutex.RLock()
 	defer ms.sessionsMutex.RUnlock()
-	
+
 	for _, rtpSession := range ms.rtpSessions {
 		if rtpSession.CanSend() {
 			return true
@@ -1222,7 +1234,7 @@ func (ms *session) canSend() bool {
 func (ms *session) canReceive() bool {
 	ms.sessionsMutex.RLock()
 	defer ms.sessionsMutex.RUnlock()
-	
+
 	for _, rtpSession := range ms.rtpSessions {
 		if rtpSession.CanReceive() {
 			return true
@@ -1386,7 +1398,106 @@ func (ms *session) addToAudioBuffer(audioData []byte) error {
 	// Добавляем данные в буфер
 	ms.audioBuffer = append(ms.audioBuffer, audioData...)
 
+	// Для обратной совместимости также добавляем во все буферы сессий
+	ms.sessionBuffersMutex.Lock()
+	defer ms.sessionBuffersMutex.Unlock()
+	
+	// Читаем RTP сессии для проверки направления
+	ms.sessionsMutex.RLock()
+	defer ms.sessionsMutex.RUnlock()
+
+	for sessionID := range ms.sessionBuffers {
+		// Проверяем, может ли сессия отправлять данные
+		if rtpSession, exists := ms.rtpSessions[sessionID]; exists && rtpSession.CanSend() {
+			ms.sessionBuffers[sessionID] = append(ms.sessionBuffers[sessionID], audioData...)
+		}
+	}
+
 	return nil
+}
+
+// addToSessionBuffer добавляет аудио данные в буфер конкретной RTP сессии
+func (ms *session) addToSessionBuffer(audioData []byte, rtpSessionID string) error {
+	ms.sessionBuffersMutex.Lock()
+	defer ms.sessionBuffersMutex.Unlock()
+
+	buffer, exists := ms.sessionBuffers[rtpSessionID]
+	if !exists {
+		return &MediaError{
+			Code:      ErrorCodeRTPSessionNotFound,
+			Message:   fmt.Sprintf("буфер для RTP сессии '%s' не найден", rtpSessionID),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"rtp_session_id": rtpSessionID,
+			},
+		}
+	}
+
+	ms.sessionBuffers[rtpSessionID] = append(buffer, audioData...)
+	return nil
+}
+
+// sendBufferedAudioForSession отправляет накопленные данные из буфера конкретной сессии
+func (ms *session) sendBufferedAudioForSession(rtpSessionID string) {
+	ms.sessionBuffersMutex.Lock()
+	buffer, exists := ms.sessionBuffers[rtpSessionID]
+	if !exists || len(buffer) == 0 {
+		ms.sessionBuffersMutex.Unlock()
+		return
+	}
+
+	// Вычисляем размер одного пакета
+	expectedSize := ms.GetExpectedPayloadSize()
+
+	// Если данных недостаточно для полного пакета, ждем еще
+	if len(buffer) < expectedSize {
+		ms.sessionBuffersMutex.Unlock()
+		return
+	}
+
+	// Извлекаем данные для одного пакета
+	packetData := make([]byte, expectedSize)
+	copy(packetData, buffer[:expectedSize])
+
+	// Удаляем отправленные данные из буфера
+	ms.sessionBuffers[rtpSessionID] = buffer[expectedSize:]
+	ms.sessionBuffersMutex.Unlock()
+
+	// Получаем RTP сессию
+	ms.sessionsMutex.RLock()
+	rtpSession, exists := ms.rtpSessions[rtpSessionID]
+	ms.sessionsMutex.RUnlock()
+
+	if !exists {
+		return
+	}
+	
+	// Проверяем, может ли сессия отправлять данные
+	if !rtpSession.CanSend() {
+		// Очищаем буфер для сессии, которая не может отправлять
+		ms.sessionBuffersMutex.Lock()
+		delete(ms.sessionBuffers, rtpSessionID)
+		ms.sessionBuffersMutex.Unlock()
+		return
+	}
+
+	// Отправляем пакет на конкретную сессию
+	err := rtpSession.SendAudio(packetData, ms.ptime)
+	if err != nil {
+		ms.handleError(fmt.Errorf("ошибка отправки RTP пакета на сессию %s: %w", rtpSessionID, err))
+		return
+	}
+
+	// Обновляем статистику
+	ms.updateSendStats(len(packetData))
+
+	// Обновляем RTCP статистику если включен
+	if ms.rtcpEnabled {
+		ms.updateRTCPStats(1, uint32(len(packetData)))
+	}
+
+	// Обновляем время последней отправки
+	ms.lastSendTime = time.Now()
 }
 
 // audioSendLoop регулярно отправляет накопленные аудио данные с интервалом ptime
@@ -1409,6 +1520,20 @@ func (ms *session) audioSendLoop() {
 			slog.Debug("media.audioSendLoop Stopped")
 			return
 		case <-ticker.C:
+			// Отправляем данные из буферов всех сессий
+			ms.sessionsMutex.RLock()
+			sessionIDs := make([]string, 0, len(ms.rtpSessions))
+			for sessionID := range ms.rtpSessions {
+				sessionIDs = append(sessionIDs, sessionID)
+			}
+			ms.sessionsMutex.RUnlock()
+
+			// Обрабатываем каждую сессию независимо
+			for _, sessionID := range sessionIDs {
+				ms.sendBufferedAudioForSession(sessionID)
+			}
+
+			// Для обратной совместимости также обрабатываем общий буфер
 			ms.sendBufferedAudio()
 		}
 	}
@@ -1455,6 +1580,11 @@ func (ms *session) sendRTPPacket(packetData []byte) {
 	defer ms.sessionsMutex.RUnlock()
 
 	for _, rtpSession := range ms.rtpSessions {
+		// Проверяем, может ли сессия отправлять данные
+		if !rtpSession.CanSend() {
+			continue
+		}
+		
 		err := rtpSession.SendAudio(packetData, ms.ptime)
 		if err != nil {
 			ms.handleError(fmt.Errorf("ошибка отправки RTP пакета: %w", err))
@@ -1489,10 +1619,39 @@ func (ms *session) FlushAudioBuffer() error {
 
 	if len(ms.audioBuffer) == 0 {
 		ms.bufferMutex.Unlock()
+
+		// Также очищаем буферы всех сессий
+		ms.sessionBuffersMutex.Lock()
+		defer ms.sessionBuffersMutex.Unlock()
+
+		hasData := false
+		for sessionID, buffer := range ms.sessionBuffers {
+			if len(buffer) > 0 {
+				hasData = true
+				// Отправляем оставшиеся данные
+				ms.sessionsMutex.RLock()
+				rtpSession, exists := ms.rtpSessions[sessionID]
+				ms.sessionsMutex.RUnlock()
+
+				if exists {
+					err := rtpSession.SendAudio(buffer, ms.ptime)
+					if err != nil {
+						ms.handleError(fmt.Errorf("ошибка сброса буфера для сессии %s: %w", sessionID, err))
+					}
+				}
+
+				// Очищаем буфер
+				ms.sessionBuffers[sessionID] = ms.sessionBuffers[sessionID][:0]
+			}
+		}
+
+		if !hasData {
+			return nil
+		}
 		return nil
 	}
 
-	// Отправляем все данные, даже если пакет неполный
+	// Отправляем все данные из общего буфера, даже если пакет неполный
 	packetData := make([]byte, len(ms.audioBuffer))
 	copy(packetData, ms.audioBuffer)
 	ms.audioBuffer = ms.audioBuffer[:0]
