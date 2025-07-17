@@ -52,8 +52,8 @@ func BasicCallExample() error {
 		fmt.Printf("❌ [%s] Ошибка медиа: %v\n", sessionID, err)
 	}
 
-	config.DefaultMediaConfig.OnRTCPReceived = func(report media.RTCPReport, sessionID string) {
-		fmt.Printf("📊 [%s] RTCP отчет получен (тип: %d)\n", sessionID, report.GetType())
+	config.DefaultMediaConfig.OnRTCPReport = func(report media.RTCPReport) {
+		fmt.Printf("📊 RTCP отчет получен (тип: %d)\n", report.GetType())
 	}
 
 	// Создаем менеджер
@@ -78,14 +78,22 @@ func BasicCallExample() error {
 	if err != nil {
 		return fmt.Errorf("не удалось создать caller builder: %w", err)
 	}
-	defer manager.ReleaseBuilder("caller-001")
+	defer func() {
+		if err := manager.ReleaseBuilder("caller-001"); err != nil {
+			fmt.Printf("⚠️  Ошибка при освобождении caller builder: %v\n", err)
+		}
+	}()
 
 	// Создаем callee (принимающая сторона)
 	calleeBuilder, err := manager.CreateBuilder("callee-001")
 	if err != nil {
 		return fmt.Errorf("не удалось создать callee builder: %w", err)
 	}
-	defer manager.ReleaseBuilder("callee-001")
+	defer func() {
+		if err := manager.ReleaseBuilder("callee-001"); err != nil {
+			fmt.Printf("⚠️  Ошибка при освобождении callee builder: %v\n", err)
+		}
+	}()
 
 	fmt.Println("✅ Участники созданы")
 
@@ -321,7 +329,8 @@ func printSDPInfo(sdp interface{}) {
 }
 
 func main() {
-	fmt.Println("🚀 Запуск примера базового звонка\n")
+	fmt.Println("🚀 Запуск примера базового звонка")
+	fmt.Println()
 
 	if err := BasicCallExample(); err != nil {
 		log.Fatalf("❌ Ошибка: %v", err)
