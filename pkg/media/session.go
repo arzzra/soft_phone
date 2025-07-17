@@ -840,6 +840,245 @@ func (ms *session) SendDTMF(digit DTMFDigit, duration time.Duration) error {
 	return nil
 }
 
+// SendAudioToSession отправляет аудио данные на конкретную RTP сессию.
+// В отличие от SendAudio, который отправляет на все сессии, этот метод
+// позволяет выбрать конкретную RTP сессию по её ID.
+//
+// Параметры:
+//   - audioData: PCM аудио данные для отправки
+//   - rtpSessionID: идентификатор RTP сессии
+//
+// Возвращает ошибку если:
+//   - Медиа сессия не поддерживает отправку
+//   - Медиа сессия не активна
+//   - RTP сессия с указанным ID не найдена
+//   - Ошибка обработки аудио
+//
+// Пример использования:
+//
+//	// Отправка аудио только на основную RTP сессию
+//	pcmData := readAudioFromMicrophone()
+//	err := session.SendAudioToSession(pcmData, "primary")
+//	if err != nil {
+//	    log.Printf("Ошибка отправки: %v", err)
+//	}
+func (ms *session) SendAudioToSession(audioData []byte, rtpSessionID string) error {
+	if !ms.canSend() {
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   "отправка запрещена для данной сессии",
+			SessionID: ms.sessionID,
+		}
+	}
+
+	state := ms.GetState()
+	if state != MediaStateActive {
+		return &MediaError{
+			Code:      ErrorCodeSessionNotStarted,
+			Message:   fmt.Sprintf("медиа сессия не активна: %s", state),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": state,
+			},
+		}
+	}
+
+	// Проверяем существование RTP сессии
+	ms.sessionsMutex.RLock()
+	rtpSession, exists := ms.rtpSessions[rtpSessionID]
+	ms.sessionsMutex.RUnlock()
+
+	if !exists {
+		return &MediaError{
+			Code:      ErrorCodeRTPSessionNotFound,
+			Message:   fmt.Sprintf("RTP сессия '%s' не найдена", rtpSessionID),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"rtp_session_id": rtpSessionID,
+			},
+		}
+	}
+
+	// Обрабатываем аудио через процессор
+	processedData, err := ms.audioProcessor.ProcessOutgoing(audioData)
+	if err != nil {
+		return WrapMediaError(ErrorCodeAudioProcessingFailed, ms.sessionID, "ошибка обработки аудио", err)
+	}
+
+	// Отправляем обработанные данные на конкретную сессию
+	return ms.sendProcessedAudioToSession(processedData, rtpSession, rtpSessionID)
+}
+
+// SendAudioRawToSession отправляет уже закодированные аудио данные на конкретную RTP сессию.
+// Данные не проходят через аудио процессор.
+//
+// Параметры:
+//   - encodedData: уже закодированные в целевом payload type аудио данные
+//   - rtpSessionID: идентификатор RTP сессии
+//
+// Возвращает ошибку если:
+//   - Медиа сессия не поддерживает отправку
+//   - Медиа сессия не активна
+//   - RTP сессия с указанным ID не найдена
+//   - Неправильный размер данных для текущего payload type и ptime
+//
+// Пример использования:
+//
+//	// Отправка уже закодированных G.711 данных на резервную сессию
+//	g711Data := encodeToG711(rawPCM)
+//	err := session.SendAudioRawToSession(g711Data, "backup")
+func (ms *session) SendAudioRawToSession(encodedData []byte, rtpSessionID string) error {
+	if !ms.canSend() {
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   "отправка запрещена для данной сессии",
+			SessionID: ms.sessionID,
+		}
+	}
+
+	state := ms.GetState()
+	if state != MediaStateActive {
+		return &MediaError{
+			Code:      ErrorCodeSessionNotStarted,
+			Message:   fmt.Sprintf("медиа сессия не активна: %s", state),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": state,
+			},
+		}
+	}
+
+	// Проверяем существование RTP сессии
+	ms.sessionsMutex.RLock()
+	rtpSession, exists := ms.rtpSessions[rtpSessionID]
+	ms.sessionsMutex.RUnlock()
+
+	if !exists {
+		return &MediaError{
+			Code:      ErrorCodeRTPSessionNotFound,
+			Message:   fmt.Sprintf("RTP сессия '%s' не найдена", rtpSessionID),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"rtp_session_id": rtpSessionID,
+			},
+		}
+	}
+
+	// Проверяем размер данных для заданного payload типа и ptime
+	expectedSize := ms.GetExpectedPayloadSize()
+	if len(encodedData) != expectedSize {
+		return NewAudioError(ErrorCodeAudioSizeInvalid, ms.sessionID,
+			fmt.Sprintf("неожиданный размер закодированных данных: %d, ожидается: %d для %s с ptime %v",
+				len(encodedData), expectedSize, ms.GetPayloadTypeName(), ms.ptime),
+			ms.payloadType, expectedSize, len(encodedData), getSampleRateForPayloadType(ms.payloadType), ms.ptime)
+	}
+
+	// Отправляем данные на конкретную сессию
+	return ms.sendProcessedAudioToSession(encodedData, rtpSession, rtpSessionID)
+}
+
+// SendAudioWithFormatToSession отправляет аудио данные в указанном формате на конкретную RTP сессию.
+//
+// Параметры:
+//   - audioData: аудио данные для отправки
+//   - payloadType: целевой payload type (может отличаться от основного кодека)
+//   - skipProcessing: если true, пропустить обработку через аудио процессор
+//   - rtpSessionID: идентификатор RTP сессии
+//
+// Возвращает ошибку в тех же случаях, что и SendAudioToSession.
+//
+// Пример использования:
+//
+//	// Отправка аудио в G.722 на конкретную сессию
+//	g722Data := convertToG722(pcmData)
+//	err := session.SendAudioWithFormatToSession(g722Data, PayloadTypeG722, true, "primary")
+func (ms *session) SendAudioWithFormatToSession(audioData []byte, payloadType PayloadType, skipProcessing bool, rtpSessionID string) error {
+	if !ms.canSend() {
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   "отправка запрещена для данной сессии",
+			SessionID: ms.sessionID,
+		}
+	}
+
+	state := ms.GetState()
+	if state != MediaStateActive {
+		return &MediaError{
+			Code:      ErrorCodeSessionNotStarted,
+			Message:   fmt.Sprintf("медиа сессия не активна: %s", state),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": state,
+			},
+		}
+	}
+
+	// Проверяем существование RTP сессии
+	ms.sessionsMutex.RLock()
+	rtpSession, exists := ms.rtpSessions[rtpSessionID]
+	ms.sessionsMutex.RUnlock()
+
+	if !exists {
+		return &MediaError{
+			Code:      ErrorCodeRTPSessionNotFound,
+			Message:   fmt.Sprintf("RTP сессия '%s' не найдена", rtpSessionID),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"rtp_session_id": rtpSessionID,
+			},
+		}
+	}
+
+	var finalData []byte
+	var err error
+
+	if skipProcessing {
+		// Отправляем данные как есть, без обработки
+		finalData = audioData
+	} else {
+		// Создаем временный аудио процессор для указанного формата
+		tempConfig := AudioProcessorConfig{
+			PayloadType: payloadType,
+			Ptime:       ms.ptime,
+			SampleRate:  getSampleRateForPayloadType(payloadType),
+			Channels:    1,
+		}
+		tempProcessor := NewAudioProcessor(tempConfig)
+		finalData, err = tempProcessor.ProcessOutgoing(audioData)
+		if err != nil {
+			return WrapMediaError(ErrorCodeAudioProcessingFailed, ms.sessionID,
+				fmt.Sprintf("ошибка обработки аудио в формате %d", payloadType), err)
+		}
+	}
+
+	// Отправляем данные на конкретную сессию
+	return ms.sendProcessedAudioToSession(finalData, rtpSession, rtpSessionID)
+}
+
+// sendProcessedAudioToSession отправляет обработанные аудио данные на конкретную RTP сессию
+func (ms *session) sendProcessedAudioToSession(audioData []byte, rtpSession SessionRTP, rtpSessionID string) error {
+	// Отправляем данные на конкретную RTP сессию
+	err := rtpSession.SendAudio(audioData, ms.ptime)
+	if err != nil {
+		ms.handleError(fmt.Errorf("ошибка отправки аудио на сессию %s: %w", rtpSessionID, err), rtpSessionID)
+		return WrapMediaError(ErrorCodeRTPSendFailed, ms.sessionID,
+			fmt.Sprintf("ошибка отправки на RTP сессию %s", rtpSessionID), err)
+	}
+
+	// Обновляем статистику
+	ms.updateSendStats(len(audioData))
+
+	// Обновляем RTCP статистику если включен
+	if ms.IsRTCPEnabled() {
+		ms.updateRTCPStats(1, uint32(len(audioData)))
+	}
+
+	// Обновляем время последней отправки
+	ms.lastSendTime = time.Now()
+
+	return nil
+}
+
 // SetPtime изменяет длительность аудио пакета (packet time).
 // Автоматически переконфигурирует аудио процессор и тайминг отправки.
 //

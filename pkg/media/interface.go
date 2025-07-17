@@ -44,6 +44,11 @@ type Session interface {
 	SendAudioRaw(encodedData []byte) error
 	SendAudioWithFormat(audioData []byte, payloadType PayloadType, skipProcessing bool) error
 
+	// Отправка аудио данных на конкретную RTP сессию
+	SendAudioToSession(audioData []byte, rtpSessionID string) error
+	SendAudioRawToSession(encodedData []byte, rtpSessionID string) error
+	SendAudioWithFormatToSession(audioData []byte, payloadType PayloadType, skipProcessing bool, rtpSessionID string) error
+
 	// DTMF функции
 	SendDTMF(digit DTMFDigit, duration time.Duration) error
 
