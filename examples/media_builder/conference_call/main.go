@@ -10,7 +10,6 @@ import (
 
 	"github.com/arzzra/soft_phone/pkg/media"
 	"github.com/arzzra/soft_phone/pkg/media_builder"
-	"github.com/pion/sdp/v3"
 )
 
 // Participant представляет участника конференции
@@ -445,7 +444,7 @@ func generateTestAudio(size int) []byte {
 }
 
 func main() {
-	fmt.Println("🚀 Запуск примера конференции\n")
+	fmt.Println("🚀 Запуск примера конференции")
 
 	if err := ConferenceExample(); err != nil {
 		log.Fatalf("❌ Ошибка: %v", err)

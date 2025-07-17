@@ -207,7 +207,7 @@ func demoPortExhaustion() error {
 
 	for i := 1; ; i++ {
 		builderID := fmt.Sprintf("exhaust-%d", i)
-		builder, err := manager.CreateBuilder(builderID)
+		_, err := manager.CreateBuilder(builderID)
 		if err != nil {
 			fmt.Printf("  ❌ Builder %d: порты исчерпаны - %v\n", i, err)
 			break
@@ -265,8 +265,8 @@ func demoPortMonitoring() error {
 	fmt.Println("===================================")
 
 	config := media_builder.DefaultConfig()
-	config.MinPort = 70000
-	config.MaxPort = 70200
+	config.MinPort = 30000
+	config.MaxPort = 30200
 	config.PortAllocationStrategy = media_builder.PortAllocationRandom
 	config.MaxConcurrentBuilders = 50
 	config.SessionTimeout = 5 * time.Second // Короткий таймаут для демонстрации
@@ -394,8 +394,8 @@ func demoPortRangeOptimization() error {
 	// Сценарий 1: Слишком маленький диапазон
 	fmt.Println("\n❌ Сценарий 1: Недостаточный диапазон портов")
 	config1 := media_builder.DefaultConfig()
-	config1.MinPort = 80000
-	config1.MaxPort = 80010            // Только 6 портов
+	config1.MinPort = 40000
+	config1.MaxPort = 40010            // Только 6 портов
 	config1.MaxConcurrentBuilders = 20 // Но хотим 20 соединений
 
 	_, err := media_builder.NewBuilderManager(config1)
@@ -412,7 +412,7 @@ func demoPortRangeOptimization() error {
 	// Рассчитываем оптимальный диапазон
 	// Нужно минимум MaxConcurrentBuilders * 2 (с запасом)
 	requiredPorts := expectedConnections * 2
-	config2.MinPort = 81000
+	config2.MinPort = 30000
 	config2.MaxPort = config2.MinPort + uint16(requiredPorts*2) // *2 для шага 2
 
 	manager2, err := media_builder.NewBuilderManager(config2)
@@ -453,7 +453,7 @@ func demoPortRangeOptimization() error {
 }
 
 func main() {
-	fmt.Println("🚀 Запуск демонстрации управления портами\n")
+	fmt.Println("🚀 Запуск демонстрации управления портами")
 
 	if err := PortManagementExample(); err != nil {
 		log.Fatalf("❌ Ошибка: %v", err)
