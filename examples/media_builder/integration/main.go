@@ -2,8 +2,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"log"
 	"math"
@@ -12,7 +10,6 @@ import (
 
 	"github.com/arzzra/soft_phone/pkg/media"
 	"github.com/arzzra/soft_phone/pkg/media_builder"
-	"github.com/pion/sdp/v3"
 )
 
 // AudioSource представляет источник аудио (микрофон, файл и т.д.)
@@ -330,17 +327,12 @@ func demoSIPIntegration(controller *CallController) error {
 	}
 	defer controller.manager.ReleaseBuilder("sip-call-001")
 
-	// Извлекаем SDP из INVITE (псевдо)
-	remoteSDP := &sdp.SessionDescription{
-		// Заполнено из SIP INVITE
-	}
-
 	// Обрабатываем offer
 	fmt.Println("\n🔄 Обработка SDP offer из INVITE...")
 	// В реальном коде: builder.ProcessOffer(remoteSDP)
 
 	// Создаем SDP answer
-	answer, err := builder.CreateAnswer()
+	_, err = builder.CreateAnswer()
 	if err != nil {
 		// В реальном коде обрабатываем ошибку
 	}

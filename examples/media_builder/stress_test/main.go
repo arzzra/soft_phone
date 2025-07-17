@@ -48,8 +48,7 @@ func StressTestExample() error {
 	config.DefaultTransportBufferSize = 2048
 
 	// Упрощенная конфигурация медиа для производительности
-	config.DefaultMediaConfig.JitterBufferConfig.Enabled = false // Отключаем для теста
-	config.DefaultMediaConfig.RTCPEnabled = false                // Отключаем RTCP
+	config.DefaultMediaConfig.JitterEnabled = false // Отключаем jitter buffer для теста
 
 	stats := &StressTestStats{
 		startTime: time.Now(),

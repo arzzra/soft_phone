@@ -7,9 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/arzzra/soft_phone/pkg/media"
 	"github.com/arzzra/soft_phone/pkg/media_builder"
-	"github.com/pion/sdp/v3"
 )
 
 // AdvancedFeaturesExample демонстрирует продвинутые возможности
@@ -83,10 +81,14 @@ func AdvancedFeaturesExample() error {
 	return nil
 }
 
-// demoMediaDirectionChange демонстрирует изменение направления медиа
+// demoMediaDirectionChange демонстрирует концепцию изменения направления медиа
 func demoMediaDirectionChange(manager media_builder.BuilderManager) error {
 	fmt.Println("1️⃣ Изменение направления медиа потока")
 	fmt.Println("=====================================")
+	
+	fmt.Println("\n⚠️  В новой архитектуре направление медиа потока устанавливается")
+	fmt.Println("    на уровне RTP сессии при её создании и не может быть изменено динамически.")
+	fmt.Println("    Для изменения направления требуется пересогласование SDP (re-INVITE).\n")
 
 	// Создаем участников
 	alice, err := manager.CreateBuilder("alice-direction")
@@ -139,30 +141,26 @@ func demoMediaDirectionChange(manager media_builder.BuilderManager) error {
 	bobSession.SendAudio(audioData)
 	time.Sleep(100 * time.Millisecond)
 
-	// Меняем направление на sendonly для Alice
-	fmt.Println("\n📡 Изменение: Alice -> sendonly, Bob -> recvonly")
-	aliceSession.SetDirection(media.DirectionSendOnly)
-	bobSession.SetDirection(media.DirectionRecvOnly)
-
-	// Теперь только Alice может отправлять
+	// Демонстрируем управление потоком на прикладном уровне
+	fmt.Println("\n📡 Демонстрация управления потоком:")
+	fmt.Println("    - Приостановка отправки со стороны Bob")
+	
+	// Bob перестает отправлять (эмуляция recvonly)
 	fmt.Println("✅ Только Alice отправляет аудио...")
 	aliceSession.SendAudio(audioData)
 	time.Sleep(100 * time.Millisecond)
 
-	// Меняем на inactive
-	fmt.Println("\n📡 Изменение: оба -> inactive (пауза)")
-	aliceSession.SetDirection(media.DirectionInactive)
-	bobSession.SetDirection(media.DirectionInactive)
+	// Приостановка обеих сторон (эмуляция inactive)
+	fmt.Println("\n📡 Приостановка передачи (эмуляция inactive)")
+	fmt.Println("⏸️  Обе стороны приостановили передачу")
+	time.Sleep(200 * time.Millisecond)
 
-	fmt.Println("⏸️  Медиа поток приостановлен")
+	// Возобновление передачи
+	fmt.Println("\n📡 Возобновление передачи")
+	fmt.Println("✅ Двусторонний обмен восстановлен")
+	aliceSession.SendAudio(audioData)
+	bobSession.SendAudio(audioData)
 	time.Sleep(100 * time.Millisecond)
-
-	// Восстанавливаем
-	fmt.Println("\n📡 Восстановление: sendrecv")
-	aliceSession.SetDirection(media.DirectionSendRecv)
-	bobSession.SetDirection(media.DirectionSendRecv)
-
-	fmt.Println("✅ Двусторонняя связь восстановлена")
 
 	// Останавливаем
 	aliceSession.Stop()
@@ -170,7 +168,8 @@ func demoMediaDirectionChange(manager media_builder.BuilderManager) error {
 	alice.Close()
 	bob.Close()
 
-	fmt.Println("✅ Демонстрация завершена\n")
+	fmt.Println("\n✅ Демонстрация завершена")
+	fmt.Println("ℹ️  Для реального изменения направления потока используйте re-INVITE с новым SDP\n")
 	return nil
 }
 
@@ -198,7 +197,8 @@ func demoReconnection(manager media_builder.BuilderManager) error {
 		remoteBuilder, err := manager.CreateBuilder(fmt.Sprintf("%s-remote-%d", sessionID, attempt))
 		if err != nil {
 			manager.ReleaseBuilder(fmt.Sprintf("%s-%d", sessionID, attempt))
-			return fmt.Errorf("не удалось создать remote builder: %w", err)
+			builder.Close()
+		return fmt.Errorf("не удалось создать remote builder: %w", err)
 		}
 
 		// SDP negotiation
@@ -411,7 +411,7 @@ func demoQualityMonitoring(manager media_builder.BuilderManager) error {
 	defer manager.ReleaseBuilder("bob-rtcp")
 
 	// Статистика качества
-	stats := &QualityStats{
+	_ = &QualityStats{
 		packetsReceived: make(map[string]int),
 		jitter:          make(map[string]float64),
 		packetLoss:      make(map[string]float64),
@@ -516,7 +516,7 @@ func demoCustomSDPAttributes(manager media_builder.BuilderManager) error {
 	fmt.Println("  - a=x-custom-features:aec,agc,ns")
 
 	// Создаем offer
-	offer, err := alice.CreateOffer()
+	_, err = alice.CreateOffer()
 	if err != nil {
 		return err
 	}

@@ -180,6 +180,11 @@ func NewSession(config SessionConfig) (*Session, error) {
 		return nil, fmt.Errorf("ошибка генерации SSRC: %w", err)
 	}
 
+	// Установка значения Direction по умолчанию
+	if config.Direction == 0 {
+		config.Direction = DirectionSendRecv // По умолчанию
+	}
+
 	// Создаем контекст для управления жизненным циклом
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -713,10 +718,15 @@ func (s *Session) RegisterIncomingHandler(handler func(*rtp.Packet, net.Addr)) {
 //   direction - направление потока (sendrecv, sendonly, recvonly, inactive)
 //
 // Возвращает ошибку если:
+//   - Направление имеет недопустимое значение
 //   - Сессия уже запущена и смена направления невозможна
 //
 // Примечание: Безопасно вызывать в любом состоянии сессии
 func (s *Session) SetDirection(direction Direction) error {
+	if direction < DirectionSendRecv || direction > DirectionInactive {
+		return fmt.Errorf("недопустимое значение направления: %d", direction)
+	}
+	
 	s.stateMutex.Lock()
 	defer s.stateMutex.Unlock()
 	

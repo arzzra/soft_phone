@@ -128,6 +128,12 @@ func (b *mediaBuilder) ProcessAnswer(answer *sdp.SessionDescription) error {
 		return fmt.Errorf("нет медиа описаний в answer")
 	}
 
+	// Проверяем соответствие количества медиа описаний в offer и answer
+	if b.localOffer != nil && len(answer.MediaDescriptions) != len(b.localOffer.MediaDescriptions) {
+		return fmt.Errorf("несоответствие медиа: offer=%d, answer=%d", 
+			len(b.localOffer.MediaDescriptions), len(answer.MediaDescriptions))
+	}
+
 	// Инициализируем слайс для медиа потоков
 	b.mediaStreams = make([]MediaStreamInfo, 0, len(answer.MediaDescriptions))
 
@@ -267,6 +273,13 @@ func (b *mediaBuilder) ProcessOffer(offer *sdp.SessionDescription) error {
 
 		// Извлекаем направление медиа потока
 		streamInfo.Direction = extractDirection(media.Attributes)
+
+		// Проверяем, поддерживаем ли мы этот тип медиа
+		// Сейчас поддерживаем только аудио
+		if media.MediaName.Media != "audio" {
+			// Пропускаем видео и другие типы медиа
+			continue
+		}
 
 		// Выбираем поддерживаемый кодек
 		streamInfo.PayloadType = selectSupportedCodec(media, b.config.PayloadTypes)

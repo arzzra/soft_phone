@@ -359,12 +359,9 @@ func classifyNetworkError(operation string, err error) error {
 			return classified
 		}
 
-		// Проверяем Temporary() даже если он deprecated - для совместимости с тестами
-		if netErr.Temporary() {
-			classified.Type = ErrorTypeTemporary
-			classified.Retryable = true
-			return classified
-		}
+		// Временные ошибки (кроме таймаутов) обрабатываем отдельно
+		// Не используем Temporary() так как он deprecated с Go 1.18
+		// Вместо этого проверяем конкретные типы ошибок ниже
 	}
 
 	// Проверяем специфичные типы ошибок
