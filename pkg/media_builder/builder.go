@@ -2,6 +2,7 @@ package media_builder
 
 import (
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type mediaBuilder struct {
 	closed          bool
 	mutex           sync.RWMutex
 	allocatedPorts  []uint16 // Список выделенных портов для освобождения при закрытии
+	logger          *slog.Logger
 }
 
 // NewMediaBuilder создает новый экземпляр mediaBuilder
@@ -64,6 +66,7 @@ func NewMediaBuilder(config BuilderConfig) (Builder, error) {
 		config:         config,
 		mode:           BuilderModeNone,
 		allocatedPorts: make([]uint16, 0),
+		logger:         slog.Default().With(slog.String("component", "media_builder")),
 	}, nil
 }
 
@@ -497,7 +500,7 @@ func (b *mediaBuilder) Close() error {
 	if b.mediaSession != nil {
 		if err := b.mediaSession.Stop(); err != nil {
 			// Логируем ошибку, но продолжаем освобождение ресурсов
-			fmt.Printf("Ошибка при остановке медиа сессии: %v\n", err)
+			b.logger.Error("Ошибка при остановке медиа сессии", slog.String("error", err.Error()))
 		}
 	}
 
@@ -509,7 +512,9 @@ func (b *mediaBuilder) Close() error {
 		if stream.RTPSession != nil {
 			if err := stream.RTPSession.Stop(); err != nil {
 				// Логируем ошибку, но продолжаем
-				fmt.Printf("Ошибка при остановке RTP сессии для потока %s: %v\n", stream.StreamID, err)
+				b.logger.Error("Ошибка при остановке RTP сессии",
+					slog.String("stream_id", stream.StreamID),
+					slog.String("error", err.Error()))
 			}
 		}
 
@@ -517,7 +522,9 @@ func (b *mediaBuilder) Close() error {
 		if stream.RTPTransport != nil {
 			if err := stream.RTPTransport.Close(); err != nil {
 				// Логируем ошибку, но продолжаем
-				fmt.Printf("Ошибка при закрытии транспорта для потока %s: %v\n", stream.StreamID, err)
+				b.logger.Error("Ошибка при закрытии транспорта",
+					slog.String("stream_id", stream.StreamID),
+					slog.String("error", err.Error()))
 			}
 		}
 	}
@@ -527,7 +534,9 @@ func (b *mediaBuilder) Close() error {
 		for _, port := range b.allocatedPorts {
 			if err := b.config.PortPool.Release(port); err != nil {
 				// Логируем ошибку освобождения порта
-				fmt.Printf("Ошибка при освобождении порта %d: %v\n", port, err)
+				b.logger.Error("Ошибка при освобождении порта",
+					slog.Int("port", int(port)),
+					slog.String("error", err.Error()))
 			}
 		}
 	}

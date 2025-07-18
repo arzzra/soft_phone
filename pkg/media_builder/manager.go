@@ -3,6 +3,7 @@ package media_builder
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -24,6 +25,7 @@ type builderManager struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	closed     bool
+	logger     *slog.Logger
 	statistics struct {
 		totalCreated    int
 		sessionTimeouts int
@@ -61,6 +63,7 @@ func NewBuilderManager(config *ManagerConfig) (BuilderManager, error) {
 		builders: make(map[string]*builderInfo),
 		ctx:      ctx,
 		cancel:   cancel,
+		logger:   slog.Default().With(slog.String("component", "builder_manager")),
 	}
 
 	// Запускаем горутину для очистки неактивных сессий
@@ -145,12 +148,16 @@ func (m *builderManager) ReleaseBuilder(sessionID string) error {
 	// Закрываем builder
 	if err := info.builder.Close(); err != nil {
 		// Логируем ошибку, но продолжаем освобождение ресурсов
-		fmt.Printf("Ошибка при закрытии builder %s: %v\n", sessionID, err)
+		m.logger.Error("Ошибка при закрытии builder",
+			slog.String("session_id", sessionID),
+			slog.String("error", err.Error()))
 	}
 
 	// Возвращаем порт в пул
 	if err := m.portPool.Release(info.port); err != nil {
-		fmt.Printf("Ошибка при освобождении порта %d: %v\n", info.port, err)
+		m.logger.Error("Ошибка при освобождении порта",
+			slog.Int("port", int(info.port)),
+			slog.String("error", err.Error()))
 	}
 
 	// Удаляем builder из карты
@@ -227,7 +234,9 @@ func (m *builderManager) Shutdown() error {
 	// Закрываем все builder'ы
 	for sessionID, info := range m.builders {
 		if err := info.builder.Close(); err != nil {
-			fmt.Printf("Ошибка при закрытии builder %s: %v\n", sessionID, err)
+			m.logger.Error("Ошибка при закрытии builder",
+				slog.String("session_id", sessionID),
+				slog.String("error", err.Error()))
 		}
 		// Порты будут автоматически освобождены при уничтожении пула
 	}
@@ -281,12 +290,16 @@ func (m *builderManager) cleanupInactiveSessions() {
 
 		// Закрываем builder
 		if err := info.builder.Close(); err != nil {
-			fmt.Printf("Ошибка при закрытии builder %s по таймауту: %v\n", sessionID, err)
+			m.logger.Error("Ошибка при закрытии builder по таймауту",
+				slog.String("session_id", sessionID),
+				slog.String("error", err.Error()))
 		}
 
 		// Возвращаем порт в пул
 		if err := m.portPool.Release(info.port); err != nil {
-			fmt.Printf("Ошибка при освобождении порта %d: %v\n", info.port, err)
+			m.logger.Error("Ошибка при освобождении порта",
+				slog.Int("port", int(info.port)),
+				slog.String("error", err.Error()))
 		}
 
 		// Удаляем из карты
@@ -295,6 +308,7 @@ func (m *builderManager) cleanupInactiveSessions() {
 	}
 
 	if len(expiredSessions) > 0 {
-		fmt.Printf("Очищено %d сессий по таймауту\n", len(expiredSessions))
+		m.logger.Info("Очищено сессий по таймауту",
+			slog.Int("count", len(expiredSessions)))
 	}
 }
