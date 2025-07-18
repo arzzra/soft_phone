@@ -161,6 +161,11 @@ func (jb *JitterBuffer) PutWithSessionID(packet *rtp.Packet, rtpSessionID string
 		return fmt.Errorf("jitter buffer остановлен")
 	}
 
+	// Валидация размера буфера для защиты от DoS
+	if len(jb.packets) >= MaxJitterBufferSize {
+		return fmt.Errorf("jitter buffer переполнен: количество пакетов (%d) достигло максимума (%d)", len(jb.packets), MaxJitterBufferSize)
+	}
+
 	now := time.Now()
 
 	// Инициализируем базовые значения при первом пакете

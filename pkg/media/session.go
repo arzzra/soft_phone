@@ -45,6 +45,12 @@ const (
 	DefaultDTMFDuration = 100 * time.Millisecond // Стандартная длительность DTMF
 	DTMFVolumeMaxDbm    = 63                     // Максимальная громкость DTMF в -dBm
 	DTMFPayloadTypeRFC  = 101                    // Стандартный payload type для DTMF согласно RFC 4733
+
+	// Константы для валидации размеров (защита от DoS)
+	MaxAudioBufferSize  = 1 << 20 // 1MB - максимальный размер аудио буфера
+	MaxPacketSize       = 1500     // Standard MTU - максимальный размер пакета
+	MaxJitterBufferSize = 1000     // Максимальное количество пакетов в jitter buffer
+	MaxPtime            = 100      // Максимальное ptime в миллисекундах
 )
 
 // Константы payload типов из RFC 3551
@@ -587,6 +593,15 @@ func (ms *session) Stop() error {
 // SendAudio отправляет аудио данные с обработкой через аудио процессор
 // Данные добавляются в буфер и отправляются с правильным timing
 func (ms *session) SendAudio(audioData []byte) error {
+	// Валидация размера данных для защиты от DoS
+	if len(audioData) > MaxAudioBufferSize {
+		return &MediaError{
+			Code:      ErrorCodeAudioSizeInvalid,
+			Message:   fmt.Sprintf("размер аудио данных превышает максимальный: %d > %d", len(audioData), MaxAudioBufferSize),
+			SessionID: ms.sessionID,
+		}
+	}
+
 	if !ms.canSend() {
 		return &MediaError{
 			Code:      ErrorCodeSessionInvalidDirection,
@@ -641,6 +656,15 @@ func (ms *session) SendAudio(audioData []byte) error {
 //	    log.Printf("Ошибка отправки: %v", err)
 //	}
 func (ms *session) SendAudioRaw(encodedData []byte) error {
+	// Валидация размера данных для защиты от DoS
+	if len(encodedData) > MaxAudioBufferSize {
+		return &MediaError{
+			Code:      ErrorCodeAudioSizeInvalid,
+			Message:   fmt.Sprintf("размер закодированных данных превышает максимальный: %d > %d", len(encodedData), MaxAudioBufferSize),
+			SessionID: ms.sessionID,
+		}
+	}
+
 	if !ms.canSend() {
 		return &MediaError{
 			Code:      ErrorCodeSessionInvalidDirection,
@@ -1222,16 +1246,16 @@ func (ms *session) SendAudioWithFormatToSession(audioData []byte, payloadType Pa
 //	    log.Printf("Ошибка изменения ptime: %v", err)
 //	}
 func (ms *session) SetPtime(ptime time.Duration) error {
-	// Проверяем допустимые значения (10-40ms для телефонии)
-	if ptime < time.Millisecond*10 || ptime > time.Millisecond*40 {
+	// Проверяем допустимые значения для защиты от DoS
+	if ptime < time.Millisecond*10 || ptime > time.Millisecond*time.Duration(MaxPtime) {
 		return &MediaError{
 			Code:      ErrorCodeAudioTimingInvalid,
-			Message:   fmt.Sprintf("недопустимое значение ptime: %v (допустимо 10-40ms)", ptime),
+			Message:   fmt.Sprintf("недопустимое значение ptime: %v (допустимо 10-%dms)", ptime, MaxPtime),
 			SessionID: ms.sessionID,
 			Context: map[string]interface{}{
 				"requested_ptime": ptime,
 				"min_ptime":       time.Millisecond * 10,
-				"max_ptime":       time.Millisecond * 40,
+				"max_ptime":       time.Millisecond * time.Duration(MaxPtime),
 			},
 		}
 	}
@@ -2037,6 +2061,17 @@ func (ms *session) handleIncomingRTPPacketWithID(packet *rtp.Packet, rtpSessionI
 	if packet == nil {
 		return
 	}
+	
+	// Валидация размера пакета для защиты от DoS
+	if len(packet.Payload) > MaxPacketSize {
+		ms.handleError(&MediaError{
+			Code:      ErrorCodeAudioSizeInvalid,
+			Message:   fmt.Sprintf("размер RTP пакета превышает максимальный: %d > %d", len(packet.Payload), MaxPacketSize),
+			SessionID: ms.sessionID,
+		}, rtpSessionID)
+		return
+	}
+	
 	if !ms.canReceive() {
 		return
 	}
