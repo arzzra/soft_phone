@@ -21,11 +21,19 @@ func TestCallbackSafety(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	mockRTP := NewMockSessionRTP("callback-safety", "PCMU")
-	_ = session.AddRTPSession("test", mockRTP)
-	session.Start()
+	if err := session.AddRTPSession("test", mockRTP); err != nil {
+		t.Fatalf("Failed to add RTP session: %v", err)
+	}
+	if err := session.Start(); err != nil {
+		t.Fatalf("Failed to start session: %v", err)
+	}
 
 	t.Run("Concurrent callback operations", func(t *testing.T) {
 		var wg sync.WaitGroup
@@ -126,7 +134,11 @@ func TestRawPacketHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	mockRTP := NewMockSessionRTP("raw-packet-test", "PCMU")
 	_ = session.AddRTPSession("test", mockRTP)
@@ -147,7 +159,9 @@ func TestRawPacketHandling(t *testing.T) {
 			packetMutex.Unlock()
 		})
 
-		session.Start()
+		if err := session.Start(); err != nil {
+			t.Fatalf("Failed to start session: %v", err)
+		}
 
 		// Симулируем входящие пакеты
 		testPackets := []*rtp.Packet{
@@ -279,7 +293,11 @@ func TestDTMFCallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	t.Run("DTMF событие callback", func(t *testing.T) {
 		var receivedDTMFEvents []DTMFEvent
@@ -293,14 +311,22 @@ func TestDTMFCallbacks(t *testing.T) {
 		}
 
 		// Пересоздаем сессию с callback
-		session.Stop()
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
 		session, err = NewMediaSession(config)
 		if err != nil {
 			t.Fatalf("Ошибка создания сессии с DTMF callback: %v", err)
 		}
-		defer session.Stop()
+		defer func() {
+			if err := session.Stop(); err != nil {
+				t.Errorf("Failed to stop session: %v", err)
+			}
+		}()
 
-		session.Start()
+		if err := session.Start(); err != nil {
+			t.Fatalf("Failed to start session: %v", err)
+		}
 
 		// Создаем DTMF пакет
 		dtmfPayload := []byte{
@@ -377,7 +403,11 @@ func TestErrorCallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	mockRTP := NewMockSessionRTP("error-callback-test", "PCMU")
 	_ = session.AddRTPSession("test", mockRTP)
@@ -386,7 +416,9 @@ func TestErrorCallbacks(t *testing.T) {
 		// Устанавливаем режим ошибки в mock
 		mockRTP.SetFailureMode(false, true, false)
 
-		session.Start()
+		if err := session.Start(); err != nil {
+			t.Fatalf("Failed to start session: %v", err)
+		}
 
 		audioData := generateTestAudioData(StandardPCMSamples20ms)
 

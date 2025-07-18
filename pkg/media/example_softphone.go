@@ -42,7 +42,11 @@ func ExampleBasicMediaSession() error {
 	if err != nil {
 		return fmt.Errorf("ошибка создания медиа сессии: %w", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			fmt.Printf("❌ Ошибка остановки сессии: %v\n", err)
+		}
+	}()
 
 	// Запускаем сессию
 	if err := session.Start(); err != nil {
@@ -97,7 +101,11 @@ func ExampleRawAudioSending() error {
 	if err != nil {
 		return err
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			fmt.Printf("❌ Ошибка остановки сессии: %v\n", err)
+		}
+	}()
 
 	if err := session.Start(); err != nil {
 		return err
@@ -239,7 +247,11 @@ func ExampleRawPacketHandling() error {
 	if err != nil {
 		return err
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			fmt.Printf("❌ Ошибка остановки сессии: %v\n", err)
+		}
+	}()
 
 	if err := session.Start(); err != nil {
 		return err
@@ -357,7 +369,11 @@ func ExampleJitterBufferControl() error {
 	if err != nil {
 		return err
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			fmt.Printf("❌ Ошибка остановки сессии: %v\n", err)
+		}
+	}()
 
 	fmt.Printf("Jitter buffer включен: размер %d пакетов, задержка %v\n",
 		config.JitterBufferSize, config.JitterDelay)
@@ -402,7 +418,11 @@ func ExampleMediaDirections() error {
 		if err != nil {
 			return fmt.Errorf("ошибка создания сессии: %w", err)
 		}
-		defer session.Stop()
+		defer func() {
+			if err := session.Stop(); err != nil {
+				return
+			}
+		}()
 		
 		// Добавляем mock RTP сессию с нужными возможностями
 		mockRTP := &MockRTPSession{
@@ -411,7 +431,9 @@ func ExampleMediaDirections() error {
 			canSend:    test.canSend,
 			canReceive: test.canReceive,
 		}
-		session.AddRTPSession("example", mockRTP)
+		if err := session.AddRTPSession("example", mockRTP); err != nil {
+			return fmt.Errorf("failed to add RTP session: %w", err)
+		}
 		
 		// Проверяем возможность отправки
 		if test.canSend {
@@ -460,7 +482,11 @@ func ExamplePtimeConfiguration() error {
 	if err != nil {
 		return err
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			fmt.Printf("❌ Ошибка остановки сессии: %v\n", err)
+		}
+	}()
 
 	// Тестируем различные значения ptime
 	ptimes := []time.Duration{
@@ -511,7 +537,11 @@ func ExampleDTMFHandling() error {
 	if err != nil {
 		return err
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			fmt.Printf("❌ Ошибка остановки сессии: %v\n", err)
+		}
+	}()
 
 	if err := session.Start(); err != nil {
 		return err
@@ -604,7 +634,9 @@ func ExampleCodecSupport() error {
 				stats.PayloadType, stats.SampleRate, stats.Ptime)
 		}
 
-		session.Stop()
+		if err := session.Stop(); err != nil {
+			fmt.Printf("❌ Ошибка остановки сессии: %v\n", err)
+		}
 	}
 
 	return nil
@@ -621,7 +653,11 @@ func ExampleMultipleRTPSessions() error {
 	if err != nil {
 		return err
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			fmt.Printf("❌ Ошибка остановки сессии: %v\n", err)
+		}
+	}()
 
 	// Создаем mock RTP сессии
 	mockSessions := []*MockRTPSession{

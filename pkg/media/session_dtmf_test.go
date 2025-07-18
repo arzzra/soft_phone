@@ -20,7 +20,11 @@ func TestSendDTMF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 	
 	// Создаем mock RTP сессии
 	mockRTP1 := NewMockSessionRTP("primary", "PCMU")
@@ -106,7 +110,11 @@ func TestSendDTMFToSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 	
 	// Создаем mock RTP сессии
 	mockRTP1 := NewMockSessionRTP("primary", "PCMU")
@@ -224,7 +232,11 @@ func TestSendDTMFDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 	
 	// Создаем и добавляем mock RTP сессию
 	mockRTP := NewMockSessionRTP("primary", "PCMU")

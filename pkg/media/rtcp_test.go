@@ -17,7 +17,11 @@ func TestRTCPBasicFunctionality(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	// Проверяем что RTCP включен
 	if !session.IsRTCPEnabled() {
@@ -61,7 +65,11 @@ func TestRTCPHandlers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	// Проверяем что обработчик не установлен
 	if session.HasRTCPHandler() {
@@ -99,7 +107,11 @@ func TestRTCPWithMockSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	// Добавляем mock RTP сессию
 	mockSession := &MockRTPSession{
@@ -180,7 +192,11 @@ func TestRTCPConfiguration(t *testing.T) {
 			}
 
 			if session != nil {
-				defer session.Stop()
+				defer func() {
+					if err := session.Stop(); err != nil {
+						t.Errorf("Failed to stop session: %v", err)
+					}
+				}()
 
 				if session.IsRTCPEnabled() != tt.rtcpEnabled {
 					t.Errorf("RTCP статус не соответствует ожидаемому: получено %t, ожидалось %t",
@@ -201,7 +217,11 @@ func TestRTCPStatisticsUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	// Проверяем начальную статистику
 	initialStats := session.GetRTCPStatistics()
@@ -248,7 +268,11 @@ func TestRTCPReportProcessing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	// Создаем mock RTCP отчет
 	mockReport := &MockRTCPReport{
@@ -419,7 +443,11 @@ func TestMediaSessionCreationAdvanced(t *testing.T) {
 				t.Fatalf("Неожиданная ошибка создания сессии: %v", err)
 			}
 
-			defer session.Stop()
+			defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 			// Проверяем состояние
 			if session.GetState() != tt.expectedState {
@@ -482,7 +510,11 @@ func TestJitterBufferIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	err = session.Start()
 	if err != nil {
@@ -559,7 +591,11 @@ func TestAudioProcessorIntegration(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Ошибка создания сессии для %s: %v", pt.name, err)
 			}
-			defer session.Stop()
+			defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 			// Проверяем что аудио процессор инициализирован
 			if session.audioProcessor == nil {
@@ -626,7 +662,11 @@ func TestDTMFHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	// Проверяем что DTMF компоненты инициализированы
 	if session.dtmfSender == nil {
@@ -692,7 +732,11 @@ func TestMultipleRTPSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	err = session.Start()
 	if err != nil {
@@ -771,7 +815,11 @@ func BenchmarkRTCPOperations(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			b.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	b.ResetTimer()
 
@@ -808,9 +856,15 @@ func BenchmarkAudioProcessing(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			b.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
-	session.Start()
+	if err := session.Start(); err != nil {
+		b.Fatalf("Failed to start session: %v", err)
+	}
 
 	// Добавляем mock RTP сессию
 	mockRTP := &MockRTPSession{id: "benchmark", codec: "PCMU", active: true}

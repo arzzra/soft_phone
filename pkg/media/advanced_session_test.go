@@ -308,7 +308,9 @@ func TestSessionRTPMultipleInstances(t *testing.T) {
 		}
 	}
 
-	session.Start()
+	if err := session.Start(); err != nil {
+		t.Fatalf("Failed to start session: %v", err)
+	}
 
 	t.Run("Отправка через все сессии", func(t *testing.T) {
 		audioData := generateTestAudioData(StandardPCMSamples20ms)
@@ -470,8 +472,12 @@ func TestSessionRTPNetworkSimulation(t *testing.T) {
 	defer func() { _ = session.Stop() }()
 
 	mockRTP := NewMockSessionRTP("network-test", "PCMU")
-	_ = session.AddRTPSession("network", mockRTP)
-	session.Start()
+	if err := session.AddRTPSession("network", mockRTP); err != nil {
+		t.Fatalf("Failed to add RTP session: %v", err)
+	}
+	if err := session.Start(); err != nil {
+		t.Fatalf("Failed to start session: %v", err)
+	}
 
 	t.Run("Симуляция сетевой задержки", func(t *testing.T) {
 		// Устанавливаем задержку 50ms

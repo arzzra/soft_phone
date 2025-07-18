@@ -21,11 +21,19 @@ func TestJitterBufferAdvancedIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	mockRTP := NewMockSessionRTP("jitter-test", "PCMU")
-	_ = session.AddRTPSession("test", mockRTP)
-	session.Start()
+	if err := session.AddRTPSession("test", mockRTP); err != nil {
+		t.Fatalf("Failed to add RTP session: %v", err)
+	}
+	if err := session.Start(); err != nil {
+		t.Fatalf("Failed to start session: %v", err)
+	}
 
 	t.Run("Jitter buffer обработка пакетов", func(t *testing.T) {
 		if session.jitterBuffer == nil {
@@ -139,7 +147,11 @@ func TestAudioProcessorAdvancedIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	if session.audioProcessor == nil {
 		t.Fatal("Audio processor должен быть инициализирован")
@@ -265,7 +277,11 @@ func TestDTMFIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	if session.dtmfSender == nil {
 		t.Fatal("DTMF sender должен быть инициализирован")
@@ -275,8 +291,12 @@ func TestDTMFIntegration(t *testing.T) {
 	}
 
 	mockRTP := NewMockSessionRTP("dtmf-test", "PCMU")
-	_ = session.AddRTPSession("test", mockRTP)
-	session.Start()
+	if err := session.AddRTPSession("test", mockRTP); err != nil {
+		t.Fatalf("Failed to add RTP session: %v", err)
+	}
+	if err := session.Start(); err != nil {
+		t.Fatalf("Failed to start session: %v", err)
+	}
 
 	t.Run("Отправка DTMF событий", func(t *testing.T) {
 		dtmfEvent := DTMFEvent{
@@ -432,11 +452,19 @@ func TestComplexScenarios(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Ошибка создания сессии: %v", err)
 		}
-		defer session.Stop()
+		defer func() {
+			if err := session.Stop(); err != nil {
+				t.Errorf("Failed to stop session: %v", err)
+			}
+		}()
 
 		mockRTP := NewMockSessionRTP("complex-test", "PCMU")
-		_ = session.AddRTPSession("test", mockRTP)
-		session.Start()
+		if err := session.AddRTPSession("test", mockRTP); err != nil {
+			t.Fatalf("Failed to add RTP session: %v", err)
+		}
+		if err := session.Start(); err != nil {
+			t.Fatalf("Failed to start session: %v", err)
+		}
 
 		// Включаем RTCP
 		err = session.EnableRTCP(true)

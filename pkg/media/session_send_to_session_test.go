@@ -18,7 +18,11 @@ func TestSendAudioToSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 	
 	// Создаем две mock RTP сессии
 	mockRTP1 := NewMockSessionRTP("primary", "PCMU")
@@ -135,7 +139,11 @@ func TestSendAudioRawToSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 	
 	// Создаем mock RTP сессию
 	mockRTP := NewMockSessionRTP("test", "PCMU")
@@ -221,7 +229,11 @@ func TestSendAudioWithFormatToSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 	
 	// Создаем mock RTP сессию
 	mockRTP := NewMockSessionRTP("test", "PCMU")
@@ -312,7 +324,11 @@ func TestSendToSessionWhenInactive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания медиа сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 	
 	// Создаем mock RTP сессию
 	mockRTP := NewMockSessionRTP("test", "PCMU")

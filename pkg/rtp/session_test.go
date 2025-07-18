@@ -366,7 +366,11 @@ func TestRTPPacketSending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	err = session.Start()
 	if err != nil {
@@ -489,7 +493,11 @@ func TestRTPPacketReceiving(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	err = session.Start()
 	if err != nil {
@@ -598,9 +606,15 @@ func TestRemoteSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
-	_ = session.Start()
+	if err := session.Start(); err != nil {
+		t.Fatalf("Failed to start session: %v", err)
+	}
 
 	// Создаем пакеты от разных источников
 	sources := []uint32{0x11111111, 0x22222222, 0x33333333}
@@ -670,9 +684,15 @@ func TestSessionStatistics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
-	_ = session.Start()
+	if err := session.Start(); err != nil {
+		t.Fatalf("Failed to start session: %v", err)
+	}
 
 	// Проверяем начальную статистику
 	initialStats := session.GetStatistics()
@@ -861,7 +881,11 @@ func BenchmarkSessionOperations(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			b.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	_ = session.Start()
 	audioData := generateTestAudioData(160)

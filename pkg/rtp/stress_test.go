@@ -36,7 +36,11 @@ func TestStressHighConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	if err := session.Start(); err != nil {
 		t.Fatalf("Ошибка запуска сессии: %v", err)
@@ -219,7 +223,9 @@ func TestStressMemoryPressure(t *testing.T) {
 
 	// Cleanup сессий
 	for _, session := range sessions {
-		session.Stop()
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
 	}
 
 	// Измеряем финальную память
@@ -267,7 +273,11 @@ func TestStressLongRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания долгоживущей сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	if err := session.Start(); err != nil {
 		t.Fatalf("Ошибка запуска сессии: %v", err)
@@ -488,7 +498,11 @@ func BenchmarkRTPPacketProcessing(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			b.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	if err := session.Start(); err != nil {
 		b.Fatalf("Ошибка запуска сессии: %v", err)
@@ -530,7 +544,11 @@ func BenchmarkMetricsCollection(b *testing.B) {
 		ClockRate:   8000,
 		Transport:   transport,
 	})
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			b.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	_ = collector.RegisterSession("bench-session", session)
 

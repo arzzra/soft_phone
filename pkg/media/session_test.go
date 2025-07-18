@@ -108,7 +108,11 @@ func TestMediaSessionCreation(t *testing.T) {
 				t.Fatalf("Неожиданная ошибка создания сессии: %v", err)
 			}
 
-			defer session.Stop()
+			defer func() {
+				if err := session.Stop(); err != nil {
+					t.Errorf("Failed to stop session: %v", err)
+				}
+			}()
 
 			// Проверяем состояние
 			if session.GetState() != tt.expectedState {
@@ -241,7 +245,11 @@ func TestAudioSending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	// Добавляем mock RTP сессию
 	mockRTP := &MockRTPSession{
@@ -364,7 +372,11 @@ func TestRTPTiming(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Ошибка создания сессии: %v", err)
 			}
-			defer session.Stop()
+			defer func() {
+				if err := session.Stop(); err != nil {
+					t.Errorf("Failed to stop session: %v", err)
+				}
+			}()
 
 			// Проверяем что ptime установлен корректно
 			if session.GetPtime() != tt.ptime {
@@ -391,7 +403,9 @@ func TestRTPTiming(t *testing.T) {
 			if err := session.AddRTPSession("test", mockRTP); err != nil {
 				t.Fatalf("Ошибка добавления RTP сессии: %v", err)
 			}
-			session.Start()
+			if err := session.Start(); err != nil {
+				t.Fatalf("Failed to start session: %v", err)
+			}
 
 			// Отправляем данные правильного размера
 			sampleRate := getSampleRateForPayloadType(tt.payloadType)
@@ -494,7 +508,11 @@ func TestMediaDirections(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Ошибка создания сессии: %v", err)
 			}
-			defer session.Stop()
+			defer func() {
+				if err := session.Stop(); err != nil {
+					t.Errorf("Failed to stop session: %v", err)
+				}
+			}()
 
 			// Добавляем mock RTP сессию
 			mockRTP := tt.setupRTP()
@@ -514,7 +532,9 @@ func TestMediaDirections(t *testing.T) {
 			}
 
 			// Тестируем отправку аудио
-			session.Start()
+			if err := session.Start(); err != nil {
+				t.Fatalf("Failed to start session: %v", err)
+			}
 			audioData := generateTestAudioData(160)
 			err = session.SendAudio(audioData)
 
@@ -582,7 +602,11 @@ func TestPayloadTypes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Ошибка создания сессии для %s: %v", pt.name, err)
 			}
-			defer session.Stop()
+			defer func() {
+				if err := session.Stop(); err != nil {
+					t.Errorf("Failed to stop session: %v", err)
+				}
+			}()
 
 			// Проверяем что payload type установлен корректно
 			if session.GetPayloadType() != pt.payloadType {
@@ -628,7 +652,11 @@ func TestMediaStatistics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			t.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	// Проверяем начальную статистику
 	initialStats := session.GetStatistics()
@@ -708,7 +736,11 @@ func BenchmarkAudioSending(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Ошибка создания сессии: %v", err)
 	}
-	defer session.Stop()
+	defer func() {
+		if err := session.Stop(); err != nil {
+			b.Errorf("Failed to stop session: %v", err)
+		}
+	}()
 
 	// Добавляем mock RTP сессию
 	mockRTP := &MockRTPSession{
@@ -718,8 +750,12 @@ func BenchmarkAudioSending(b *testing.B) {
 		canSend:    true,
 		canReceive: true,
 	}
-	session.AddRTPSession("benchmark", mockRTP)
-	session.Start()
+	if err := session.AddRTPSession("benchmark", mockRTP); err != nil {
+		b.Fatalf("Failed to add RTP session: %v", err)
+	}
+	if err := session.Start(); err != nil {
+		b.Fatalf("Failed to start session: %v", err)
+	}
 
 	audioData := generateTestAudioData(160)
 
