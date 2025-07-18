@@ -51,6 +51,7 @@ type Session interface {
 
 	// DTMF функции
 	SendDTMF(digit DTMFDigit, duration time.Duration) error
+	SendDTMFToSession(digit DTMFDigit, duration time.Duration, rtpSessionID string) error
 
 	// Конфигурация и настройки
 	SetPtime(ptime time.Duration) error

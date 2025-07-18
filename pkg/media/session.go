@@ -865,6 +865,113 @@ func (ms *session) SendDTMF(digit DTMFDigit, duration time.Duration) error {
 	return nil
 }
 
+// SendDTMFToSession отправляет DTMF событие на конкретную RTP сессию.
+// В отличие от SendDTMF, который отправляет на все сессии, этот метод
+// позволяет выбрать конкретную RTP сессию по её ID.
+//
+// Параметры:
+//   - digit: DTMF цифра для отправки (0-9, *, #, A-D)
+//   - duration: длительность DTMF события
+//   - rtpSessionID: идентификатор RTP сессии
+//
+// Возвращает ошибку если:
+//   - Медиа сессия не поддерживает отправку
+//   - DTMF не включен
+//   - Медиа сессия не активна
+//   - RTP сессия с указанным ID не найдена
+//   - RTP сессия не может отправлять данные
+//   - Ошибка генерации или отправки DTMF пакетов
+//
+// Пример использования:
+//
+//	// Отправка DTMF цифры '5' длительностью 200мс на основную RTP сессию
+//	err := session.SendDTMFToSession(DTMFDigit5, 200*time.Millisecond, "primary")
+//	if err != nil {
+//	    log.Printf("Ошибка отправки DTMF: %v", err)
+//	}
+func (ms *session) SendDTMFToSession(digit DTMFDigit, duration time.Duration, rtpSessionID string) error {
+	if !ms.canSend() {
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   "отправка запрещена для данной сессии",
+			SessionID: ms.sessionID,
+		}
+	}
+
+	if !ms.dtmfEnabled || ms.dtmfSender == nil {
+		return NewDTMFError(ErrorCodeDTMFNotEnabled, ms.sessionID,
+			"DTMF не включен", DTMFDigit(0), time.Duration(0))
+	}
+
+	state := ms.GetState()
+	if state != MediaStateActive {
+		return &MediaError{
+			Code:      ErrorCodeSessionNotStarted,
+			Message:   fmt.Sprintf("медиа сессия не активна: %s", state),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"current_state": state,
+			},
+		}
+	}
+
+	// Проверяем существование RTP сессии
+	ms.sessionsMutex.RLock()
+	rtpSession, exists := ms.rtpSessions[rtpSessionID]
+	ms.sessionsMutex.RUnlock()
+
+	if !exists {
+		return &MediaError{
+			Code:      ErrorCodeRTPSessionNotFound,
+			Message:   fmt.Sprintf("RTP сессия не найдена: %s", rtpSessionID),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"rtp_session_id": rtpSessionID,
+			},
+		}
+	}
+
+	// Проверяем, может ли сессия отправлять данные
+	if !rtpSession.CanSend() {
+		return &MediaError{
+			Code:      ErrorCodeSessionInvalidDirection,
+			Message:   fmt.Sprintf("RTP сессия %s не может отправлять данные", rtpSessionID),
+			SessionID: ms.sessionID,
+			Context: map[string]interface{}{
+				"rtp_session_id": rtpSessionID,
+			},
+		}
+	}
+
+	// Создаем DTMF событие
+	event := DTMFEvent{
+		Digit:     digit,
+		Duration:  duration,
+		Volume:    -10,                                     // Стандартный уровень
+		Timestamp: uint32(time.Now().UnixNano() / 1000000), // Миллисекунды
+	}
+
+	// Генерируем RTP пакеты для DTMF
+	packets, err := ms.dtmfSender.GeneratePackets(event)
+	if err != nil {
+		return WrapMediaError(ErrorCodeDTMFSendFailed, ms.sessionID, "ошибка генерации DTMF", err)
+	}
+
+	// Отправляем пакеты на конкретную RTP сессию
+	for _, packet := range packets {
+		err := rtpSession.SendPacket(packet)
+		if err != nil {
+			return WrapMediaError(ErrorCodeDTMFSendFailed, ms.sessionID, 
+				fmt.Sprintf("ошибка отправки DTMF на сессию %s", rtpSessionID), err)
+		}
+	}
+
+	// Обновляем статистику
+	ms.updateDTMFSendStats()
+
+	return nil
+}
+
 // SendAudioToSession отправляет аудио данные на конкретную RTP сессию.
 // В отличие от SendAudio, который отправляет на все сессии, этот метод
 // позволяет выбрать конкретную RTP сессию по её ID.
