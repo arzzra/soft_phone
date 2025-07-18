@@ -66,17 +66,18 @@ func TestFullMediaBuilderIntegration(t *testing.T) {
 	// Устанавливаем callback'и для обработки медиа событий
 	config.DefaultMediaConfig.OnAudioReceived = func(data []byte, pt media.PayloadType, ptime time.Duration, sessionID string) {
 		t.Logf("🎵 [%s] Получено аудио: %d байт, payload type %d, ptime %v", sessionID, len(data), pt, ptime)
-		if sessionID == "caller" {
+		// sessionID здесь - это RTP session ID, например "caller_audio_0"
+		if sessionID == "caller_audio_0" {
 			results.incrementCallerAudio(data)
-		} else if sessionID == "callee" {
+		} else if sessionID == "callee_audio_0" {
 			results.incrementCalleeAudio(data)
 		}
 	}
 
 	config.DefaultMediaConfig.OnDTMFReceived = func(event media.DTMFEvent, sessionID string) {
 		t.Logf("[%s] Получен DTMF: %s, длительность: %v", sessionID, event.Digit, event.Duration)
-		// TODO: Проблема - sessionID пустой для DTMF событий
-		// Временное решение - определяем по медиа статистике
+		// sessionID может быть пустым для DTMF событий
+		// DTMF от caller получает callee
 		results.mu.Lock()
 		results.receivedDTMFDigits = append(results.receivedDTMFDigits, event.Digit)
 		results.mu.Unlock()
@@ -85,6 +86,9 @@ func TestFullMediaBuilderIntegration(t *testing.T) {
 	config.DefaultMediaConfig.OnMediaError = func(err error, sessionID string) {
 		t.Logf("[%s] Ошибка медиа: %v", sessionID, err)
 	}
+
+	// ВАЖНО: НЕ устанавливаем OnRawPacketReceived, чтобы пакеты проходили через декодирование
+	// и вызывались OnAudioReceived callbacks
 
 	manager, err := media_builder.NewBuilderManager(config)
 	require.NoError(t, err, "Не удалось создать BuilderManager")
@@ -385,12 +389,17 @@ func testAudioExchange(t *testing.T, callerBuilder, calleeBuilder media_builder.
 	t.Logf("Результаты аудио обмена: caller получил %d пакетов, callee получил %d пакетов",
 		callerAudio, calleeAudio)
 
-	// В media_builder без реального транспорта пакеты могут не доставляться
-	// Это нормально для unit теста
-	if callerAudio == 0 && calleeAudio == 0 {
-		t.Log("⚠️ Аудио пакеты не были получены (ожидаемо без реального транспорта)")
+	// Проверяем результаты
+	if calleeAudio > 0 {
+		t.Logf("✅ Callee получил %d аудио пакетов от Caller", calleeAudio)
 	} else {
-		t.Log("✅ Аудио обмен прошел успешно")
+		t.Log("⚠️ Callee не получил аудио пакеты от Caller")
+	}
+	
+	if callerAudio > 0 {
+		t.Logf("✅ Caller получил %d аудио пакетов от Callee", callerAudio)
+	} else {
+		t.Log("⚠️ Caller не получил аудио пакеты от Callee")
 	}
 
 	return nil
@@ -449,10 +458,10 @@ func testDTMFExchange(t *testing.T, callerBuilder, calleeBuilder media_builder.B
 		callerDTMF, calleeDTMF)
 	t.Logf("Полученные DTMF цифры: %v", receivedDigits)
 
-	if callerDTMF == 0 && calleeDTMF == 0 {
-		t.Log("⚠️ DTMF сигналы не были получены (ожидаемо без реального транспорта)")
+	if len(receivedDigits) > 0 {
+		t.Logf("✅ Получено %d DTMF сигналов: %v", len(receivedDigits), receivedDigits)
 	} else {
-		t.Log("✅ DTMF обмен прошел успешно")
+		t.Log("⚠️ DTMF сигналы не были получены")
 	}
 
 	return nil
