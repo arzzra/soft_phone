@@ -9,6 +9,7 @@ import (
 
 	"github.com/arzzra/soft_phone/pkg/media"
 	"github.com/arzzra/soft_phone/pkg/media_builder"
+	"github.com/arzzra/soft_phone/pkg/rtp"
 	"github.com/pion/sdp/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,30 +209,64 @@ func setupTransports(t *testing.T, callerBuilder, calleeBuilder media_builder.Bu
 	callerMedia := callerBuilder.GetMediaSession()
 	calleeMedia := calleeBuilder.GetMediaSession()
 
-	// Медиа сессии уже запускаются при создании builder'ов
-	// Проверяем их состояние
+	// Проверяем состояние медиа сессий
 	if callerMedia != nil {
 		state := callerMedia.GetState()
-		if state == media.MediaStateIdle {
-			err := callerMedia.Start()
-			if err != nil {
-				return fmt.Errorf("не удалось запустить caller media session: %w", err)
-			}
+		t.Logf("Caller media session state: %v", state)
+		// Медиа сессии должны быть уже запущены в createAllMediaResources
+		if state == media.MediaStateActive {
+			t.Log("✅ Caller media session уже активна")
+		} else if state == media.MediaStateIdle {
+			t.Log("⚠️ Предупреждение: Caller media session в состоянии idle")
 		}
 	}
 
 	if calleeMedia != nil {
 		state := calleeMedia.GetState()
-		if state == media.MediaStateIdle {
-			err := calleeMedia.Start()
-			if err != nil {
-				return fmt.Errorf("не удалось запустить callee media session: %w", err)
+		t.Logf("Callee media session state: %v", state)
+		// Медиа сессии должны быть уже запущены в createAllMediaResources
+		if state == media.MediaStateActive {
+			t.Log("✅ Callee media session уже активна")
+		} else if state == media.MediaStateIdle {
+			t.Log("⚠️ Предупреждение: Callee media session в состоянии idle")
+		}
+	}
+
+	// Получаем информацию о медиа потоках для проверки RTP сессий
+	callerStreams := callerBuilder.GetMediaStreams()
+	calleeStreams := calleeBuilder.GetMediaStreams()
+
+	// Проверяем состояние RTP сессий для caller
+	for _, stream := range callerStreams {
+		if stream.RTPSession != nil {
+			if session, ok := stream.RTPSession.(*rtp.Session); ok {
+				state := session.GetState()
+				t.Logf("Caller RTP session %s state: %v, SSRC: %d", 
+					stream.StreamID, state, session.GetSSRC())
+				
+				// RTP сессии уже должны быть запущены в createAllMediaResources
+				if state != rtp.SessionStateActive {
+					t.Logf("⚠️ Предупреждение: Caller RTP сессия %s не активна", stream.StreamID)
+				}
 			}
 		}
 	}
 
-	// В реальном приложении здесь бы создавались и связывались RTP транспорты
-	// Для функционального теста builder'а мы проверяем только создание и конфигурацию
+	// Проверяем состояние RTP сессий для callee
+	for _, stream := range calleeStreams {
+		if stream.RTPSession != nil {
+			if session, ok := stream.RTPSession.(*rtp.Session); ok {
+				state := session.GetState()
+				t.Logf("Callee RTP session %s state: %v, SSRC: %d", 
+					stream.StreamID, state, session.GetSSRC())
+				
+				// RTP сессии уже должны быть запущены в createAllMediaResources
+				if state != rtp.SessionStateActive {
+					t.Logf("⚠️ Предупреждение: Callee RTP сессия %s не активна", stream.StreamID)
+				}
+			}
+		}
+	}
 
 	return nil
 }
@@ -250,6 +285,34 @@ func checkMediaSessions(t *testing.T, callerBuilder, calleeBuilder media_builder
 
 	t.Logf("Caller media session stats: %+v", callerStats)
 	t.Logf("Callee media session stats: %+v", calleeStats)
+	
+	// Дополнительная проверка состояния RTP сессий
+	callerStreams := callerBuilder.GetMediaStreams()
+	calleeStreams := calleeBuilder.GetMediaStreams()
+	
+	t.Logf("Количество медиа потоков - Caller: %d, Callee: %d", 
+		len(callerStreams), len(calleeStreams))
+	
+	// Проверяем RTP статистику для всех потоков
+	for i, stream := range callerStreams {
+		if stream.RTPSession != nil {
+			// Используем type assertion для доступа к конкретной реализации
+			if session, ok := stream.RTPSession.(*rtp.Session); ok {
+				rtpStats := session.GetStatistics()
+				t.Logf("Caller stream %d (%s) RTP stats: %+v", i, stream.StreamID, rtpStats)
+			}
+		}
+	}
+	
+	for i, stream := range calleeStreams {
+		if stream.RTPSession != nil {
+			// Используем type assertion для доступа к конкретной реализации
+			if session, ok := stream.RTPSession.(*rtp.Session); ok {
+				rtpStats := session.GetStatistics()
+				t.Logf("Callee stream %d (%s) RTP stats: %+v", i, stream.StreamID, rtpStats)
+			}
+		}
+	}
 }
 
 // testAudioExchange тестирует обмен аудио данными

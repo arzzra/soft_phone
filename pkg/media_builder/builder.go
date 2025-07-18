@@ -631,12 +631,20 @@ func (b *mediaBuilder) createAllMediaResources() error {
 			cleanup()
 			return fmt.Errorf("не удалось установить направление для потока %s: %w", streamInfo.StreamID, err)
 		}
+		
+		// НЕ запускаем RTP сессию здесь - медиа сессия запустит её сама при вызове Start()
 
 		// Добавляем RTP сессию в медиа сессию
 		if err := b.mediaSession.AddRTPSession(streamInfo.StreamID, rtpSession); err != nil {
 			cleanup()
 			return fmt.Errorf("не удалось добавить RTP сессию %s: %w", streamInfo.StreamID, err)
 		}
+	}
+
+	// Запускаем медиа сессию после добавления всех RTP сессий
+	if err := b.mediaSession.Start(); err != nil {
+		cleanup()
+		return fmt.Errorf("не удалось запустить медиа сессию: %w", err)
 	}
 
 	return nil
