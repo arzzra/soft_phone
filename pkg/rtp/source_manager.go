@@ -19,6 +19,8 @@
 package rtp
 
 import (
+	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -454,6 +456,11 @@ func (sm *SourceManager) GetActiveSourceCount() int {
 // cleanupLoop периодически удаляет неактивные источники
 func (sm *SourceManager) cleanupLoop(interval time.Duration) {
 	defer close(sm.cleanupDone)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Паника в cleanupLoop: %v\nStack: %s", r, debug.Stack())
+		}
+	}()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

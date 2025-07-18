@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -1610,6 +1611,16 @@ func (ms *session) sendBufferedAudioForSession(rtpSessionID string) {
 // audioSendLoop регулярно отправляет накопленные аудио данные с интервалом ptime
 func (ms *session) audioSendLoop() {
 	defer ms.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Паника в audioSendLoop",
+				slog.Any("error", r),
+				slog.String("stack", string(debug.Stack())))
+			if ms.onMediaError != nil {
+				ms.onMediaError(fmt.Errorf("panic in audioSendLoop: %v", r), "")
+			}
+		}
+	}()
 
 	// Получаем ticker под защитой мьютекса
 	ms.stateMutex.RLock()
@@ -1925,6 +1936,16 @@ func (ms *session) HasMediaErrorHandler() bool {
 // jitterBufferLoop основной цикл обработки jitter buffer
 func (ms *session) jitterBufferLoop() {
 	defer ms.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Паника в jitterBufferLoop",
+				slog.Any("error", r),
+				slog.String("stack", string(debug.Stack())))
+			if ms.onMediaError != nil {
+				ms.onMediaError(fmt.Errorf("panic in jitterBufferLoop: %v", r), "")
+			}
+		}
+	}()
 
 	if ms.jitterBuffer == nil {
 		return
@@ -1959,6 +1980,16 @@ func (ms *session) jitterBufferLoop() {
 // audioProcessorLoop основной цикл обработки аудио
 func (ms *session) audioProcessorLoop() {
 	defer ms.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Паника в audioProcessorLoop",
+				slog.Any("error", r),
+				slog.String("stack", string(debug.Stack())))
+			if ms.onMediaError != nil {
+				ms.onMediaError(fmt.Errorf("panic in audioProcessorLoop: %v", r), "")
+			}
+		}
+	}()
 
 	if ms.audioProcessor == nil {
 		return
@@ -2298,6 +2329,16 @@ func (ms *session) HasRTCPHandler() bool {
 // rtcpSendLoop основной цикл отправки RTCP отчетов
 func (ms *session) rtcpSendLoop() {
 	defer ms.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Паника в rtcpSendLoop",
+				slog.Any("error", r),
+				slog.String("stack", string(debug.Stack())))
+			if ms.onMediaError != nil {
+				ms.onMediaError(fmt.Errorf("panic in rtcpSendLoop: %v", r), "")
+			}
+		}
+	}()
 
 	if !ms.IsRTCPEnabled() {
 		return

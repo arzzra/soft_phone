@@ -20,7 +20,9 @@ package rtp
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -172,6 +174,11 @@ func (rs *RTCPSession) Stop() error {
 // sendLoop основной цикл отправки RTCP пакетов
 func (rs *RTCPSession) sendLoop() {
 	defer rs.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Паника в sendLoop: %v\nStack: %s", r, debug.Stack())
+		}
+	}()
 
 	// Рассчитываем адаптивный интервал согласно RFC 3550 Appendix A.7
 	ticker := time.NewTicker(rs.calculateInterval())
@@ -196,6 +203,11 @@ func (rs *RTCPSession) sendLoop() {
 // receiveLoop основной цикл получения RTCP пакетов
 func (rs *RTCPSession) receiveLoop() {
 	defer rs.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Паника в receiveLoop: %v\nStack: %s", r, debug.Stack())
+		}
+	}()
 
 	for {
 		select {

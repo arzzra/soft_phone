@@ -5,7 +5,9 @@ package rtp
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -195,6 +197,11 @@ func (rs *RTPSession) SendPacket(packet *rtp.Packet) error {
 // receiveLoop основной цикл получения RTP пакетов
 func (rs *RTPSession) receiveLoop() {
 	defer rs.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Паника в receiveLoop: %v\nStack: %s", r, debug.Stack())
+		}
+	}()
 
 	for {
 		select {

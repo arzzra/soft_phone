@@ -2,6 +2,8 @@ package rtp
 
 import (
 	"fmt"
+	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -261,6 +263,11 @@ func (sm *SessionManager) CleanupInactiveSessions() int {
 // cleanupRoutine фоновая процедура очистки неактивных сессий
 func (sm *SessionManager) cleanupRoutine() {
 	defer close(sm.cleanupDone)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Паника в cleanupRoutine: %v\nStack: %s", r, debug.Stack())
+		}
+	}()
 
 	ticker := time.NewTicker(sm.cleanupInterval)
 	defer ticker.Stop()

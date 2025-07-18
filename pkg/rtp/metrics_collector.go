@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -616,6 +617,12 @@ func (mc *MetricsCollector) handleDebugSessions(w http.ResponseWriter, r *http.R
 
 // periodicTasks выполняет периодические задачи (cleanup)
 func (mc *MetricsCollector) periodicTasks() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Паника в periodicTasks: %v\nStack: %s", r, debug.Stack())
+		}
+	}()
+	
 	cleanupTicker := time.NewTicker(mc.config.HealthCheckInterval)
 	defer cleanupTicker.Stop()
 
