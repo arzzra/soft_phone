@@ -38,7 +38,7 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 	config.DefaultMediaConfig.OnAudioReceived = func(data []byte, pt media.PayloadType, ptime time.Duration, sessionID string) {
 		results.mu.Lock()
 		defer results.mu.Unlock()
-		
+
 		if sessionID == "caller" {
 			results.callerAudioReceived++
 			t.Logf("🎵 [Caller] Получен аудио пакет #%d: %d байт", results.callerAudioReceived, len(data))
@@ -51,7 +51,7 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 	config.DefaultMediaConfig.OnDTMFReceived = func(event media.DTMFEvent, sessionID string) {
 		results.mu.Lock()
 		defer results.mu.Unlock()
-		
+
 		if sessionID == "caller" {
 			results.callerDTMFReceived = append(results.callerDTMFReceived, event.Digit)
 			t.Logf("📞 [Caller] Получен DTMF: %s", event.Digit)
@@ -77,17 +77,17 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 	t.Log("📞 Этап 1: Создание Caller...")
 	callerBuilder, err := manager.CreateBuilder("caller")
 	require.NoError(t, err)
-	
+
 	// Создаем SDP offer от caller
 	offer, err := callerBuilder.CreateOffer()
 	require.NoError(t, err)
 	require.NotNil(t, offer)
-	
+
 	// Выводим информацию о SDP offer
 	if len(offer.MediaDescriptions) > 0 {
 		media := offer.MediaDescriptions[0]
 		t.Logf("Caller SDP Offer - порт: %d, кодеки: %v", media.MediaName.Port.Value, media.MediaName.Formats)
-		
+
 		// Выводим connection info
 		if offer.ConnectionInformation != nil {
 			t.Logf("Caller Connection: %s %s", offer.ConnectionInformation.NetworkType, offer.ConnectionInformation.Address.Address)
@@ -98,21 +98,21 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 	t.Log("📞 Этап 2: Создание Callee...")
 	calleeBuilder, err := manager.CreateBuilder("callee")
 	require.NoError(t, err)
-	
+
 	// Обрабатываем offer в callee
 	err = calleeBuilder.ProcessOffer(offer)
 	require.NoError(t, err)
-	
+
 	// Создаем answer
 	answer, err := calleeBuilder.CreateAnswer()
 	require.NoError(t, err)
 	require.NotNil(t, answer)
-	
+
 	// Выводим информацию о SDP answer
 	if len(answer.MediaDescriptions) > 0 {
 		media := answer.MediaDescriptions[0]
 		t.Logf("Callee SDP Answer - порт: %d, кодеки: %v", media.MediaName.Port.Value, media.MediaName.Formats)
-		
+
 		// Выводим connection info
 		if answer.ConnectionInformation != nil {
 			t.Logf("Callee Connection: %s %s", answer.ConnectionInformation.NetworkType, answer.ConnectionInformation.Address.Address)
@@ -127,7 +127,7 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 	// Получаем медиа сессии
 	callerMedia := callerBuilder.GetMediaSession()
 	calleeMedia := calleeBuilder.GetMediaSession()
-	
+
 	require.NotNil(t, callerMedia, "Caller media session не создана")
 	require.NotNil(t, calleeMedia, "Callee media session не создана")
 
@@ -138,15 +138,15 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 	// Выводим информацию о медиа потоках
 	callerStreams := callerBuilder.GetMediaStreams()
 	calleeStreams := calleeBuilder.GetMediaStreams()
-	
+
 	t.Log("📊 Информация о медиа потоках:")
 	for _, stream := range callerStreams {
-		t.Logf("Caller stream: %s, local=%d, remote=%s, payload=%d", 
+		t.Logf("Caller stream: %s, local=%d, remote=%s, payload=%d",
 			stream.StreamID, stream.LocalPort, stream.RemoteAddr, stream.PayloadType)
 	}
-	
+
 	for _, stream := range calleeStreams {
-		t.Logf("Callee stream: %s, local=%d, remote=%s, payload=%d", 
+		t.Logf("Callee stream: %s, local=%d, remote=%s, payload=%d",
 			stream.StreamID, stream.LocalPort, stream.RemoteAddr, stream.PayloadType)
 	}
 
@@ -155,7 +155,7 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 
 	// Этап 4: Тестируем обмен аудио
 	t.Log("🎵 Этап 4: Тестирование обмена аудио...")
-	
+
 	// Генерируем простые тестовые аудио данные (160 байт = 20мс для PCMU 8kHz)
 	testAudioData := make([]byte, 160)
 	for i := range testAudioData {
@@ -194,7 +194,7 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 
 	// Этап 5: Тестируем DTMF
 	t.Log("📞 Этап 5: Тестирование DTMF...")
-	
+
 	// Отправляем DTMF от caller
 	dtmfDigits := []media.DTMFDigit{media.DTMF1, media.DTMF2, media.DTMF3}
 	for _, digit := range dtmfDigits {
@@ -222,7 +222,7 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 	// Получаем статистику медиа сессий
 	callerStats := callerMedia.GetStatistics()
 	calleeStats := calleeMedia.GetStatistics()
-	
+
 	t.Log("📈 Статистика медиа сессий:")
 	t.Logf("Caller - отправлено аудио: %d, получено: %d, отправлено DTMF: %d, получено: %d",
 		callerStats.AudioPacketsSent, callerStats.AudioPacketsReceived,
@@ -248,7 +248,7 @@ func TestFullMediaBuilderOnLocalhost(t *testing.T) {
 	t.Log("🧹 Этап 6: Очистка ресурсов...")
 	err = manager.ReleaseBuilder("caller")
 	assert.NoError(t, err)
-	
+
 	err = manager.ReleaseBuilder("callee")
 	assert.NoError(t, err)
 
@@ -267,12 +267,12 @@ func TestSimpleLocalhostConnection(t *testing.T) {
 	config := media_builder.DefaultConfig()
 	config.LocalHost = "127.0.0.1"
 	config.MinPort = 20000
-	config.MaxPort = 20010
-	
+	config.MaxPort = 21010
+
 	// Счетчики для проверки
 	var audioReceived int
 	var mu sync.Mutex
-	
+
 	config.DefaultMediaConfig.OnAudioReceived = func(data []byte, pt media.PayloadType, ptime time.Duration, sessionID string) {
 		mu.Lock()
 		audioReceived++
@@ -290,44 +290,44 @@ func TestSimpleLocalhostConnection(t *testing.T) {
 	// Создаем два builder'а
 	builder1, err := manager.CreateBuilder("endpoint1")
 	require.NoError(t, err)
-	
+
 	builder2, err := manager.CreateBuilder("endpoint2")
 	require.NoError(t, err)
 
 	// SDP negotiation
 	offer, err := builder1.CreateOffer()
 	require.NoError(t, err)
-	
+
 	err = builder2.ProcessOffer(offer)
 	require.NoError(t, err)
-	
+
 	answer, err := builder2.CreateAnswer()
 	require.NoError(t, err)
-	
+
 	err = builder1.ProcessAnswer(answer)
 	require.NoError(t, err)
 
 	// Получаем медиа сессии
 	media1 := builder1.GetMediaSession()
 	media2 := builder2.GetMediaSession()
-	
+
 	require.NotNil(t, media1)
 	require.NotNil(t, media2)
 
 	// Отправляем тестовые данные
 	testData := make([]byte, 160) // 20ms PCMU
-	
+
 	// Endpoint1 -> Endpoint2
 	err = media1.SendAudio(testData)
 	assert.NoError(t, err)
-	
+
 	// Даем время на доставку
 	time.Sleep(50 * time.Millisecond)
-	
+
 	// Endpoint2 -> Endpoint1
 	err = media2.SendAudio(testData)
 	assert.NoError(t, err)
-	
+
 	// Даем время на доставку
 	time.Sleep(50 * time.Millisecond)
 
@@ -348,12 +348,12 @@ func TestMultiStreamLocalhost(t *testing.T) {
 	config := media_builder.DefaultConfig()
 	config.LocalHost = "127.0.0.1"
 	config.MinPort = 30000
-	config.MaxPort = 30100
-	
+	config.MaxPort = 31100
+
 	// Счетчики для каждого потока
 	streamStats := make(map[string]int)
 	var mu sync.Mutex
-	
+
 	config.DefaultMediaConfig.OnAudioReceived = func(data []byte, pt media.PayloadType, ptime time.Duration, sessionID string) {
 		mu.Lock()
 		streamStats[sessionID]++
@@ -369,30 +369,30 @@ func TestMultiStreamLocalhost(t *testing.T) {
 	// Создаем builder'ы
 	sender, err := manager.CreateBuilder("sender")
 	require.NoError(t, err)
-	
+
 	receiver, err := manager.CreateBuilder("receiver")
 	require.NoError(t, err)
 
 	// Создаем SDP с несколькими медиа потоками
 	offer, err := sender.CreateOffer()
 	require.NoError(t, err)
-	
+
 	// Модифицируем offer для добавления второго медиа потока
 	// (в реальном сценарии это делается через API)
-	
+
 	err = receiver.ProcessOffer(offer)
 	require.NoError(t, err)
-	
+
 	answer, err := receiver.CreateAnswer()
 	require.NoError(t, err)
-	
+
 	err = sender.ProcessAnswer(answer)
 	require.NoError(t, err)
 
 	// Проверяем количество потоков
 	senderStreams := sender.GetMediaStreams()
 	receiverStreams := receiver.GetMediaStreams()
-	
+
 	t.Logf("Sender потоков: %d", len(senderStreams))
 	t.Logf("Receiver потоков: %d", len(receiverStreams))
 
