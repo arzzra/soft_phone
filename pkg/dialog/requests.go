@@ -356,7 +356,6 @@ func (s *Dialog) ReferWithReplaceDialog(replaceDialog DialogInfo, headers []sip.
 	return req
 }
 
-/
 //
 //// Info возвращает INFO запрос.
 //func (s *Dialog) Info(content []byte, contentType string) *sip.Request {
