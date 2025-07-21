@@ -337,24 +337,26 @@ func (s *Dialog) ReferWithReplaceDialog(replaceDialog DialogInfo, headers []sip.
 	// с точки зрения диалога, который будет заменен
 	toTag := replaceDialog.RemoteTag()
 	fromTag := replaceDialog.LocalTag()
-	
+
 	// Создаем REFER запрос
 	req := s.makeRequest(sip.REFER)
-	
+
 	// Создаем заголовки
 	referBy := createReferByHeader(s.localContact.Address)
 	referTo := createReferToHeader(replaceDialog.RemoteURI(), callID, toTag, fromTag)
-	
+
 	req.AppendHeader(referTo)
 	req.AppendHeader(referBy)
-	
+
 	// Добавляем дополнительные заголовки
 	for _, v := range headers {
 		req.AppendHeader(v)
 	}
-	
+
 	return req
 }
+
+/
 //
 //// Info возвращает INFO запрос.
 //func (s *Dialog) Info(content []byte, contentType string) *sip.Request {
