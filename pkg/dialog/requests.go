@@ -320,9 +320,17 @@ func (s *Dialog) ReferWithReplace(target sip.Uri, callID sip.CallIDHeader,
 	return req, nil
 }
 
+// DialogInfo интерфейс для получения информации о диалоге, необходимой для Replaces
+type DialogInfo interface {
+	CallID() sip.CallIDHeader
+	LocalTag() string
+	RemoteTag() string
+	RemoteURI() sip.Uri
+}
+
 // ReferWithReplaceDialog возвращает REFER запрос для перевода звонка с подменой существующего диалога.
 // Метод создает REFER запрос с заголовком Refer-To, содержащим параметры Replaces для замены указанного диалога.
-func (s *Dialog) ReferWithReplaceDialog(replaceDialog IDialog, headers []sip.Header) *sip.Request {
+func (s *Dialog) ReferWithReplaceDialog(replaceDialog DialogInfo, headers []sip.Header) *sip.Request {
 	// Получаем данные для Replaces из диалога, который нужно заменить
 	callID := string(replaceDialog.CallID())
 	// Важно: для Replaces используется remoteTag как to-tag и localTag как from-tag
