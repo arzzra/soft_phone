@@ -472,25 +472,13 @@ func (s *Dialog) ReferReplace(ctx context.Context, replaceDialog IDialog, opts .
 		return nil, err
 	}
 
-	// Получаем информацию для Replaces заголовка
-	callID := replaceDialog.CallID()
-	localTag := replaceDialog.LocalTag()
-	remoteTag := replaceDialog.RemoteTag()
-
-	slog.Debug("Dialog.ReferReplace replace info",
-		slog.String("callID", string(callID)),
-		slog.String("localTag", localTag),
-		slog.String("remoteTag", remoteTag))
-
 	// Создаем REFER запрос с Replaces
-	// TODO: Нужно создать метод ReferWithReplace с правильными параметрами
-	// Пока используем обычный REFER
-	req := s.ReferRequest(replaceDialog.RemoteURI(), nil)
+	req := s.ReferWithReplaceDialog(replaceDialog, nil)
 
-	// Добавляем Replaces информацию в Refer-To заголовок
-	replaces := fmt.Sprintf("%s;to-tag=%s;from-tag=%s", callID, remoteTag, localTag)
-	replacesHeader := sip.NewHeader("Replaces", replaces)
-	req.AppendHeader(replacesHeader)
+	slog.Debug("Dialog.ReferReplace creating REFER with Replaces",
+		slog.String("callID", string(replaceDialog.CallID())),
+		slog.String("localTag", replaceDialog.LocalTag()),
+		slog.String("remoteTag", replaceDialog.RemoteTag()))
 
 	// Применяем опции
 	for _, opt := range opts {

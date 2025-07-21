@@ -320,32 +320,33 @@ func (s *Dialog) ReferWithReplace(target sip.Uri, callID sip.CallIDHeader,
 	return req, nil
 }
 
-// ReferWithReplace возвращает REFER запрос для перевода звонка с подменой.
-//func (s *Dialog) ReferWithReplace1(targetSess *Dialog, headers []sip.Header) (*sip.Request, error) {
-//	tagTo, ok := targetSess.to.Params.Get("tag") // todo s.To()
-//	if !ok {
-//		return nil, ErrTagToNotFount
-//	}
-//
-//	tagFrom, ok := targetSess.from.Params.Get("tag") // todo s.From()
-//	if !ok {
-//		return nil, ErrTagFromNotFount
-//	}
-//
-//	req := s.makeRequest(sip.REFER)
-//
-//	referBy := createReferByHeader(s.LocalContact().Address)
-//	referTo := createReferToHeader(targetSess.to.Address, targetSess.CallID().Value(), tagTo, tagFrom)
-//
-//	req.AppendHeader(referTo)
-//	req.AppendHeader(referBy)
-//
-//	for _, v := range headers {
-//		req.AppendHeader(v)
-//	}
-//
-//	return req, nil
-//}
+// ReferWithReplaceDialog возвращает REFER запрос для перевода звонка с подменой существующего диалога.
+// Метод создает REFER запрос с заголовком Refer-To, содержащим параметры Replaces для замены указанного диалога.
+func (s *Dialog) ReferWithReplaceDialog(replaceDialog IDialog, headers []sip.Header) *sip.Request {
+	// Получаем данные для Replaces из диалога, который нужно заменить
+	callID := string(replaceDialog.CallID())
+	// Важно: для Replaces используется remoteTag как to-tag и localTag как from-tag
+	// с точки зрения диалога, который будет заменен
+	toTag := replaceDialog.RemoteTag()
+	fromTag := replaceDialog.LocalTag()
+	
+	// Создаем REFER запрос
+	req := s.makeRequest(sip.REFER)
+	
+	// Создаем заголовки
+	referBy := createReferByHeader(s.localContact.Address)
+	referTo := createReferToHeader(replaceDialog.RemoteURI(), callID, toTag, fromTag)
+	
+	req.AppendHeader(referTo)
+	req.AppendHeader(referBy)
+	
+	// Добавляем дополнительные заголовки
+	for _, v := range headers {
+		req.AppendHeader(v)
+	}
+	
+	return req
+}
 //
 //// Info возвращает INFO запрос.
 //func (s *Dialog) Info(content []byte, contentType string) *sip.Request {
