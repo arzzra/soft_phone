@@ -367,3 +367,37 @@ func (u *UACUAS) Stop() error {
 
 	return nil
 }
+
+// CreateURIWithEndpoints создает SIP URI используя имя пользователя и данные из первого Endpoint.
+// Возвращает ошибку если Endpoints не сконфигурированы.
+func (u *UACUAS) CreateURIWithEndpoints(name string) (sip.Uri, error) {
+	// Проверяем наличие Endpoints
+	if len(u.config.Endpoints) == 0 {
+		return sip.Uri{}, errors.New("нет сконфигурированных endpoints")
+	}
+
+	// Берем первый endpoint по ссылке, чтобы избежать копирования sync/atomic полей
+	endpoint := &u.config.Endpoints[0]
+
+	// Создаем URI используя данные из endpoint
+	uri := MakeSipUri(name, endpoint.Host, endpoint.Port)
+
+	return uri, nil
+}
+
+// CreateURIWithTransport создает SIP URI используя имя пользователя и данные из первого TransportConfig.
+// Возвращает ошибку если TransportConfigs не сконфигурированы.
+func (u *UACUAS) CreateURIWithTransport(name string) (sip.Uri, error) {
+	// Проверяем наличие TransportConfigs
+	if len(u.config.TransportConfigs) == 0 {
+		return sip.Uri{}, errors.New("нет сконфигурированных транспортов")
+	}
+
+	// Берем первый транспорт
+	transport := u.config.TransportConfigs[0]
+
+	// Создаем URI используя данные из транспорта
+	uri := MakeSipUri(name, transport.Host, transport.Port)
+
+	return uri, nil
+}

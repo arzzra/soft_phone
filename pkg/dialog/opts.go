@@ -99,6 +99,27 @@ func WithContact(uri sip.Uri) RequestOpt {
 	}
 }
 
+// WithPAssertedIdentity добавляет заголовок P-Asserted-Identity с указанным URI
+// P-Asserted-Identity используется для передачи подтвержденной идентификации абонента
+func WithPAssertedIdentity(uri sip.Uri) RequestOpt {
+	return func(msg sip.Message) {
+		// Формируем значение заголовка в формате <sip:user@host:port>
+		paiValue := fmt.Sprintf("<%s>", uri.String())
+		header := sip.NewHeader("P-Asserted-Identity", paiValue)
+		msg.AppendHeader(header)
+	}
+}
+
+// WithPAssertedIdentityDisplayName добавляет заголовок P-Asserted-Identity с URI и отображаемым именем
+func WithPAssertedIdentityDisplayName(displayName string, uri sip.Uri) RequestOpt {
+	return func(msg sip.Message) {
+		// Формируем значение заголовка в формате "Display Name" <sip:user@host:port>
+		paiValue := fmt.Sprintf("\"%s\" <%s>", displayName, uri.String())
+		header := sip.NewHeader("P-Asserted-Identity", paiValue)
+		msg.AppendHeader(header)
+	}
+}
+
 // WithContentType устанавливает Content-Type заголовок
 func WithContentType(contentType string) RequestOpt {
 	return func(msg sip.Message) {
