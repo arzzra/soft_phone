@@ -1,7 +1,6 @@
 package dialog_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -32,11 +31,21 @@ func (s *TerminateTestSuite) TestTerminateInCallState() {
 	// Ждем завершения обработки
 	time.Sleep(500 * time.Millisecond)
 
-	// Проверяем историю переходов
-	lastTransition := ua1Dialog.GetLastTransitionReason()
-	s.Require().NotNil(lastTransition)
-	s.Equal("BYE request sent", lastTransition.Reason)
-	s.Equal(sip.BYE, lastTransition.Method)
+	// Проверяем историю переходов для перехода InCall→Terminating
+	history := ua1Dialog.GetTransitionHistory()
+	s.Require().Greater(len(history), 0, "Should have transition history")
+	
+	// Ищем переход InCall→Terminating
+	found := false
+	for _, transition := range history {
+		if transition.FromState == dialog.InCall && transition.ToState == dialog.Terminating {
+			s.Equal("BYE request sent", transition.Reason)
+			s.Equal(sip.BYE, transition.Method)
+			found = true
+			break
+		}
+	}
+	s.True(found, "Should find InCall→Terminating transition")
 	s.events.Add("UA1", "TERMINATE_IN_CALL", "BYE sent successfully")
 }
 
@@ -195,15 +204,11 @@ func (s *TerminateTestSuite) TestTerminateInTerminatingState() {
 	ua1Dialog, _ := s.createBasicCall()
 	s.Equal(dialog.InCall, ua1Dialog.State())
 
-	// Сначала вызываем Bye для перехода в Terminating
-	ctx, cancel := context.WithTimeout(s.ctx, 1*time.Second)
-	defer cancel()
-	
-	err := ua1Dialog.Bye(ctx)
+	// Сначала вызываем Terminate для перехода в Terminating
+	err := ua1Dialog.Terminate()
 	s.Require().NoError(err)
 	
-	// Ждем перехода в Terminating
-	time.Sleep(100 * time.Millisecond)
+	// Проверяем переход в Terminating
 	s.Equal(dialog.Terminating, ua1Dialog.State())
 
 	// Теперь вызываем Terminate в состоянии Terminating
