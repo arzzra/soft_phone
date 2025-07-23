@@ -300,10 +300,15 @@ func (s *Dialog) RemoteSeq() uint32 {
 	return s.remoteCSeq.Load()
 }
 
-// Terminate завершает диалог, отправляя BYE запрос.
-// Может быть вызван только в состоянии InCall.
-// Переводит диалог в состояние Terminating.
-// В отличие от Bye(), этот метод не ожидает ответа на BYE запрос.
+// Terminate завершает диалог в зависимости от его текущего состояния.
+// Поведение зависит от состояния диалога:
+//   - InCall: отправляет BYE запрос
+//   - Calling: отправляет CANCEL через firstTX.Cancel()
+//   - Ringing: отправляет 487 Request Terminated
+//   - IDLE: переводит диалог в состояние Ended
+//   - Terminating/Ended: ничего не делает (идемпотентность)
+//
+// В отличие от Bye(), этот метод не ожидает ответа.
 func (s *Dialog) Terminate() error {
 	// Определяем контекст для вызова
 	ctx := context.Background()
@@ -311,24 +316,97 @@ func (s *Dialog) Terminate() error {
 		ctx = s.ctx
 	}
 
+	currentState := s.State()
+
 	// Логируем вызов
 	slog.Debug("Dialog.Terminate",
 		slog.String("dialogID", s.id),
-		slog.String("state", s.State().String()),
+		slog.String("state", currentState.String()),
 		slog.String("callID", string(s.callID)))
 
-	// Используем общий метод sendBye для отправки BYE запроса
-	tx, err := s.sendBye(ctx)
-	if err != nil {
+	switch currentState {
+	case InCall:
+		// Для активного вызова отправляем BYE
+		tx, err := s.sendBye(ctx)
+		if err != nil {
+			slog.Debug("Dialog.Terminate failed to send BYE", slog.String("error", err.Error()))
+			return err
+		}
+		slog.Debug("Dialog.Terminate BYE sent successfully",
+			slog.String("branchID", GetBranchID(tx.Request())))
+		return nil
+
+	case Calling:
+		// Для исходящего вызова отправляем CANCEL
+		if s.firstTX == nil {
+			err := fmt.Errorf("no first transaction found for Calling state")
+			slog.Debug("Dialog.Terminate failed", slog.String("error", err.Error()))
+			return err
+		}
+
+		err := s.firstTX.Cancel()
+		if err != nil {
+			slog.Debug("Dialog.Terminate failed to send CANCEL", slog.String("error", err.Error()))
+			return err
+		}
+
+		// Переводим в состояние Terminating
+		reason := StateTransitionReason{
+			Reason:  "CANCEL request sent",
+			Method:  sip.CANCEL,
+			Details: "User initiated call cancellation",
+		}
+		if err := s.setStateWithReason(Terminating, nil, reason); err != nil {
+			slog.Debug("Dialog.Terminate failed to change state", slog.String("error", err.Error()))
+			return err
+		}
+
+		slog.Debug("Dialog.Terminate CANCEL sent successfully")
+		return nil
+
+	case Ringing:
+		// Для входящего вызова отправляем 487 Request Terminated
+		if s.firstTX == nil {
+			err := fmt.Errorf("no first transaction found for Ringing state")
+			slog.Debug("Dialog.Terminate failed", slog.String("error", err.Error()))
+			return err
+		}
+
+		// Отправляем 487 Request Terminated
+		// Примечание: Reject автоматически переведет диалог в состояние Terminating
+		err := s.firstTX.Reject(487, "Request Terminated")
+		if err != nil {
+			slog.Debug("Dialog.Terminate failed to send 487", slog.String("error", err.Error()))
+			return err
+		}
+
+		slog.Debug("Dialog.Terminate 487 sent successfully")
+		return nil
+
+	case IDLE:
+		// Для IDLE состояния просто переводим в Ended
+		reason := StateTransitionReason{
+			Reason:  "Dialog terminated in IDLE state",
+			Details: "No active call to terminate",
+		}
+		if err := s.setStateWithReason(Ended, nil, reason); err != nil {
+			slog.Debug("Dialog.Terminate failed to change state", slog.String("error", err.Error()))
+			return err
+		}
+
+		slog.Debug("Dialog.Terminate transitioned from IDLE to Ended")
+		return nil
+
+	case Terminating, Ended:
+		// Для состояний Terminating и Ended ничего не делаем (идемпотентность)
+		slog.Debug("Dialog.Terminate called in terminal state, no action needed")
+		return nil
+
+	default:
+		err := fmt.Errorf("unexpected state for Terminate: %s", currentState)
 		slog.Debug("Dialog.Terminate failed", slog.String("error", err.Error()))
 		return err
 	}
-
-	slog.Debug("Dialog.Terminate BYE sent successfully",
-		slog.String("branchID", GetBranchID(tx.Request())))
-
-	// В отличие от Bye(), мы не ждем ответа
-	return nil
 }
 
 // Start начинает новый диалог, отправляя INVITE запрос.
